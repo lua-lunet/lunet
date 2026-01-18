@@ -2,6 +2,7 @@
 
 #include <lauxlib.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>
@@ -389,6 +390,15 @@ int lunet_fs_read(lua_State *L) {
 
   uv_file fd = (uv_file)lua_tointeger(L, 1);
   size_t len = (size_t)lua_tointeger(L, 2);
+  int64_t offset = 0;
+  if (lua_gettop(L) >= 3) {
+    if (!lua_isnumber(L, 3)) {
+      lua_pushnil(L);
+      lua_pushstring(L, "fs.read offset must be a number");
+      return 2;
+    }
+    offset = (int64_t)lua_tointeger(L, 3);
+  }
 
   fs_read_ctx_t *ctx = malloc(sizeof(fs_read_ctx_t));
   if (!ctx) {
@@ -412,7 +422,7 @@ int lunet_fs_read(lua_State *L) {
   ctx->req.data = ctx;
 
   uv_buf_t buf = uv_buf_init(ctx->buf, len);
-  int rc = uv_fs_read(uv_default_loop(), &ctx->req, fd, &buf, 1, 0, lunet_fs_read_cb);
+  int rc = uv_fs_read(uv_default_loop(), &ctx->req, fd, &buf, 1, offset, lunet_fs_read_cb);
   if (rc < 0) {
     luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
     free(ctx->buf);
@@ -476,8 +486,17 @@ int lunet_fs_write(lua_State *L) {
     return 2;
   }
   uv_file fd = (uv_file)lua_tointeger(L, 1);
-  const char *data = luaL_checkstring(L, 2);
-  size_t len = strlen(data);
+  size_t len = 0;
+  const char *data = luaL_checklstring(L, 2, &len);
+  int64_t offset = 0;
+  if (lua_gettop(L) >= 3) {
+    if (!lua_isnumber(L, 3)) {
+      lua_pushnil(L);
+      lua_pushstring(L, "fs.write offset must be a number");
+      return 2;
+    }
+    offset = (int64_t)lua_tointeger(L, 3);
+  }
 
   fs_write_ctx_t *ctx = malloc(sizeof(fs_write_ctx_t));
   if (!ctx) {
@@ -503,7 +522,7 @@ int lunet_fs_write(lua_State *L) {
   ctx->req.data = ctx;
 
   uv_buf_t buf = uv_buf_init(ctx->buf, len);
-  int rc = uv_fs_write(uv_default_loop(), &ctx->req, fd, &buf, 1, 0, lunet_fs_write_cb);
+  int rc = uv_fs_write(uv_default_loop(), &ctx->req, fd, &buf, 1, offset, lunet_fs_write_cb);
   if (rc < 0) {
     luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
     free(ctx->buf);

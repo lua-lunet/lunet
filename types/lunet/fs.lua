@@ -42,6 +42,7 @@ function fs.stat(path) end
 ---Read from a file
 ---@param fd integer The file descriptor to read from
 ---@param size integer The number of bytes to read
+---@param offset integer|nil Optional byte offset
 ---@return string|nil data The data read from the file or nil on error
 ---@return string|nil error Error message if failed
 ---@usage
@@ -57,11 +58,12 @@ function fs.stat(path) end
 ---end
 ---print('Data read: ' .. data)
 ---```
-function fs.read(fd, size) end
+function fs.read(fd, size, offset) end
 
 ---Write to a file
 ---@param fd integer The file descriptor to write to
 ---@param data string The data to write to the file
+---@param offset integer|nil Optional byte offset
 ---@return string|nil error Error message if failed
 ---@usage
 ---```lua
@@ -72,7 +74,7 @@ function fs.read(fd, size) end
 ---end
 ---fs.write(file, 'Hello, world!')
 ---```
-function fs.write(fd, data) end
+function fs.write(fd, data, offset) end
 
 ---Scan a directory
 ---@param path string The path to the directory

@@ -12,6 +12,25 @@ local function check_command(cmd)
     return result ~= "" and result or nil
 end
 
+local function get_mysql_flags()
+    local mysql_config = check_command("mysql_config")
+    if not mysql_config then
+        if io.open("/opt/homebrew/bin/mysql_config", "r") then
+            mysql_config = "/opt/homebrew/bin/mysql_config"
+        elseif io.open("/usr/local/bin/mysql_config", "r") then
+            mysql_config = "/usr/local/bin/mysql_config"
+        end
+    end
+    
+    if mysql_config then
+        mysql_config = mysql_config:gsub("\n", "")
+        local cflags = run(mysql_config .. " --cflags"):gsub("\n", "")
+        local ldflags = run(mysql_config .. " --libs"):gsub("\n", "")
+        return cflags, ldflags
+    end
+    return nil, nil
+end
+
 local log_file = nil
 
 local function setup_logging()
@@ -63,8 +82,17 @@ if not check_command("git") then
 end
 
 -- Paths
-local bench_dir = os.getenv("BENCH_DIR") or "/Users/Shared/lunet/bench"
-local tmp_dir = os.getenv("TMP_DIR") or "/Users/Shared/lunet/.tmp"
+local handle = io.popen("git rev-parse --show-toplevel 2>/dev/null")
+local git_root = handle:read("*a"):gsub("\n", "")
+handle:close()
+
+if git_root == "" then
+    -- Fallback for non-git environments or if command fails
+    git_root = io.popen("pwd"):read("*a"):gsub("\n", "")
+end
+
+local bench_dir = os.getenv("BENCH_DIR") or (git_root .. "/bench")
+local tmp_dir = os.getenv("TMP_DIR") or (git_root .. "/.tmp")
 local django_dir = bench_dir .. "/django-app"
 
 -- Create directories
@@ -73,6 +101,7 @@ run("mkdir -p " .. bench_dir)
 run("mkdir -p " .. tmp_dir)
 
 -- Check if already set up
+log("Checking if Django app exists at: " .. django_dir)
 if io.open(django_dir .. "/manage.py", "r") then
     log("Django app already cloned, skipping git clone")
 else
@@ -85,6 +114,34 @@ else
     
     log("Copying Django app to bench directory...")
     run("cp -r " .. tmp_dir .. "/django-ninja " .. django_dir)
+end
+
+-- Patch pyproject.toml to use mysqlclient instead of psycopg2
+local pyproject_path = django_dir .. "/pyproject.toml"
+local f = io.open(pyproject_path, "r")
+if f then
+    log("Patching pyproject.toml to use mysqlclient...")
+    local content = f:read("*a")
+    f:close()
+    
+    local new_content, count = content:gsub('"psycopg2==[%d%.]+"', '"mysqlclient"')
+    if count == 0 then
+        -- If precise match fails, try looser match
+        new_content, count = content:gsub('"psycopg2.-"', '"mysqlclient"')
+    end
+    
+    if count > 0 then
+        local out = io.open(pyproject_path, "w")
+        if out then
+            out:write(new_content)
+            out:close()
+            log("Replaced psycopg2 with mysqlclient in pyproject.toml")
+        else
+            fail("Failed to write to pyproject.toml")
+        end
+    else
+        log("psycopg2 not found in pyproject.toml, skipping patch")
+    end
 end
 
 -- Create virtual environment
@@ -103,15 +160,32 @@ run(venv_pip .. " install --upgrade pip 2>&1 | tail -5")
 
 -- Install dependencies
 log("Installing Python dependencies...")
+
+local cflags, ldflags = get_mysql_flags()
+local env_vars = ""
+if cflags and ldflags then
+    log("Found mysql_config, setting build flags...")
+    env_vars = string.format("MYSQLCLIENT_CFLAGS='%s' MYSQLCLIENT_LDFLAGS='%s' ", cflags, ldflags)
+end
+
 if io.open(django_dir .. "/pyproject.toml", "r") then
     log("Using pyproject.toml for dependencies...")
-    run(venv_pip .. " install -e . 2>&1 | tail -20")
+    local out = run(env_vars .. "cd " .. django_dir .. " && " .. venv_pip .. " install -e . 2>&1")
+    log(out)
 elseif io.open(django_dir .. "/requirements.txt", "r") then
     log("Using requirements.txt for dependencies...")
-    run(venv_pip .. " install -r " .. django_dir .. "/requirements.txt 2>&1 | tail -20")
+    local out = run(env_vars .. venv_pip .. " install -r " .. django_dir .. "/requirements.txt 2>&1")
+    log(out)
 else
     fail("No pyproject.toml or requirements.txt found")
 end
+
+-- Verify Django installation
+local check_django = run(venv_python .. " -c 'import django; print(django.get_version())' 2>&1")
+if check_django:find("Error") or check_django == "" then
+    fail("Django installation failed: " .. check_django)
+end
+log("Verified Django version: " .. check_django:gsub("\n", ""))
 
 -- Create .env file
 log("Setting up .env file...")

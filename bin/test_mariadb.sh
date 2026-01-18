@@ -45,14 +45,14 @@ echo "Testing TCP Connection (Timeout 5s)..."
 # Using 'mysqladmin ping' is usually cleaner for liveliness check
 if command -v mysqladmin >/dev/null 2>&1; then
     echo "Using mysqladmin ping..."
-    if ! mysqladmin ping -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" --protocol=tcp --connect-timeout=5 >/dev/null 2>&1; then
+    if ! mysqladmin ping -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" --protocol=tcp --connect-timeout=5 --skip-ssl >/dev/null 2>&1; then
         echo "ERROR: Connection failed (mysqladmin ping refused)"
         exit 1
     fi
     echo "SUCCESS: Server is alive."
 else
     # Fallback to query
-    if ! mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" --protocol=tcp -e "SELECT 1" >/dev/null 2>&1; then
+    if ! mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" --protocol=tcp --skip-ssl -e "SELECT 1" >/dev/null 2>&1; then
         echo "ERROR: Connection failed (SELECT 1 refused)"
         exit 1
     fi
@@ -60,14 +60,14 @@ else
 fi
 
 echo "Checking Database '$DB_NAME'..."
-if ! mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" --protocol=tcp -e "USE $DB_NAME;" >/dev/null 2>&1; then
+if ! mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" --protocol=tcp --skip-ssl -e "USE $DB_NAME;" >/dev/null 2>&1; then
     echo "ERROR: Database '$DB_NAME' does not exist or access denied."
     exit 1
 fi
 echo "SUCCESS: Database '$DB_NAME' exists and is accessible."
 
 echo "Checking Tables..."
-TABLES=$(mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" --protocol=tcp -D "$DB_NAME" -N -e "SHOW TABLES;")
+TABLES=$(mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" --protocol=tcp --skip-ssl -D "$DB_NAME" -N -e "SHOW TABLES;")
 if [ -z "$TABLES" ]; then
     echo "WARNING: Database is empty (no tables found)."
 else

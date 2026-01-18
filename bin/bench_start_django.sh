@@ -6,11 +6,11 @@ DJANGO_DIR="$BENCH_DIR/django-app"
 PID_FILE="$BENCH_DIR/.django_server.pid"
 
 log() {
-    echo "[BENCH-DJANGO-SERVER] $@"
+    echo "[BENCH-DJANGO-SERVER] $*"
 }
 
 fail() {
-    echo "[BENCH-DJANGO-SERVER] ERROR: $@" >&2
+    echo "[BENCH-DJANGO-SERVER] ERROR: $*" >&2
     exit 1
 }
 

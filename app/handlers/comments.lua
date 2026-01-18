@@ -46,23 +46,23 @@ function comments.list(request)
     auth.middleware(request)
     local user_id = request.user_id
     local slug = request.params.slug
-    
+
     if not slug then
         return http.error_response(404, {body = {"Article not found"}})
     end
-    
+
     local article = get_article_by_slug(slug)
     if not article then
         return http.error_response(404, {body = {"Article not found"}})
     end
-    
+
     local rows = db.query(
         "SELECT c.*, u.id as author_id, u.username, u.bio, u.image " ..
         "FROM comments c INNER JOIN users u ON u.id = c.author_id " ..
         "WHERE c.article_id = ? ORDER BY c.created_at DESC",
         article.id
     )
-    
+
     local result = {}
     if rows then
         for _, row in ipairs(rows) do
@@ -75,7 +75,7 @@ function comments.list(request)
             result[#result + 1] = comment_response(row, author, user_id)
         end
     end
-    
+
     return http.json_response(200, {comments = result})
 end
 
@@ -84,51 +84,51 @@ function comments.create(request)
     if not user_id then
         return http.error_response(401, {body = {err}})
     end
-    
+
     local slug = request.params.slug
     if not slug then
         return http.error_response(404, {body = {"Article not found"}})
     end
-    
+
     local article = get_article_by_slug(slug)
     if not article then
         return http.error_response(404, {body = {"Article not found"}})
     end
-    
+
     local data = request.json
     if not data or not data.comment then
         return http.error_response(422, {body = {"Invalid request body"}})
     end
-    
+
     local comment_data = data.comment
     if not comment_data.body or comment_data.body == "" then
         return http.error_response(422, {body = {"can't be blank"}})
     end
-    
-    local result, insert_err = db.insert("comments", {
+
+    local result = db.insert("comments", {
         body = comment_data.body,
         article_id = article.id,
         author_id = user_id,
     })
-    
+
     if not result then
         return http.error_response(500, {body = {"Failed to create comment"}})
     end
-    
+
     local row = db.query_one(
         "SELECT c.*, u.id as author_id, u.username, u.bio, u.image " ..
         "FROM comments c INNER JOIN users u ON u.id = c.author_id " ..
         "WHERE c.id = ?",
         result.last_insert_id
     )
-    
+
     local author = {
         id = row.author_id,
         username = row.username,
         bio = row.bio,
         image = row.image,
     }
-    
+
     return http.json_response(200, {comment = comment_response(row, author, user_id)})
 end
 
@@ -137,38 +137,38 @@ function comments.delete(request)
     if not user_id then
         return http.error_response(401, {body = {err}})
     end
-    
+
     local slug = request.params.slug
     local comment_id = tonumber(request.params.id)
-    
+
     if not slug then
         return http.error_response(404, {body = {"Article not found"}})
     end
-    
+
     local article = get_article_by_slug(slug)
     if not article then
         return http.error_response(404, {body = {"Article not found"}})
     end
-    
+
     if not comment_id then
         return http.error_response(404, {body = {"Comment not found"}})
     end
-    
+
     local comment = db.query_one(
         "SELECT * FROM comments WHERE id = ? AND article_id = ?",
         comment_id, article.id
     )
-    
+
     if not comment then
         return http.error_response(404, {body = {"Comment not found"}})
     end
-    
+
     if comment.author_id ~= user_id then
         return http.error_response(403, {body = {"You are not the author"}})
     end
-    
+
     db.delete("comments", "id = ?", comment_id)
-    
+
     return http.response(204, {["Content-Length"] = "0"}, "")
 end
 

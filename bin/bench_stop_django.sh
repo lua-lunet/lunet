@@ -4,7 +4,7 @@ BENCH_DIR="${BENCH_DIR:-.}/bench"
 PID_FILE="$BENCH_DIR/.django_server.pid"
 
 log() {
-    echo "[BENCH-DJANGO-STOP] $@"
+    echo "[BENCH-DJANGO-STOP] $*"
 }
 
 if [ -f "$PID_FILE" ]; then

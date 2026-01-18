@@ -4,7 +4,7 @@ BENCH_DIR="${BENCH_DIR:-.}/bench"
 PID_FILE="$BENCH_DIR/.laravel_server.pid"
 
 log() {
-    echo "[BENCH-LARAVEL-STOP] $@"
+    echo "[BENCH-LARAVEL-STOP] $*"
 }
 
 if [ -f "$PID_FILE" ]; then

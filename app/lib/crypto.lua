@@ -3,7 +3,7 @@ local crypto = {}
 
 ffi.cdef[[
     int sodium_init(void);
-    
+
     // Password hashing (Argon2id)
     int crypto_pwhash_str(
         char out[128],
@@ -12,13 +12,13 @@ ffi.cdef[[
         unsigned long long opslimit,
         size_t memlimit
     );
-    
+
     int crypto_pwhash_str_verify(
         const char str[128],
         const char * const passwd,
         unsigned long long passwdlen
     );
-    
+
     // HMAC-SHA256
     int crypto_auth_hmacsha256(
         unsigned char *out,
@@ -26,9 +26,12 @@ ffi.cdef[[
         unsigned long long inlen,
         const unsigned char *k
     );
-    
+
     // Random bytes
     void randombytes_buf(void * const buf, const size_t size);
+
+    // Constant time comparison
+    int sodium_memcmp(const void * const b1_, const void * const b2_, size_t len);
 ]]
 
 local sodium = ffi.load("sodium")
@@ -92,6 +95,12 @@ function crypto.random_bytes(size)
     return ffi.string(buf, size)
 end
 
+function crypto.constant_time_compare(a, b)
+    init()
+    if #a ~= #b then return false end
+    return sodium.sodium_memcmp(a, b, #a) == 0
+end
+
 local b64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 local b64url_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
@@ -100,7 +109,7 @@ function crypto.base64_encode(data, url_safe)
     local result = {}
     local pad = #data % 3
     data = data .. string.rep("\0", (3 - pad) % 3)
-    
+
     for i = 1, #data, 3 do
         local b1, b2, b3 = data:byte(i, i + 2)
         local n = b1 * 65536 + b2 * 256 + b3
@@ -109,7 +118,7 @@ function crypto.base64_encode(data, url_safe)
         result[#result + 1] = chars:sub(math.floor(n / 64) % 64 + 1, math.floor(n / 64) % 64 + 1)
         result[#result + 1] = chars:sub(n % 64 + 1, n % 64 + 1)
     end
-    
+
     local encoded = table.concat(result)
     if pad == 1 then
         encoded = encoded:sub(1, -3) .. (url_safe and "" or "==")
@@ -126,14 +135,14 @@ function crypto.base64_decode(data, url_safe)
         decode_map[chars:sub(i, i)] = i - 1
     end
     decode_map["="] = 0
-    
+
     data = data:gsub("=", "")
     local pad = #data % 4
     if pad == 1 then
         return nil, "invalid base64 length"
     end
     data = data .. string.rep("A", (4 - pad) % 4)
-    
+
     local result = {}
     for i = 1, #data, 4 do
         local c1 = decode_map[data:sub(i, i)] or 0
@@ -145,7 +154,7 @@ function crypto.base64_decode(data, url_safe)
         result[#result + 1] = string.char(math.floor(n / 256) % 256)
         result[#result + 1] = string.char(n % 256)
     end
-    
+
     local decoded = table.concat(result)
     if pad == 2 then
         decoded = decoded:sub(1, -3)

@@ -81,16 +81,16 @@ function db.query(sql, ...)
     if not conn then
         return nil, err
     end
-    
+
     if select("#", ...) > 0 then
         sql = db.interpolate(sql, ...)
     end
-    
+
     local result, query_err = mysql.query(conn, sql)
     if not result then
         return nil, query_err or "query failed"
     end
-    
+
     return result
 end
 
@@ -99,16 +99,16 @@ function db.exec(sql, ...)
     if not conn then
         return nil, err
     end
-    
+
     if select("#", ...) > 0 then
         sql = db.interpolate(sql, ...)
     end
-    
+
     local result, exec_err = mysql.exec(conn, sql)
     if not result then
         return nil, exec_err or "exec failed"
     end
-    
+
     return result
 end
 

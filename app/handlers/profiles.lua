@@ -31,15 +31,15 @@ function profiles.get(request)
     if not username then
         return http.error_response(404, {body = {"Profile not found"}})
     end
-    
+
     local user = db.query_one("SELECT * FROM users WHERE username = ?", username)
     if not user then
         return http.error_response(404, {body = {"Profile not found"}})
     end
-    
+
     auth.middleware(request)
     local following = is_following(request.user_id, user.id)
-    
+
     return http.json_response(200, profile_response(user, following))
 end
 
@@ -48,33 +48,33 @@ function profiles.follow(request)
     if not user_id then
         return http.error_response(401, {body = {err}})
     end
-    
+
     local username = request.params.username
     if not username then
         return http.error_response(404, {body = {"Profile not found"}})
     end
-    
+
     local user = db.query_one("SELECT * FROM users WHERE username = ?", username)
     if not user then
         return http.error_response(404, {body = {"Profile not found"}})
     end
-    
+
     if user.id == user_id then
         return http.error_response(422, {body = {"You cannot follow yourself"}})
     end
-    
+
     local existing = db.query_one(
         "SELECT 1 FROM follows WHERE follower_id = ? AND followed_id = ?",
         user_id, user.id
     )
-    
+
     if not existing then
         db.insert("follows", {
             follower_id = user_id,
             followed_id = user.id,
         })
     end
-    
+
     return http.json_response(200, profile_response(user, true))
 end
 
@@ -83,19 +83,19 @@ function profiles.unfollow(request)
     if not user_id then
         return http.error_response(401, {body = {err}})
     end
-    
+
     local username = request.params.username
     if not username then
         return http.error_response(404, {body = {"Profile not found"}})
     end
-    
+
     local user = db.query_one("SELECT * FROM users WHERE username = ?", username)
     if not user then
         return http.error_response(404, {body = {"Profile not found"}})
     end
-    
+
     db.delete("follows", "follower_id = ? AND followed_id = ?", user_id, user.id)
-    
+
     return http.json_response(200, profile_response(user, false))
 end
 

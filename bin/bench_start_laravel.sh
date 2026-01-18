@@ -6,11 +6,11 @@ LARAVEL_DIR="$BENCH_DIR/laravel-app"
 PID_FILE="$BENCH_DIR/.laravel_server.pid"
 
 log() {
-    echo "[BENCH-LARAVEL-SERVER] $@"
+    echo "[BENCH-LARAVEL-SERVER] $*"
 }
 
 fail() {
-    echo "[BENCH-LARAVEL-SERVER] ERROR: $@" >&2
+    echo "[BENCH-LARAVEL-SERVER] ERROR: $*" >&2
     exit 1
 }
 

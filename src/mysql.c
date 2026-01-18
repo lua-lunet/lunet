@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <lauxlib.h>
 #include <lua.h>
 #include <mysql/mysql.h>
@@ -86,23 +87,23 @@ int lunet_mysql_open(lua_State* L) {
     lua_pushstring(L, "mysql.open: out of memory");
     return lua_error(L);
   }
-  memset(ctx->err, 0, sizeof(ctx->err));
+  memset(ctx, 0, sizeof(*ctx));
   ctx->L = L;
   ctx->req.data = ctx;
 
   // read params from table
   lua_getfield(L, 1, "host");
-  strncpy(ctx->host, luaL_checkstring(L, -1), sizeof(ctx->host));
+  strncpy(ctx->host, luaL_checkstring(L, -1), sizeof(ctx->host) - 1);
   lua_getfield(L, 1, "port");
   ctx->port = luaL_checkinteger(L, -1);
   lua_getfield(L, 1, "user");
-  strncpy(ctx->user, luaL_checkstring(L, -1), sizeof(ctx->user));
+  strncpy(ctx->user, luaL_checkstring(L, -1), sizeof(ctx->user) - 1);
   lua_getfield(L, 1, "password");
-  strncpy(ctx->password, luaL_checkstring(L, -1), sizeof(ctx->password));
+  strncpy(ctx->password, luaL_checkstring(L, -1), sizeof(ctx->password) - 1);
   lua_getfield(L, 1, "database");
-  strncpy(ctx->database, luaL_checkstring(L, -1), sizeof(ctx->database));
+  strncpy(ctx->database, luaL_checkstring(L, -1), sizeof(ctx->database) - 1);
   lua_getfield(L, 1, "charset");
-  strncpy(ctx->charset, luaL_checkstring(L, -1), sizeof(ctx->charset));
+  strncpy(ctx->charset, luaL_checkstring(L, -1), sizeof(ctx->charset) - 1);
   // save coroutine reference to main lua state
   lua_pop(L, 6);
 

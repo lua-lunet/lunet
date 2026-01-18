@@ -31,18 +31,38 @@ return {
 }
 ```
 
-## Running the Server
+## Running the Server and Frontend
 
-1. **Start Database (if not running):**
-   ```bash
-   limactl start mariadb12
-   ```
+This project includes a complete workflow to run the backend and a RealWorld frontend (Vite React) locally.
 
-2. **Run Server:**
-   ```bash
-   ./build/lunet app/main.lua
-   ```
-   Server listens on `0.0.0.0:8080`.
+1.  **Start Database (if not running):**
+    ```bash
+    limactl start mariadb12
+    ```
+
+2.  **Build API:**
+    ```bash
+    make build
+    ```
+
+3.  **Run API:**
+    ```bash
+    make run
+    ```
+    The API will listen on `0.0.0.0:8080`.
+
+4.  **Run Frontend (WUI):**
+    ```bash
+    make wui
+    ```
+    This will clone the [React Vite RealWorld Example](https://github.com/romansndlr/react-vite-realworld-example-app), configure it to talk to your local API, and start it.
+    Access the UI at: **http://127.0.0.1:5173**
+
+5.  **Stop All:**
+    ```bash
+    make stop
+    ```
+    Stops both the API and the Frontend.
 
 ## Testing
 

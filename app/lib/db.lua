@@ -10,8 +10,6 @@ local config = {
     database = "conduit",
 }
 
-local connection = nil
-
 function db.set_config(cfg)
     if cfg.host then config.host = cfg.host end
     if cfg.port then config.port = cfg.port end
@@ -21,9 +19,6 @@ function db.set_config(cfg)
 end
 
 function db.connect()
-    if connection then
-        return connection
-    end
     local conn, err = mysql.open({
         host = config.host,
         port = config.port,
@@ -35,14 +30,12 @@ function db.connect()
     if not conn then
         return nil, "database connection failed: " .. (err or "unknown error")
     end
-    connection = conn
     return conn
 end
 
-function db.close()
-    if connection then
-        mysql.close(connection)
-        connection = nil
+function db.close(conn)
+    if conn then
+        mysql.close(conn)
     end
 end
 
@@ -87,6 +80,7 @@ function db.query(sql, ...)
     end
 
     local result, query_err = mysql.query(conn, sql)
+    db.close(conn)
     if not result then
         return nil, query_err or "query failed"
     end
@@ -105,6 +99,7 @@ function db.exec(sql, ...)
     end
 
     local result, exec_err = mysql.exec(conn, sql)
+    db.close(conn)
     if not result then
         return nil, exec_err or "exec failed"
     end

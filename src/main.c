@@ -9,6 +9,8 @@
 #include "mysql.h"
 #include "rt.h"
 #include "socket.h"
+#include "lunet_signal.h"
+#include "su.h"
 #include "timer.h"
 
 // register core module
@@ -60,6 +62,15 @@ int lunet_open_mysql(lua_State *L) {
   return 1;
 }
 
+int lunet_open_su(lua_State *L) {
+  luaL_Reg funcs[] = {{"init", lunet_su_init},
+                      {"read", lunet_su_read},
+                      {"write", lunet_su_write},
+                      {NULL, NULL}};
+  luaL_newlib(L, funcs);
+  return 1;
+}
+
 // register modules
 void lunet_open(lua_State *L) {
   // register core module
@@ -91,6 +102,12 @@ void lunet_open(lua_State *L) {
   lua_getfield(L, -1, "preload");
   lua_pushcfunction(L, lunet_open_mysql);
   lua_setfield(L, -2, "lunet.mysql");
+  lua_pop(L, 2);
+  // register su module
+  lua_getglobal(L, "package");
+  lua_getfield(L, -1, "preload");
+  lua_pushcfunction(L, lunet_open_su);
+  lua_setfield(L, -2, "lunet.su");
   lua_pop(L, 2);
 }
 

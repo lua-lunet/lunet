@@ -3,6 +3,8 @@
 #include <lauxlib.h>
 #include <lua.h>
 #include <mysql/mysql.h>
+#include <string.h>
+#include <stdlib.h>
 
 #include "co.h"
 #include "uv.h"

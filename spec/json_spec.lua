@@ -48,7 +48,7 @@ describe("JSON Module", function()
   end)
   
   it("handles control characters", function()
-    local s = "\x01\x1f"
+    local s = "\001\031"
     local encoded = json.encode(s)
     assert.are.equal('"\\u0001\\u001f"', encoded)
   end)

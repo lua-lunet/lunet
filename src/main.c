@@ -6,6 +6,7 @@
 
 #include "co.h"
 #include "fs.h"
+#include "lunet_signal.h"
 #include "mysql.h"
 #include "rt.h"
 #include "socket.h"

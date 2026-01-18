@@ -1,9 +1,11 @@
-#include "signal.h"
+#include "lunet_signal.h"
 
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
+#include <signal.h>
 #include <stdlib.h>
+#include <string.h>
 #include <uv.h>
 
 #include "co.h"

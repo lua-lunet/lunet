@@ -57,3 +57,30 @@ db = {
     database = "conduit",
 }
 ```
+
+## PostgreSQL Infrastructure (Local macOS)
+
+PostgreSQL is used for benchmarking against other frameworks (e.g., Django). Do NOT start the service automatically. Instead, start it manually only when needed:
+
+```bash
+brew services start postgresql
+```
+
+And when you’re done, stop it:
+
+```bash
+brew services stop postgresql
+```
+
+Database name: `conduit`
+Default user: Your macOS username (or as configured in `.env`)
+
+## Benchmark Environment
+
+For Django/Laravel benchmark setup details, see **[bench/AGENTS.md](bench/AGENTS.md)**.
+
+Key topics covered:
+- Port allocation (Django 9090/9091, Laravel 7070/7071)
+- mise Python 3.12 setup (required for Django)
+- PostgreSQL database configuration
+- Setup and start/stop scripts

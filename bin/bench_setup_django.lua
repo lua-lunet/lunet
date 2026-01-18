@@ -2,7 +2,7 @@
 --[[
 Django RealWorld Benchmark Setup Script
 
-Uses Sean-Miningah/realWorld-DjangoRestFramework with:
+Uses simbo1905/realWorld-DjangoRestFramework (fork with JWT fix) with:
 - mise-managed Python 3.12 (required - Python 3.14 has compatibility issues)
 - PostgreSQL database (conduit)
 - Port 9090 for API, 9091 for nginx frontend
@@ -68,9 +68,9 @@ end
 if file_exists(django_dir .. "/manage.py") then
     log("Django app already exists, skipping clone")
 else
-    log("Cloning Sean-Miningah/realWorld-DjangoRestFramework...")
+    log("Cloning simbo1905/realWorld-DjangoRestFramework (fork with JWT fix)...")
     run("rm -rf " .. django_dir .. " 2>/dev/null")
-    local clone_result = run("git clone --depth 1 https://github.com/Sean-Miningah/realWorld-DjangoRestFramework.git " .. django_dir)
+    local clone_result = run("git clone --depth 1 https://github.com/simbo1905/realWorld-DjangoRestFramework.git " .. django_dir)
     if not file_exists(django_dir .. "/manage.py") then
         fail("Failed to clone repository: " .. clone_result)
     end

@@ -83,22 +83,28 @@ lua bin/bench_setup_django.lua
 ```
 
 ### Django App Location
-The Django app is cloned to `.tmp/bench/django/` (gitignored). Source repo: `Sean-Miningah/realWorld-DjangoRestFramework`
+The Django app is cloned to `.tmp/bench/django/` (gitignored). 
+
+Source repo: `simbo1905/realWorld-DjangoRestFramework` (fork with fixes):
+- JWT token returned on registration (upstream bug fix)
+- Database config uses environment variables with sensible defaults
 
 ### Database Config
-Django settings (`config/settings.py`) use:
+Django settings (`config/settings.py`) use environment variables:
 ```python
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": "conduit",
-        "USER": os.getenv("USER") or "postgres",
-        "PASSWORD": "",
-        "HOST": "127.0.0.1",
-        "PORT": "5432",
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('DATABASE_NAME', 'conduit'),
+        'USER': os.getenv('DATABASE_USER', os.getenv('USER', 'postgres')),
+        'PASSWORD': os.getenv('DATABASE_PASSWORD', ''),
+        'HOST': os.getenv('DATABASE_HOST', '127.0.0.1'),
+        'PORT': '5432'
     }
 }
 ```
+
+Defaults work out-of-the-box on macOS with local PostgreSQL.
 
 ### Troubleshooting
 

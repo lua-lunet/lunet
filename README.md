@@ -287,6 +287,13 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 4. Add tests if applicable
 5. Submit a pull request
 
+## Examples
+
+| Example | Description |
+|---------|-------------|
+| [01_json.lua](examples/01_json.lua) | Pure Lua JSON encoding with MySQL integration |
+| [02_routing.lua](examples/02_routing.lua) | HTTP routing with URL parameter extraction (`:id`) |
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

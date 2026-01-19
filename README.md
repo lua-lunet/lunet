@@ -8,16 +8,16 @@ A high-performance coroutine-based networking library for LuaJIT, built on top o
 
 [中文文档](README-CN.md)
 
-## RealWorld Conduit API
+## RealWorld Conduit API Demo
 
 This fork includes an implementation of the [RealWorld "Conduit"](https://github.com/gothinkster/realworld) API spec - a Medium.com clone demonstrating Lunet's capabilities as a web backend framework. The implementation covers users, profiles, articles, comments, tags, favorites, and follows endpoints. The app is located in the `app/` directory.
 
-### Prerequisites
+### Demo Prerequisites
 
 - CMake 3.10+, LuaJIT 2.1+, libuv 1.x (see Installation section below)
 - MariaDB/MySQL with a `conduit` database
 
-### Quick Start
+### Demo API Quick Start
 
 ```bash
 # Build lunet (compiles C core with CMake)
@@ -39,7 +39,7 @@ make wui
 make stop
 ```
 
-### Available Make Targets
+### Demo Make Targets
 
 | Target | Description |
 |--------|-------------|
@@ -55,7 +55,7 @@ This contribution builds upon the upstream [xialeistudio/lunet](https://github.c
 
 ---
 
-## Overview
+## Lunet Overview
 
 Lunet is a coroutine-based networking library that provides synchronous APIs with asynchronous execution. It combines the power of C, LuaJIT, and libuv to deliver high-performance I/O operations while maintaining clean, readable code.
 

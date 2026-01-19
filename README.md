@@ -293,6 +293,8 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 |---------|-------------|
 | [01_json.lua](examples/01_json.lua) | Pure Lua JSON encoding with MySQL integration |
 | [02_routing.lua](examples/02_routing.lua) | HTTP routing with URL parameter extraction (`:id`) |
+| [03_mcp_sse.lua](examples/03_mcp_sse.lua) | MCP SSE server with Tavily search (18x smaller than Node.js) |
+| [mcp_stdio_pure.lua](examples/mcp_stdio_pure.lua) | Pure Lua stdio MCP for ablation testing |
 
 ## License
 

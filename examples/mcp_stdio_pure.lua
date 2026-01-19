@@ -123,8 +123,19 @@ local function json_decode(str)
                     if esc == "u" then
                         local hex = str:sub(i + 1, i + 4)
                         local cp = tonumber(hex, 16)
-                        if cp and cp < 128 then
-                            parts[#parts + 1] = string.char(cp)
+                        if cp then
+                            if cp < 0x80 then
+                                parts[#parts + 1] = string.char(cp)
+                            elseif cp < 0x800 then
+                                parts[#parts + 1] = string.char(
+                                    0xC0 + math.floor(cp / 64),
+                                    0x80 + (cp % 64))
+                            else
+                                parts[#parts + 1] = string.char(
+                                    0xE0 + math.floor(cp / 4096),
+                                    0x80 + math.floor((cp % 4096) / 64),
+                                    0x80 + (cp % 64))
+                            end
                         else
                             parts[#parts + 1] = "?"
                         end

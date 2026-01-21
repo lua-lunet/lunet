@@ -14,24 +14,44 @@ This fork includes an implementation of the [RealWorld "Conduit"](https://github
 
 ### Demo Prerequisites
 
-- CMake 3.10+, LuaJIT 2.1+, libuv 1.x (see Installation section below)
-- MariaDB/MySQL with a `conduit` database
+- CMake 3.12+, LuaJIT 2.1+, libuv 1.x, libsodium, SQLite3, PostgreSQL (client libs)
+- **Database Choice**: The database driver is selected at build time via CMake.
+  - Default: **SQLite3** (no external service required)
+  - Optional: **MySQL/MariaDB** (requires `conduit` database setup)
+
+### Build Configuration
+
+**Default (SQLite3):**
+```bash
+cmake -B build
+cmake --build build
+```
+
+**Enable MySQL:**
+```bash
+cmake -B build -DLUNET_ENABLE_MYSQL=ON
+cmake --build build
+```
 
 ### Demo API Quick Start
 
 ```bash
 # Build lunet (compiles C core with CMake)
-make build
+cmake -B build
+cmake --build build
 
-# Initialize database
-mariadb -u root < app/schema.sql
+# Initialize database (SQLite)
+# The app will automatically initialize the SQLite database at .tmp/conduit.sqlite3 on first run.
 
 # Start the API backend (listens on port 8080)
-make run
+# Linux/macOS:
+./build/lunet app/main.lua
+# Windows:
+.\build\Release\lunet.exe app\main.lua
 
 # Verify API is running
 curl http://127.0.0.1:8080/api/tags
-
+```
 # (Optional) Start a React/Vite frontend - clones to .tmp/conduit-vite
 make wui
 

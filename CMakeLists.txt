@@ -62,7 +62,9 @@ set(SOURCES
 
 # Optional MySQL support
 option(LUNET_ENABLE_MYSQL "Enable MySQL support" OFF)
+
 if(LUNET_ENABLE_MYSQL)
+    set(LUNET_DB_DRIVER "mysql")
     list(APPEND SOURCES src/mysql.c)
     add_definitions(-DLUNET_ENABLE_MYSQL)
     # Find MySQL (simplified)
@@ -73,7 +75,13 @@ if(LUNET_ENABLE_MYSQL)
     else()
         message(FATAL_ERROR "MySQL not found but LUNET_ENABLE_MYSQL is ON")
     endif()
+else()
+    set(LUNET_DB_DRIVER "sqlite")
 endif()
+
+# Generate app/db_config.lua from app/db_config.lua.in
+configure_file(app/db_config.lua.in ${CMAKE_SOURCE_DIR}/app/db_config.lua @ONLY)
+
 
 # === Targets ===
 include_directories(include)

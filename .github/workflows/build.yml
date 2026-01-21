@@ -55,3 +55,23 @@ jobs:
         else
           ./build/lunet test.lua
         fi
+
+    - name: Integration Test (API)
+      shell: bash
+      run: |
+        # Start server in background
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          ./bin/start_server.ps1 app/main.lua
+        else
+          ./bin/start_server.sh app/main.lua
+        fi
+        
+        # Run API tests
+        ./bin/test_api.sh
+        
+        # Stop server
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          ./bin/stop_server.ps1
+        else
+          ./bin/stop_server.sh
+        fi

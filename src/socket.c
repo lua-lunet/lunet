@@ -1,13 +1,19 @@
 #include "socket.h"
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
+
 #include <lauxlib.h>
 #include <lua.h>
 #include <lualib.h>
-#include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <uv.h>
 
 #include "co.h"

@@ -1,3 +1,10 @@
+.env
 .cache
 build/
 .vscode
+.tmp/
+.idea
+bench/*.log
+bench/.*.pid
+bench/django/*.pid
+bench/django/*.log

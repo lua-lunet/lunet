@@ -8,6 +8,13 @@
 
 [English Documentation](README.md)
 
+## RealWorld Conduit API 示例
+
+本仓库包含 RealWorld Conduit API（Medium.com 克隆）后端实现，示例文档见：
+
+- [README_realworld-CN.md](README_realworld-CN.md)
+- [README_realworld.md](README_realworld.md)
+
 ## 概述
 
 Lunet 是一个基于协程的网络库，提供同步风格的 API，底层异步执行。它结合了 C、LuaJIT 和 libuv 的强大功能，在保持代码清晰可读的同时提供高性能的 I/O 操作。

@@ -8,7 +8,76 @@ A high-performance coroutine-based networking library for LuaJIT, built on top o
 
 [中文文档](README-CN.md)
 
-## Overview
+## RealWorld Conduit API Demo
+
+This fork includes an implementation of the [RealWorld "Conduit"](https://github.com/gothinkster/realworld) API spec - a Medium.com clone demonstrating Lunet's capabilities as a web backend framework. The implementation covers users, profiles, articles, comments, tags, favorites, and follows endpoints. The app is located in the `app/` directory.
+
+Docs: [README_realworld.md](README_realworld.md) | [README_realworld-CN.md](README_realworld-CN.md)
+
+### Demo Prerequisites
+
+- CMake 3.12+, LuaJIT 2.1+, libuv 1.x, libsodium, SQLite3, PostgreSQL (client libs)
+- **Database Choice**: The database driver is selected at build time via CMake.
+  - Default: **SQLite3** (no external service required)
+  - Optional: **MySQL/MariaDB** (requires `conduit` database setup)
+
+### Build Configuration
+
+**Default (SQLite3):**
+```bash
+cmake -B build
+cmake --build build
+```
+
+**Enable MySQL:**
+```bash
+cmake -B build -DLUNET_ENABLE_MYSQL=ON
+cmake --build build
+```
+
+### Demo API Quick Start
+
+```bash
+# Build lunet (compiles C core with CMake)
+cmake -B build
+cmake --build build
+
+# Initialize database (SQLite)
+# The app will automatically initialize the SQLite database at .tmp/conduit.sqlite3 on first run.
+
+# Start the API backend (listens on port 8080)
+# Linux/macOS:
+./build/lunet app/main.lua
+# Windows:
+.\build\Release\lunet.exe app\main.lua
+
+# Verify API is running
+bin/test_curl.sh http://127.0.0.1:8080/api/tags
+```
+# (Optional) Start a React/Vite frontend - clones to .tmp/conduit-vite
+make wui
+
+# Stop all services
+make stop
+```
+
+### Demo Make Targets
+
+| Target | Description |
+|--------|-------------|
+| `make build` | Compile lunet C core using CMake |
+| `make run` | Start the API backend on port 8080 |
+| `make wui` | Clone and start React/Vite frontend (requires bun or npm) |
+| `make stop` | Stop API backend and frontend |
+| `make test` | Run unit tests with busted |
+| `make check` | Run static analysis with luacheck |
+| `make help` | Show all available targets |
+
+This contribution builds upon the upstream [xialeistudio/lunet](https://github.com/xialeistudio/lunet) project.
+
+---
+
+## Lunet Overview
 
 Lunet is a coroutine-based networking library that provides synchronous APIs with asynchronous execution. It combines the power of C, LuaJIT, and libuv to deliver high-performance I/O operations while maintaining clean, readable code.
 
@@ -286,6 +355,15 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 3. Make your changes
 4. Add tests if applicable
 5. Submit a pull request
+
+## Examples
+
+| Example | Description |
+|---------|-------------|
+| [01_json.lua](examples/01_json.lua) | Pure Lua JSON encoding with MySQL integration |
+| [02_routing.lua](examples/02_routing.lua) | HTTP routing with URL parameter extraction (`:id`) |
+| [03_mcp_sse.lua](examples/03_mcp_sse.lua) | MCP SSE server with Tavily search (18x smaller than Node.js) |
+| [mcp_stdio_pure.lua](examples/mcp_stdio_pure.lua) | Pure Lua stdio MCP for ablation testing |
 
 ## License
 

@@ -1,5 +1,5 @@
-#ifndef SIGNAL_H
-#define SIGNAL_H
+#ifndef LUNET_SIGNAL_H
+#define LUNET_SIGNAL_H
 
 #include <lua.h>
 

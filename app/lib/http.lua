@@ -18,6 +18,14 @@ local STATUS_TEXTS = {
     [500] = "Internal Server Error",
 }
 
+function http.urldecode(str)
+    if not str then return nil end
+    str = str:gsub("+", " ")
+    return str:gsub("%%(%x%x)", function(hex)
+        return string.char(tonumber(hex, 16))
+    end)
+end
+
 function http.parse_query_string(query)
     local params = {}
     if not query or query == "" then
@@ -26,13 +34,8 @@ function http.parse_query_string(query)
     for pair in query:gmatch("[^&]+") do
         local key, value = pair:match("^([^=]+)=(.*)$")
         if key then
-            key = key:gsub("%%(%x%x)", function(hex)
-                return string.char(tonumber(hex, 16))
-            end)
-            value = value:gsub("%%(%x%x)", function(hex)
-                return string.char(tonumber(hex, 16))
-            end)
-            value = value:gsub("+", " ")
+            key = http.urldecode(key)
+            value = http.urldecode(value)
             params[key] = value
         end
     end
@@ -77,11 +80,11 @@ function http.parse_request(data)
 
     local path, query_string = path_with_query:match("^([^?]+)%?(.*)$")
     if path then
-        request.path = path
+        request.path = http.urldecode(path)
         request.query_string = query_string
         request.query_params = http.parse_query_string(query_string)
     else
-        request.path = path_with_query
+        request.path = http.urldecode(path_with_query)
     end
 
     for i = 2, #lines do

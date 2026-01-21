@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [ simbo1905 ]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or tag to build'
+        required: false
+        default: ''
 
 jobs:
   build:
@@ -18,17 +23,21 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.inputs.ref || github.ref }}
 
     - name: Install Dependencies (Linux)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake libuv1-dev libsodium-dev sqlite3 libsqlite3-dev postgresql-client libpq-dev luajit libluajit-5.1-dev
+        sudo apt-get install -y cmake libuv1-dev libsodium-dev sqlite3 libsqlite3-dev postgresql-client libpq-dev luajit libluajit-5.1-dev luarocks
+        sudo luarocks install busted
 
     - name: Install Dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        brew install cmake libuv libsodium sqlite postgresql luajit
+        brew install cmake libuv libsodium sqlite postgresql luajit luarocks
+        luarocks install busted
 
     - name: Install Dependencies (Windows)
       if: runner.os == 'Windows'
@@ -55,6 +64,10 @@ jobs:
         else
           ./build/lunet test.lua
         fi
+
+    - name: Unit Tests (Unix)
+      if: runner.os != 'Windows'
+      run: busted spec/
 
     - name: Integration Test (API)
       shell: bash

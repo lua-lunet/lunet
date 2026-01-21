@@ -14,8 +14,10 @@ This fork includes an implementation of the [RealWorld "Conduit"](https://github
 
 ### Demo Prerequisites
 
-- CMake 3.10+, LuaJIT 2.1+, libuv 1.x (see Installation section below)
-- MariaDB/MySQL with a `conduit` database
+- CMake 3.12+, LuaJIT 2.1+, libuv 1.x (see Installation section below)
+- Database:
+  - macOS/Linux: MariaDB/MySQL with a `conduit` database (default)
+  - Windows: SQLite (default, stored at `.tmp/conduit.sqlite3`)
 
 ### Demo API Quick Start
 
@@ -111,10 +113,10 @@ Lunet is a coroutine-based networking library that provides synchronous APIs wit
 
 ### Prerequisites
 
-- CMake 3.10+
+- CMake 3.12+
 - LuaJIT 2.1+
 - libuv 1.x
-- MySQL client library (for MySQL module)
+- MySQL client library (optional, for `lunet.mysql` / MySQL-backed RealWorld demo)
 
 ### Build from Source
 
@@ -172,6 +174,27 @@ sudo apt install build-essential cmake libluajit-5.1-dev libuv1-dev libmysqlclie
 mkdir build && cd build
 cmake ..
 make
+```
+
+### Windows 11 (vcpkg)
+
+This repository supports building on Windows via vcpkg. The C core always builds; MySQL support is optional (and disabled by default on Windows).
+
+```powershell
+# Install vcpkg once (if you don't already have it)
+# https://github.com/microsoft/vcpkg
+
+# Install dependencies
+vcpkg install luajit:x64-windows libuv:x64-windows sqlite3:x64-windows
+
+# Configure + build (Release)
+cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release `
+  -DLUNET_ENABLE_MYSQL=OFF `
+  -DCMAKE_TOOLCHAIN_FILE="C:\path\to\vcpkg\scripts\buildsystems\vcpkg.cmake"
+cmake --build build --config Release
+
+# Run the RealWorld demo (serves API + `www/` frontend on port 8080)
+.\build\Release\lunet.exe app\main.lua
 ```
 
 ### CentOS/RHEL

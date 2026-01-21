@@ -112,6 +112,14 @@ int main(int argc, char **argv) {
   set_default_luaL(L);
   lunet_open(L);
 
+  // Expose compile-time demo settings to Lua.
+#if defined(LUNET_DEMO_DB_MYSQL)
+  lua_pushstring(L, "mysql");
+#else
+  lua_pushstring(L, "sqlite");
+#endif
+  lua_setglobal(L, "LUNET_DEMO_DB");
+
   // run lua file
   if (luaL_dofile(L, argv[1]) != LUA_OK) {
     const char *error = lua_tostring(L, -1);

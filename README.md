@@ -15,9 +15,9 @@ This fork includes an implementation of the [RealWorld "Conduit"](https://github
 ### Demo Prerequisites
 
 - CMake 3.12+, LuaJIT 2.1+, libuv 1.x (see Installation section below)
-- Database:
-  - macOS/Linux: MariaDB/MySQL with a `conduit` database (default)
-  - Windows: SQLite (default, stored at `.tmp/conduit.sqlite3`)
+- Database (selected at **CMake configure time**):
+  - `-DLUNET_DEMO_DB=sqlite` (default): uses SQLite at `.tmp/conduit.sqlite3`
+  - `-DLUNET_DEMO_DB=mysql`: uses MariaDB/MySQL `conduit` schema (requires `-DLUNET_ENABLE_MYSQL=ON`)
 
 ### Demo API Quick Start
 
@@ -26,7 +26,12 @@ This fork includes an implementation of the [RealWorld "Conduit"](https://github
 make build
 
 # Initialize database
-mariadb -u root < app/schema.sql
+#
+# If you configured with -DLUNET_DEMO_DB=mysql:
+#   mariadb -u root < app/schema.sql
+#
+# If you configured with -DLUNET_DEMO_DB=sqlite (default):
+#   the app will create/initialize `.tmp/conduit.sqlite3` automatically on first run.
 
 # Start the API backend (listens on port 8080)
 make run
@@ -190,6 +195,7 @@ vcpkg install luajit:x64-windows libuv:x64-windows sqlite3:x64-windows
 # Configure + build (Release)
 cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release `
   -DLUNET_ENABLE_MYSQL=OFF `
+  -DLUNET_DEMO_DB=sqlite `
   -DCMAKE_TOOLCHAIN_FILE="C:\path\to\vcpkg\scripts\buildsystems\vcpkg.cmake"
 cmake --build build --config Release
 

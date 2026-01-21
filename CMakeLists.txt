@@ -4,12 +4,28 @@ project(lunet C)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# RealWorld demo database selection (compile-time; exposed to Lua as `LUNET_DEMO_DB`).
+# Valid values: sqlite, mysql
+set(LUNET_DEMO_DB "sqlite" CACHE STRING "RealWorld demo database driver: sqlite or mysql")
+set_property(CACHE LUNET_DEMO_DB PROPERTY STRINGS sqlite mysql)
+
 # Option to enable/disable MySQL support.
 # Default ON for non-Windows (existing behavior), OFF on Windows.
 if(WIN32)
   option(LUNET_ENABLE_MYSQL "Enable MySQL support" OFF)
 else()
   option(LUNET_ENABLE_MYSQL "Enable MySQL support" ON)
+endif()
+
+if(LUNET_DEMO_DB STREQUAL "sqlite")
+  add_compile_definitions(LUNET_DEMO_DB_SQLITE)
+elseif(LUNET_DEMO_DB STREQUAL "mysql")
+  add_compile_definitions(LUNET_DEMO_DB_MYSQL)
+  if(NOT LUNET_ENABLE_MYSQL)
+    message(FATAL_ERROR "LUNET_DEMO_DB=mysql requires -DLUNET_ENABLE_MYSQL=ON")
+  endif()
+else()
+  message(FATAL_ERROR "Invalid LUNET_DEMO_DB='${LUNET_DEMO_DB}'. Use 'sqlite' or 'mysql'.")
 endif()
 
 include_directories(include)

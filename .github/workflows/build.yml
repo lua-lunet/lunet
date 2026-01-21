@@ -36,6 +36,7 @@ jobs:
 
       - name: Smoke test HTTP server
         run: |
+          mkdir -p www
           echo '<h1>Hello from lunet</h1>' > www/test.html
           build/lunet app/main.lua &
           sleep 2

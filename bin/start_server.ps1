@@ -28,12 +28,9 @@ $pidFile = "$logDir/server.pid"
 Write-Host "Logs will be written to $logDir"
 
 # 3. Start server
-$exePath = "build\Debug\lunet.exe"
-if (-not (Test-Path $exePath)) {
-    $exePath = "build\Release\lunet.exe"
-}
-if (-not (Test-Path $exePath)) {
-    Write-Error "Executable not found at build\Debug\lunet.exe or build\Release\lunet.exe"
+$exePath = @("build\Release\lunet.exe", "build\Debug\lunet.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $exePath) {
+    Write-Error "Executable not found at build\Release\lunet.exe or build\Debug\lunet.exe"
     exit 1
 }
 

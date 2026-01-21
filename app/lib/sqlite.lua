@@ -125,9 +125,6 @@ function M.query(db, sql)
         elseif t == SQLITE_TEXT or t == SQLITE_BLOB then
           local p = lib.sqlite3_column_text(stmt, i)
           row[key] = p ~= nil and ffi.string(p) or ""
-        else
-          local p = lib.sqlite3_column_text(stmt, i)
-          row[key] = p ~= nil and ffi.string(p) or ""
         end
       end
       rows[#rows + 1] = row

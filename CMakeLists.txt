@@ -122,7 +122,7 @@ add_executable(lunet ${SOURCES})
 if(TARGET libuv::libuv)
     target_link_libraries(lunet PRIVATE libuv::libuv)
 else()
-    target_link_libraries(lunet PRIVATE ${LIBUV_LIBRARIES})
+    target_link_libraries(lunet PRIVATE ${LIBUV_LIBRARY})
 endif()
 
 if(TARGET unofficial-sodium::sodium)

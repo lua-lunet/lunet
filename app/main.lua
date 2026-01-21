@@ -11,6 +11,11 @@ local db = require("app.lib.db")
 local auth = require("app.lib.auth")
 
 db.set_config(config.db)
+local db_init_ok, db_init_err = db.init()
+if not db_init_ok then
+    print("Database initialization failed: " .. (db_init_err or "unknown error"))
+    os.exit(1)
+end
 auth.set_config(config)
 
 local handlers = {
@@ -80,6 +85,21 @@ local function match_route(method, path)
     return nil, nil
 end
 
+local function read_file(path)
+    local f = io.open(path, "rb")
+    if not f then return nil end
+    local content = f:read("*a")
+    f:close()
+    return content
+end
+
+local function get_mime_type(path)
+    if path:match("%.html$") then return "text/html" end
+    if path:match("%.css$") then return "text/css" end
+    if path:match("%.js$") then return "application/javascript" end
+    return "application/octet-stream"
+end
+
 local function handle_request(request)
     if request.method == "OPTIONS" then
         return http.options_response()
@@ -89,6 +109,32 @@ local function handle_request(request)
 
     local handler, params = match_route(request.method, request.path)
     if not handler then
+        -- Static file / SPA fallback
+        if request.method == "GET" then
+            local file_path = "www" .. request.path
+            if request.path == "/" then
+                file_path = "www/index.html"
+            end
+            
+            -- Basic directory traversal protection
+            if file_path:find("%.%.") then
+                return http.error_response(403, {body = {"Forbidden"}})
+            end
+
+            local content = read_file(file_path)
+            if not content and not request.path:find("^/api/") then
+                 -- SPA fallback for non-API routes
+                 content = read_file("www/index.html")
+                 file_path = "www/index.html"
+            end
+
+            if content then
+                return http.response(200, {
+                    ["Content-Type"] = get_mime_type(file_path),
+                    ["Connection"] = "close"
+                }, content)
+            end
+        end
         return http.error_response(404, {body = {"Not found"}})
     end
 

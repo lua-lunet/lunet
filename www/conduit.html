@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Conduit - RealWorld</title>
+
+  <!-- ============================================================
+       API CONFIGURATION
+       When served via nginx, /api is proxied to the backend.
+       ============================================================ -->
+  <script>
+    window.CONDUIT_API_URL = "/api";
+  </script>
+  <!-- ============================================================ -->
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/preact@10.19.3/dist/preact.min.js"></script>
+  <script src="https://unpkg.com/preact@10.19.3/hooks/dist/hooks.umd.js"></script>
+  <script src="https://unpkg.com/htm@3.1.1/dist/htm.umd.js"></script>
+</head>
+<body class="bg-gray-100">
+  <div id="root"></div>
+
+  <script type="module">
+    // ============================================================
+    // API Client - Vanilla JS fetch wrappers
+    // ============================================================
+    const API_URL = window.CONDUIT_API_URL;
+    
+    // Token management
+    let authToken = localStorage.getItem('conduit_token') || null;
+    
+    function setToken(token) {
+      authToken = token;
+      if (token) {
+        localStorage.setItem('conduit_token', token);
+        console.log('[API] Token stored');
+      } else {
+        localStorage.removeItem('conduit_token');
+        console.log('[API] Token cleared');
+      }
+    }
+    
+    function getToken() {
+      return authToken;
+    }
+    
+    // Base fetch wrapper with auth and error handling
+    async function apiFetch(endpoint, options = {}) {
+      const url = `${API_URL}${endpoint}`;
+      const headers = {
+        ...options.headers,
+      };
+      
+      if (options.body) {
+        headers['Content-Type'] = 'application/json';
+      }
+      
+      if (authToken) {
+        headers['Authorization'] = `Token ${authToken}`;
+      }
+      
+      console.log(`[API] ${options.method || 'GET'} ${url}`);
+      
+      try {
+        const response = await fetch(url, {
+          ...options,
+          headers,
+        });
+        
+        let data = null;
+        if (response.status !== 204) {
+          try {
+            data = await response.json();
+          } catch (e) {
+            // Ignore JSON errors on empty success
+          }
+        }
+        
+        if (!response.ok) {
+          console.error(`[API] Error ${response.status}:`, data);
+          throw { status: response.status, errors: (data && (data.errors || data)) || { error: 'Unknown error' } };
+        }
+        
+        console.log(`[API] Response:`, data);
+        return data;
+      } catch (err) {
+        if (err.status) throw err; // Re-throw API errors
+        console.error(`[API] Network error:`, err);
+        throw { status: 0, errors: { network: ['Failed to connect to server'] } };
+      }
+    }
+    
+    // ============================================================
+    // API Methods - Exported for use in components
+    // ============================================================
+    const api = {
+      // Auth
+      login: (email, password) => 
+        apiFetch('/users/login', {
+          method: 'POST',
+          body: JSON.stringify({ user: { email, password } }),
+        }),
+      
+      register: (username, email, password) =>
+        apiFetch('/users', {
+          method: 'POST',
+          body: JSON.stringify({ user: { username, email, password } }),
+        }),
+      
+      getCurrentUser: () => apiFetch('/user'),
+      
+      updateUser: (user) =>
+        apiFetch('/user', {
+          method: 'PUT',
+          body: JSON.stringify({ user }),
+        }),
+      
+      // Articles
+      getArticles: (params = {}) => {
+        const query = new URLSearchParams(params).toString();
+        return apiFetch(`/articles${query ? '?' + query : ''}`);
+      },
+      
+      getArticlesFeed: (params = {}) => {
+        const query = new URLSearchParams(params).toString();
+        return apiFetch(`/articles/feed${query ? '?' + query : ''}`);
+      },
+      
+      getArticle: (slug) => apiFetch(`/articles/${slug}`),
+      
+      createArticle: (article) =>
+        apiFetch('/articles', {
+          method: 'POST',
+          body: JSON.stringify({ article }),
+        }),
+      
+      updateArticle: (slug, article) =>
+        apiFetch(`/articles/${slug}`, {
+          method: 'PUT',
+          body: JSON.stringify({ article }),
+        }),
+      
+      deleteArticle: (slug) =>
+        apiFetch(`/articles/${slug}`, { method: 'DELETE' }),
+      
+      // Comments
+      getComments: (slug) => apiFetch(`/articles/${slug}/comments`),
+      
+      addComment: (slug, body) =>
+        apiFetch(`/articles/${slug}/comments`, {
+          method: 'POST',
+          body: JSON.stringify({ comment: { body } }),
+        }),
+      
+      deleteComment: (slug, commentId) =>
+        apiFetch(`/articles/${slug}/comments/${commentId}`, { method: 'DELETE' }),
+      
+      // Favorites
+      favoriteArticle: (slug) =>
+        apiFetch(`/articles/${slug}/favorite`, { method: 'POST' }),
+      
+      unfavoriteArticle: (slug) =>
+        apiFetch(`/articles/${slug}/favorite`, { method: 'DELETE' }),
+      
+      // Profiles
+      getProfile: (username) => apiFetch(`/profiles/${username}`),
+      
+      followUser: (username) =>
+        apiFetch(`/profiles/${username}/follow`, { method: 'POST' }),
+      
+      unfollowUser: (username) =>
+        apiFetch(`/profiles/${username}/follow`, { method: 'DELETE' }),
+      
+      // Tags
+      getTags: () => apiFetch('/tags'),
+    };
+    
+    // Make api available globally for debugging
+    window.conduitApi = api;
+    console.log('[Conduit] API client loaded. Access via window.conduitApi');
+    
+    // ============================================================
+    // Preact App
+    // ============================================================
+    const { h, render } = preact;
+    const { useState, useEffect } = preactHooks;
+    const html = htm.bind(h);
+    
+    // Simple state for current user
+    function useAuth() {
+      const [user, setUser] = useState(null);
+      const [loading, setLoading] = useState(true);
+      
+      useEffect(() => {
+        if (getToken()) {
+          api.getCurrentUser()
+            .then(data => {
+              setUser(data.user);
+              console.log('[Auth] User loaded:', data.user.username);
+            })
+            .catch(err => {
+              console.error('[Auth] Failed to load user:', err);
+              setToken(null);
+            })
+            .finally(() => setLoading(false));
+        } else {
+          setLoading(false);
+        }
+      }, []);
+      
+      const login = async (email, password) => {
+        const data = await api.login(email, password);
+        setToken(data.user.token);
+        setUser(data.user);
+        return data.user;
+      };
+      
+      const register = async (username, email, password) => {
+        const data = await api.register(username, email, password);
+        setToken(data.user.token);
+        setUser(data.user);
+        return data.user;
+      };
+      
+      const logout = () => {
+        setToken(null);
+        setUser(null);
+        console.log('[Auth] Logged out');
+      };
+      
+      return { user, loading, login, register, logout, isAuth: !!user };
+    }
+    
+    // ============================================================
+    // Components
+    // ============================================================
+    
+    function Navbar({ user, onLogout, onNavigate, currentPage }) {
+      return html`
+        <nav class="bg-white shadow-sm border-b">
+          <div class="max-w-4xl mx-auto px-4 py-3 flex justify-between items-center">
+            <a href="#" class="text-green-500 font-bold text-xl" onClick=${(e) => { e.preventDefault(); onNavigate('home'); }}>conduit</a>
+            <div class="flex gap-4">
+              <a href="#" class="text-gray-600 hover:text-gray-900 ${currentPage === 'home' ? 'font-semibold' : ''}" 
+                 onClick=${(e) => { e.preventDefault(); onNavigate('home'); }}>Home</a>
+              ${user ? html`
+                <a href="#" class="text-gray-600 hover:text-gray-900 ${currentPage === 'editor' ? 'font-semibold' : ''}"
+                   onClick=${(e) => { e.preventDefault(); onNavigate('editor'); }}>New Article</a>
+                <a href="#" class="text-gray-600 hover:text-gray-900 ${currentPage === 'settings' ? 'font-semibold' : ''}"
+                   onClick=${(e) => { e.preventDefault(); onNavigate('settings'); }}>Settings</a>
+                <a href="#" class="text-gray-600 hover:text-gray-900"
+                   onClick=${(e) => { e.preventDefault(); onNavigate('profile', user.username); }}>${user.username}</a>
+                <button class="text-gray-600 hover:text-gray-900" onClick=${onLogout}>Logout</button>
+              ` : html`
+                <a href="#" class="text-gray-600 hover:text-gray-900 ${currentPage === 'login' ? 'font-semibold' : ''}"
+                   onClick=${(e) => { e.preventDefault(); onNavigate('login'); }}>Sign in</a>
+                <a href="#" class="text-gray-600 hover:text-gray-900 ${currentPage === 'register' ? 'font-semibold' : ''}"
+                   onClick=${(e) => { e.preventDefault(); onNavigate('register'); }}>Sign up</a>
+              `}
+            </div>
+          </div>
+        </nav>
+      `;
+    }
+    
+    function LoginForm({ onLogin, onNavigate }) {
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [errors, setErrors] = useState(null);
+      const [loading, setLoading] = useState(false);
+      
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        setErrors(null);
+        try {
+          await onLogin(email, password);
+          onNavigate('home');
+        } catch (err) {
+          setErrors(err.errors);
+        } finally {
+          setLoading(false);
+        }
+      };
+      
+      return html`
+        <div class="max-w-md mx-auto mt-8 p-6 bg-white rounded-lg shadow">
+          <h1 class="text-2xl font-bold text-center mb-4">Sign in</h1>
+          <p class="text-center text-gray-600 mb-6">
+            <a href="#" class="text-green-500 hover:underline" onClick=${(e) => { e.preventDefault(); onNavigate('register'); }}>Need an account?</a>
+          </p>
+          ${errors && html`
+            <div class="bg-red-50 border border-red-200 text-red-700 p-3 rounded mb-4">
+              ${Object.entries(errors).map(([k, v]) => html`<p key=${k}>${k}: ${v.join(', ')}</p>`)}
+            </div>
+          `}
+          <form onSubmit=${handleSubmit}>
+            <input type="email" placeholder="Email" value=${email} onInput=${(e) => setEmail(e.target.value)}
+                   class="w-full p-3 border rounded mb-3" required />
+            <input type="password" placeholder="Password" value=${password} onInput=${(e) => setPassword(e.target.value)}
+                   class="w-full p-3 border rounded mb-3" required />
+            <button type="submit" disabled=${loading}
+                    class="w-full bg-green-500 text-white p-3 rounded hover:bg-green-600 disabled:opacity-50">
+              ${loading ? 'Signing in...' : 'Sign in'}
+            </button>
+          </form>
+        </div>
+      `;
+    }
+    
+    function RegisterForm({ onRegister, onNavigate }) {
+      const [username, setUsername] = useState('');
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [errors, setErrors] = useState(null);
+      const [loading, setLoading] = useState(false);
+      
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        setErrors(null);
+        try {
+          await onRegister(username, email, password);
+          onNavigate('home');
+        } catch (err) {
+          setErrors(err.errors);
+        } finally {
+          setLoading(false);
+        }
+      };
+      
+      return html`
+        <div class="max-w-md mx-auto mt-8 p-6 bg-white rounded-lg shadow">
+          <h1 class="text-2xl font-bold text-center mb-4">Sign up</h1>
+          <p class="text-center text-gray-600 mb-6">
+            <a href="#" class="text-green-500 hover:underline" onClick=${(e) => { e.preventDefault(); onNavigate('login'); }}>Have an account?</a>
+          </p>
+          ${errors && html`
+            <div class="bg-red-50 border border-red-200 text-red-700 p-3 rounded mb-4">
+              ${Object.entries(errors).map(([k, v]) => html`<p key=${k}>${k}: ${v.join(', ')}</p>`)}
+            </div>
+          `}
+          <form onSubmit=${handleSubmit}>
+            <input type="text" placeholder="Username" value=${username} onInput=${(e) => setUsername(e.target.value)}
+                   class="w-full p-3 border rounded mb-3" required />
+            <input type="email" placeholder="Email" value=${email} onInput=${(e) => setEmail(e.target.value)}
+                   class="w-full p-3 border rounded mb-3" required />
+            <input type="password" placeholder="Password" value=${password} onInput=${(e) => setPassword(e.target.value)}
+                   class="w-full p-3 border rounded mb-3" required />
+            <button type="submit" disabled=${loading}
+                    class="w-full bg-green-500 text-white p-3 rounded hover:bg-green-600 disabled:opacity-50">
+              ${loading ? 'Signing up...' : 'Sign up'}
+            </button>
+          </form>
+        </div>
+      `;
+    }
+    
+    function ArticleList({ onNavigate }) {
+      const [articles, setArticles] = useState([]);
+      const [tags, setTags] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [selectedTag, setSelectedTag] = useState(null);
+      
+      useEffect(() => {
+        setLoading(true);
+        const params = selectedTag ? { tag: selectedTag } : {};
+        Promise.all([
+          api.getArticles(params),
+          api.getTags(),
+        ])
+          .then(([articlesData, tagsData]) => {
+            setArticles(articlesData.articles || []);
+            setTags(tagsData.tags || []);
+            console.log('[Home] Loaded', articlesData.articles?.length, 'articles,', tagsData.tags?.length, 'tags');
+          })
+          .catch(err => console.error('[Home] Failed to load:', err))
+          .finally(() => setLoading(false));
+      }, [selectedTag]);
+      
+      if (loading) {
+        return html`<div class="text-center py-8 text-gray-500">Loading articles...</div>`;
+      }
+      
+      return html`
+        <div class="max-w-4xl mx-auto mt-8 px-4">
+          <div class="flex gap-8">
+            <div class="flex-1">
+              <h2 class="text-xl font-semibold mb-4">
+                ${selectedTag ? html`Articles tagged "${selectedTag}"` : 'Global Feed'}
+                ${selectedTag && html`
+                  <button class="ml-2 text-sm text-gray-500 hover:text-gray-700" onClick=${() => setSelectedTag(null)}>(clear)</button>
+                `}
+              </h2>
+              ${articles.length === 0 ? html`
+                <p class="text-gray-500">No articles yet. Be the first to write one!</p>
+              ` : articles.map(article => html`
+                <div key=${article.slug} class="bg-white p-4 rounded-lg shadow mb-4">
+                  <div class="flex items-center mb-2">
+                    <img src=${article.author?.image || 'https://api.realworld.io/images/smiley-cyrus.jpeg'} 
+                         class="w-8 h-8 rounded-full mr-2" />
+                    <div>
+                      <a href="#" class="text-green-500 hover:underline" 
+                         onClick=${(e) => { e.preventDefault(); onNavigate('profile', article.author?.username); }}>
+                        ${article.author?.username}
+                      </a>
+                      <p class="text-gray-400 text-xs">${new Date(article.createdAt).toLocaleDateString()}</p>
+                    </div>
+                    <div class="ml-auto">
+                      <span class="text-green-500 border border-green-500 rounded px-2 py-1 text-sm">
+                        ❤ ${article.favoritesCount}
+                      </span>
+                    </div>
+                  </div>
+                  <a href="#" onClick=${(e) => { e.preventDefault(); onNavigate('article', article.slug); }}>
+                    <h3 class="text-lg font-semibold hover:text-green-500">${article.title}</h3>
+                    <p class="text-gray-500 text-sm">${article.description}</p>
+                  </a>
+                  <div class="mt-2 flex gap-1">
+                    ${(article.tagList || []).map(tag => html`
+                      <span key=${tag} class="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded cursor-pointer hover:bg-gray-200"
+                            onClick=${() => setSelectedTag(tag)}>${tag}</span>
+                    `)}
+                  </div>
+                </div>
+              `)}
+            </div>
+            <div class="w-64">
+              <div class="bg-gray-200 p-4 rounded">
+                <h3 class="font-semibold mb-2">Popular Tags</h3>
+                <div class="flex flex-wrap gap-1">
+                  ${tags.map(tag => html`
+                    <span key=${tag} class="bg-gray-600 text-white text-xs px-2 py-1 rounded cursor-pointer hover:bg-gray-700"
+                          onClick=${() => setSelectedTag(tag)}>${tag}</span>
+                  `)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    
+    function ArticleEditor({ onNavigate, user }) {
+      const [title, setTitle] = useState('');
+      const [description, setDescription] = useState('');
+      const [body, setBody] = useState('');
+      const [tagList, setTagList] = useState('');
+      const [errors, setErrors] = useState(null);
+      const [loading, setLoading] = useState(false);
+      
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        setErrors(null);
+        try {
+          const article = {
+            title,
+            description,
+            body,
+            tagList: tagList.split(',').map(t => t.trim()).filter(Boolean),
+          };
+          const data = await api.createArticle(article);
+          console.log('[Editor] Article created:', data.article.slug);
+          onNavigate('article', data.article.slug);
+        } catch (err) {
+          setErrors(err.errors);
+        } finally {
+          setLoading(false);
+        }
+      };
+      
+      return html`
+        <div class="max-w-2xl mx-auto mt-8 p-6 bg-white rounded-lg shadow">
+          <h1 class="text-2xl font-bold mb-4">New Article</h1>
+          ${errors && html`
+            <div class="bg-red-50 border border-red-200 text-red-700 p-3 rounded mb-4">
+              ${Object.entries(errors).map(([k, v]) => html`<p key=${k}>${k}: ${v.join(', ')}</p>`)}
+            </div>
+          `}
+          <form onSubmit=${handleSubmit}>
+            <input type="text" placeholder="Article Title" value=${title} onInput=${(e) => setTitle(e.target.value)}
+                   class="w-full p-3 border rounded mb-3" required />
+            <input type="text" placeholder="What's this article about?" value=${description} onInput=${(e) => setDescription(e.target.value)}
+                   class="w-full p-3 border rounded mb-3" required />
+            <textarea placeholder="Write your article (in markdown)" value=${body} onInput=${(e) => setBody(e.target.value)}
+                      class="w-full p-3 border rounded mb-3 h-48" required></textarea>
+            <input type="text" placeholder="Enter tags (comma separated)" value=${tagList} onInput=${(e) => setTagList(e.target.value)}
+                   class="w-full p-3 border rounded mb-3" />
+            <button type="submit" disabled=${loading}
+                    class="bg-green-500 text-white px-6 py-3 rounded hover:bg-green-600 disabled:opacity-50">
+              ${loading ? 'Publishing...' : 'Publish Article'}
+            </button>
+          </form>
+        </div>
+      `;
+    }
+    
+    function ArticleView({ slug, onNavigate, user }) {
+      const [article, setArticle] = useState(null);
+      const [comments, setComments] = useState([]);
+      const [newComment, setNewComment] = useState('');
+      const [loading, setLoading] = useState(true);
+      
+      useEffect(() => {
+        setLoading(true);
+        Promise.all([
+          api.getArticle(slug),
+          api.getComments(slug),
+        ])
+          .then(([articleData, commentsData]) => {
+            setArticle(articleData.article);
+            setComments(commentsData.comments || []);
+            console.log('[Article] Loaded:', articleData.article.title);
+          })
+          .catch(err => {
+            console.error('[Article] Failed to load:', err);
+            onNavigate('home');
+          })
+          .finally(() => setLoading(false));
+      }, [slug]);
+      
+      const handleAddComment = async (e) => {
+        e.preventDefault();
+        if (!newComment.trim()) return;
+        try {
+          const data = await api.addComment(slug, newComment);
+          setComments([data.comment, ...comments]);
+          setNewComment('');
+        } catch (err) {
+          console.error('[Article] Failed to add comment:', err);
+        }
+      };
+      
+      if (loading || !article) {
+        return html`<div class="text-center py-8 text-gray-500">Loading article...</div>`;
+      }
+      
+      return html`
+        <div class="max-w-3xl mx-auto mt-8 px-4">
+          <div class="bg-gray-800 text-white p-8 rounded-t-lg">
+            <h1 class="text-3xl font-bold mb-4">${article.title}</h1>
+            <div class="flex items-center">
+              <img src=${article.author?.image || 'https://api.realworld.io/images/smiley-cyrus.jpeg'} 
+                   class="w-10 h-10 rounded-full mr-3" />
+              <div>
+                <a href="#" class="text-white hover:underline" 
+                   onClick=${(e) => { e.preventDefault(); onNavigate('profile', article.author?.username); }}>
+                  ${article.author?.username}
+                </a>
+                <p class="text-gray-400 text-sm">${new Date(article.createdAt).toLocaleDateString()}</p>
+              </div>
+            </div>
+          </div>
+          <div class="bg-white p-8 rounded-b-lg shadow">
+            <p class="text-gray-700 whitespace-pre-wrap">${article.body}</p>
+            <div class="mt-4 flex gap-1">
+              ${(article.tagList || []).map(tag => html`
+                <span key=${tag} class="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded">${tag}</span>
+              `)}
+            </div>
+            <hr class="my-6" />
+            <h3 class="text-lg font-semibold mb-4">Comments</h3>
+            ${user && html`
+              <form onSubmit=${handleAddComment} class="mb-4">
+                <textarea placeholder="Write a comment..." value=${newComment} onInput=${(e) => setNewComment(e.target.value)}
+                          class="w-full p-3 border rounded mb-2 h-24"></textarea>
+                <button type="submit" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">
+                  Post Comment
+                </button>
+              </form>
+            `}
+            ${comments.length === 0 ? html`
+              <p class="text-gray-500">No comments yet.</p>
+            ` : comments.map(comment => html`
+              <div key=${comment.id} class="bg-gray-50 p-4 rounded mb-2">
+                <p class="text-gray-700">${comment.body}</p>
+                <div class="mt-2 flex items-center text-sm text-gray-500">
+                  <img src=${comment.author?.image || 'https://api.realworld.io/images/smiley-cyrus.jpeg'} 
+                       class="w-5 h-5 rounded-full mr-2" />
+                  <span>${comment.author?.username}</span>
+                  <span class="mx-2">•</span>
+                  <span>${new Date(comment.createdAt).toLocaleDateString()}</span>
+                </div>
+              </div>
+            `)}
+          </div>
+        </div>
+      `;
+    }
+    
+    // ============================================================
+    // Main App
+    // ============================================================
+    function App() {
+      const { user, loading, login, register, logout, isAuth } = useAuth();
+      const [page, setPage] = useState('home');
+      const [pageParam, setPageParam] = useState(null);
+      
+      const navigate = (newPage, param = null) => {
+        console.log('[Nav] Navigating to:', newPage, param);
+        setPage(newPage);
+        setPageParam(param);
+      };
+      
+      if (loading) {
+        return html`<div class="text-center py-8 text-gray-500">Loading...</div>`;
+      }
+      
+      let content;
+      switch (page) {
+        case 'login':
+          content = html`<${LoginForm} onLogin=${login} onNavigate=${navigate} />`;
+          break;
+        case 'register':
+          content = html`<${RegisterForm} onRegister=${register} onNavigate=${navigate} />`;
+          break;
+        case 'editor':
+          content = isAuth 
+            ? html`<${ArticleEditor} onNavigate=${navigate} user=${user} />`
+            : html`<${LoginForm} onLogin=${login} onNavigate=${navigate} />`;
+          break;
+        case 'article':
+          content = html`<${ArticleView} slug=${pageParam} onNavigate=${navigate} user=${user} />`;
+          break;
+        default:
+          content = html`<${ArticleList} onNavigate=${navigate} />`;
+      }
+      
+      return html`
+        <${Navbar} user=${user} onLogout=${logout} onNavigate=${navigate} currentPage=${page} />
+        ${content}
+        <footer class="text-center text-gray-500 text-sm py-8 mt-8">
+          <p>Conduit - A RealWorld Demo App</p>
+          <p class="mt-1">API: <code class="bg-gray-200 px-1 rounded">${API_URL}</code></p>
+        </footer>
+      `;
+    }
+    
+    // Mount the app
+    console.log('[Conduit] Mounting app...');
+    render(html`<${App} />`, document.getElementById('root'));
+    console.log('[Conduit] App mounted successfully');
+  </script>
+</body>
+</html>

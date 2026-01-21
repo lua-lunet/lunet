@@ -30,7 +30,10 @@ Write-Host "Logs will be written to $logDir"
 # 3. Start server
 $exePath = "build\Debug\lunet.exe"
 if (-not (Test-Path $exePath)) {
-    Write-Error "Executable not found at $exePath"
+    $exePath = "build\Release\lunet.exe"
+}
+if (-not (Test-Path $exePath)) {
+    Write-Error "Executable not found at build\Debug\lunet.exe or build\Release\lunet.exe"
     exit 1
 }
 

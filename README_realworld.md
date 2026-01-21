@@ -2,6 +2,8 @@
 
 This is a backend implementation of the [RealWorld Conduit API](https://realworld.io) using the **Lunet** framework (LuaJIT + libuv).
 
+[中文文档](README_realworld-CN.md)
+
 ## Architecture
 
 - **Runtime**: Lunet (custom C + LuaJIT + libuv)
@@ -71,7 +73,7 @@ A self-contained debug server is available to verify the full stack (Networking 
 ```bash
 ./build/lunet app/debug_server.lua
 # In another terminal:
-curl -v http://127.0.0.1:8090/
+curl -v --max-time 3 http://127.0.0.1:8090/
 ```
 
 ### API Tests
@@ -79,7 +81,7 @@ Use the Postman/Newman collection from the RealWorld repo or simple curl command
 
 ```bash
 # Create user
-curl -X POST http://127.0.0.1:8080/api/users \
+bin/test_curl.sh -X POST http://127.0.0.1:8080/api/users \
   -H "Content-Type: application/json" \
   -d '{"user":{"username":"testuser","email":"test@example.com","password":"password"}}'
 ```

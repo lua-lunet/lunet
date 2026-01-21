@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [ simbo1905, windows11 ]
+    branches: [ simbo1905, windows11, cursor/cross-platform-build-workflow-8f23 ]
   pull_request:
     branches: [ simbo1905 ]
   workflow_dispatch:

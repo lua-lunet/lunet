@@ -1,100 +1,21 @@
+local native = require("lunet.db")
+local config = require("app.db_config")
+
 local db = {}
 
-local config = {
-    driver = "mysql",
-    host = "127.0.0.1",
-    port = 3306,
-    user = "root",
-    password = "root",
-    database = "conduit",
-    path = ".tmp/conduit.sqlite3",
-}
+-- Expose native functions
+db.open = native.open
+db.close = native.close
+db.query_raw = native.query
+db.exec_raw = native.exec
 
-local mysql
-local sqlite
-
-local function get_mysql()
-    if not mysql then
-        mysql = require("lunet.mysql")
-    end
-    return mysql
-end
-
-local function get_sqlite()
-    if not sqlite then
-        sqlite = require("app.lib.sqlite")
-    end
-    return sqlite
-end
-
-function db.set_config(cfg)
-    if cfg.driver then config.driver = cfg.driver end
-    if cfg.host then config.host = cfg.host end
-    if cfg.port then config.port = cfg.port end
-    if cfg.user then config.user = cfg.user end
-    if cfg.password then config.password = cfg.password end
-    if cfg.database then config.database = cfg.database end
-    if cfg.path then config.path = cfg.path end
-end
-
+-- Connection management
 function db.connect()
-    if config.driver == "sqlite" then
-        local s = get_sqlite()
-        return s.open(config.path)
-    end
-
-    local m = get_mysql()
-    local conn, err = m.open({
-        host = config.host,
-        port = config.port,
-        user = config.user,
-        password = config.password,
-        database = config.database,
-        charset = "utf8mb4",
-    })
-    if not conn then
-        return nil, "database connection failed: " .. (err or "unknown error")
-    end
-    return conn
+    -- Native open takes a table. db_config matches what's needed.
+    return native.open(config)
 end
 
-function db.close(conn)
-    if conn then
-        if config.driver == "sqlite" then
-            get_sqlite().close(conn)
-        else
-            get_mysql().close(conn)
-        end
-    end
-end
-
-function db.init()
-    if config.driver ~= "sqlite" then
-        return true
-    end
-
-    local s = get_sqlite()
-    local conn, err = s.open(config.path)
-    if not conn then
-        return nil, err
-    end
-
-    local f = io.open("app/schema_sqlite.sql", "rb")
-    if not f then
-        s.close(conn)
-        return nil, "failed to open app/schema_sqlite.sql"
-    end
-    local schema = f:read("*a")
-    f:close()
-
-    local ok, exec_err = s.exec(conn, schema)
-    s.close(conn)
-    if not ok then
-        return nil, exec_err
-    end
-    return true
-end
-
+-- Escape function
 function db.escape(value)
     if value == nil then
         return "NULL"
@@ -102,25 +23,14 @@ function db.escape(value)
         return tostring(value)
     elseif type(value) == "boolean" then
         return value and "1" or "0"
-    elseif type(value) == "string" then
-        if config.driver == "sqlite" then
-            local escaped = value:gsub("'", "''")
-            return "'" .. escaped .. "'"
-        else
-            local escaped = value:gsub("\\", "\\\\")
-            escaped = escaped:gsub("'", "\\'")
-            escaped = escaped:gsub('"', '\\"')
-            escaped = escaped:gsub("\n", "\\n")
-            escaped = escaped:gsub("\r", "\\r")
-            escaped = escaped:gsub("%z", "\\0")
-            escaped = escaped:gsub("\x1a", "\\Z")
-            return "'" .. escaped .. "'"
-        end
     else
-        return "NULL"
+        -- Native escape handles the character escaping (e.g. ' -> '' or \ -> \\)
+        -- We must wrap in quotes.
+        return "'" .. native.escape(tostring(value)) .. "'"
     end
 end
 
+-- Interpolate: replace ? with escaped values
 function db.interpolate(sql, ...)
     local args = {...}
     local idx = 0
@@ -130,6 +40,7 @@ function db.interpolate(sql, ...)
     end)
 end
 
+-- Higher level query (handles connection and interpolation)
 function db.query(sql, ...)
     local conn, err = db.connect()
     if not conn then
@@ -140,13 +51,9 @@ function db.query(sql, ...)
         sql = db.interpolate(sql, ...)
     end
 
-    local result, query_err
-    if config.driver == "sqlite" then
-        result, query_err = get_sqlite().query(conn, sql)
-    else
-        result, query_err = get_mysql().query(conn, sql)
-    end
+    local result, query_err = db.query_raw(conn, sql)
     db.close(conn)
+    
     if not result then
         return nil, query_err or "query failed"
     end
@@ -164,13 +71,9 @@ function db.exec(sql, ...)
         sql = db.interpolate(sql, ...)
     end
 
-    local result, exec_err
-    if config.driver == "sqlite" then
-        result, exec_err = get_sqlite().exec(conn, sql)
-    else
-        result, exec_err = get_mysql().exec(conn, sql)
-    end
+    local result, exec_err = db.exec_raw(conn, sql)
     db.close(conn)
+    
     if not result then
         return nil, exec_err or "exec failed"
     end
@@ -180,15 +83,12 @@ end
 
 function db.query_one(sql, ...)
     local result, err = db.query(sql, ...)
-    if not result then
-        return nil, err
-    end
-    if #result == 0 then
-        return nil
-    end
+    if not result then return nil, err end
+    if #result == 0 then return nil end
     return result[1]
 end
 
+-- Table helpers
 function db.insert(table_name, data)
     local columns = {}
     local values = {}
@@ -198,7 +98,7 @@ function db.insert(table_name, data)
     end
     local sql = string.format(
         "INSERT INTO %s (%s) VALUES (%s)",
-        table_name,
+        table_name, -- Note: table name not escaped, assumed safe/constant
         table.concat(columns, ", "),
         table.concat(values, ", ")
     )
@@ -226,6 +126,28 @@ function db.delete(table_name, where, ...)
         db.interpolate(where, ...)
     )
     return db.exec(sql)
+end
+
+function db.init()
+    if config.driver == "sqlite" or config.driver == "sqlite3" then
+        local conn, err = db.connect()
+        if not conn then return nil, err end
+        
+        -- Read schema
+        local f = io.open("app/schema_sqlite.sql", "rb")
+        if not f then 
+            -- Fallback to main schema if sqlite specific one missing?
+            f = io.open("app/schema.sql", "rb") 
+        end
+        
+        if f then
+            local schema = f:read("*a")
+            f:close()
+            db.exec_raw(conn, schema)
+        end
+        db.close(conn)
+    end
+    return true
 end
 
 return db

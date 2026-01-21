@@ -1,5 +1,8 @@
 name: Build
 
+# PR and smoke test workflow - runs concurrently (no concurrency limits)
+# Each PR gets its own run, manual triggers don't cancel each other
+
 on:
   pull_request:
   workflow_dispatch:
@@ -21,7 +24,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake libluajit-5.1-dev libuv1-dev libsqlite3-dev
+          sudo apt-get install -y cmake libluajit-5.1-dev libuv1-dev libsqlite3-dev libsodium23
 
       - name: Build
         run: make build

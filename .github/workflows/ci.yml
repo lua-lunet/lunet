@@ -1,0 +1,78 @@
+name: ci
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or tag to build (optional). If empty, uses the event ref."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux:
+    name: build (debian trixie)
+    runs-on: ubuntu-latest
+    container:
+      image: debian:trixie-slim
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git \
+            cmake ninja-build build-essential pkg-config \
+            libluajit-5.1-dev libuv1-dev
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLUNET_ENABLE_MYSQL=OFF
+
+      - name: Build
+        run: |
+          cmake --build build
+
+  build-native:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Install deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install cmake ninja luajit libuv
+
+      - name: Configure + build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLUNET_ENABLE_MYSQL=OFF
+          cmake --build build
+
+      - name: Setup vcpkg (Windows)
+        if: runner.os == 'Windows'
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: vcpkg.json
+
+      - name: Configure + build (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DLUNET_ENABLE_MYSQL=OFF -DCMAKE_TOOLCHAIN_FILE="${env:VCPKG_ROOT}\\scripts\\buildsystems\\vcpkg.cmake"
+          cmake --build build --config Release

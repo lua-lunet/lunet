@@ -1,11 +1,16 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.12)
 project(lunet C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Option to enable/disable MySQL support
-option(LUNET_ENABLE_MYSQL "Enable MySQL support" OFF)
+# Option to enable/disable MySQL support.
+# Default ON for non-Windows (existing behavior), OFF on Windows.
+if(WIN32)
+  option(LUNET_ENABLE_MYSQL "Enable MySQL support" OFF)
+else()
+  option(LUNET_ENABLE_MYSQL "Enable MySQL support" ON)
+endif()
 
 include_directories(include)
 
@@ -15,9 +20,9 @@ find_path(LUAJIT_INCLUDE_DIR luajit.h
   HINTS 
     ${LUAJIT_INCLUDE_DIR} 
     ENV LUAJIT_INCLUDE_DIR 
-    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/luajit"
-    "${CMAKE_SOURCE_DIR}/../vcpkg/installed/x64-windows/include/luajit"
-    "C:/vcpkg/installed/x64-windows/include/luajit"
+    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+    "${CMAKE_SOURCE_DIR}/../vcpkg/installed/x64-windows/include"
+    "C:/vcpkg/installed/x64-windows/include"
     /opt/homebrew/include 
     /usr/local/include
   PATH_SUFFIXES luajit-2.1 luajit
@@ -86,7 +91,8 @@ if(LUNET_ENABLE_MYSQL)
   endif()
   include_directories(${MYSQL_INCLUDE_DIR})
   message(STATUS "Found MySQL: ${MYSQL_LIBRARY}")
-  add_definitions(-DLUNET_ENABLE_MYSQL)
+  # Define for conditional compilation in C sources.
+  add_compile_definitions(LUNET_ENABLE_MYSQL)
 else()
   message(STATUS "MySQL support disabled")
 endif()

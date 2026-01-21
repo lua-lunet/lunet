@@ -1,0 +1,9 @@
+{
+  "name": "lunet",
+  "version-string": "0.0.0",
+  "dependencies": [
+    "luajit",
+    "libuv",
+    "sqlite3"
+  ]
+}

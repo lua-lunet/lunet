@@ -26,6 +26,14 @@ jobs:
       - name: Build
         run: make build
 
+      - name: Install test dependencies
+        run: |
+          sudo apt-get install -y luarocks
+          sudo luarocks install busted
+
+      - name: Test
+        run: busted spec/
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

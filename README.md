@@ -12,6 +12,8 @@ A high-performance coroutine-based networking library for LuaJIT, built on top o
 
 This fork includes an implementation of the [RealWorld "Conduit"](https://github.com/gothinkster/realworld) API spec - a Medium.com clone demonstrating Lunet's capabilities as a web backend framework. The implementation covers users, profiles, articles, comments, tags, favorites, and follows endpoints. The app is located in the `app/` directory.
 
+Docs: [README_realworld.md](README_realworld.md) | [README_realworld-CN.md](README_realworld-CN.md)
+
 ### Demo Prerequisites
 
 - CMake 3.12+, LuaJIT 2.1+, libuv 1.x, libsodium, SQLite3, PostgreSQL (client libs)
@@ -50,7 +52,7 @@ cmake --build build
 .\build\Release\lunet.exe app\main.lua
 
 # Verify API is running
-curl http://127.0.0.1:8080/api/tags
+bin/test_curl.sh http://127.0.0.1:8080/api/tags
 ```
 # (Optional) Start a React/Vite frontend - clones to .tmp/conduit-vite
 make wui

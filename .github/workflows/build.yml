@@ -24,7 +24,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake libluajit-5.1-dev libuv1-dev libsqlite3-dev libsodium23
+          sudo apt-get install -y cmake libluajit-5.1-dev libuv1-dev libsqlite3-dev libsodium-dev
 
       - name: Build
         run: make build

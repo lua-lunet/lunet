@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/Shared/lunet/build_postgres/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

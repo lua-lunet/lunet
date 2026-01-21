@@ -1,0 +1,56 @@
+[
+{
+  "directory": "/Users/Shared/lunet/build_postgres",
+  "command": "/usr/bin/cc -DLUNET_HAS_DB -I/Users/Shared/lunet/include -I/opt/homebrew/include/luajit-2.1 -I/opt/homebrew/include -I/opt/homebrew/opt/libpq/include -I/Users/Shared/lunet/ext/postgres -std=gnu99 -arch arm64 -o CMakeFiles/lunet.dir/src/co.c.o -c /Users/Shared/lunet/src/co.c",
+  "file": "/Users/Shared/lunet/src/co.c",
+  "output": "CMakeFiles/lunet.dir/src/co.c.o"
+},
+{
+  "directory": "/Users/Shared/lunet/build_postgres",
+  "command": "/usr/bin/cc -DLUNET_HAS_DB -I/Users/Shared/lunet/include -I/opt/homebrew/include/luajit-2.1 -I/opt/homebrew/include -I/opt/homebrew/opt/libpq/include -I/Users/Shared/lunet/ext/postgres -std=gnu99 -arch arm64 -o CMakeFiles/lunet.dir/src/fs.c.o -c /Users/Shared/lunet/src/fs.c",
+  "file": "/Users/Shared/lunet/src/fs.c",
+  "output": "CMakeFiles/lunet.dir/src/fs.c.o"
+},
+{
+  "directory": "/Users/Shared/lunet/build_postgres",
+  "command": "/usr/bin/cc -DLUNET_HAS_DB -I/Users/Shared/lunet/include -I/opt/homebrew/include/luajit-2.1 -I/opt/homebrew/include -I/opt/homebrew/opt/libpq/include -I/Users/Shared/lunet/ext/postgres -std=gnu99 -arch arm64 -o CMakeFiles/lunet.dir/src/main.c.o -c /Users/Shared/lunet/src/main.c",
+  "file": "/Users/Shared/lunet/src/main.c",
+  "output": "CMakeFiles/lunet.dir/src/main.c.o"
+},
+{
+  "directory": "/Users/Shared/lunet/build_postgres",
+  "command": "/usr/bin/cc -DLUNET_HAS_DB -I/Users/Shared/lunet/include -I/opt/homebrew/include/luajit-2.1 -I/opt/homebrew/include -I/opt/homebrew/opt/libpq/include -I/Users/Shared/lunet/ext/postgres -std=gnu99 -arch arm64 -o CMakeFiles/lunet.dir/src/rt.c.o -c /Users/Shared/lunet/src/rt.c",
+  "file": "/Users/Shared/lunet/src/rt.c",
+  "output": "CMakeFiles/lunet.dir/src/rt.c.o"
+},
+{
+  "directory": "/Users/Shared/lunet/build_postgres",
+  "command": "/usr/bin/cc -DLUNET_HAS_DB -I/Users/Shared/lunet/include -I/opt/homebrew/include/luajit-2.1 -I/opt/homebrew/include -I/opt/homebrew/opt/libpq/include -I/Users/Shared/lunet/ext/postgres -std=gnu99 -arch arm64 -o CMakeFiles/lunet.dir/src/signal.c.o -c /Users/Shared/lunet/src/signal.c",
+  "file": "/Users/Shared/lunet/src/signal.c",
+  "output": "CMakeFiles/lunet.dir/src/signal.c.o"
+},
+{
+  "directory": "/Users/Shared/lunet/build_postgres",
+  "command": "/usr/bin/cc -DLUNET_HAS_DB -I/Users/Shared/lunet/include -I/opt/homebrew/include/luajit-2.1 -I/opt/homebrew/include -I/opt/homebrew/opt/libpq/include -I/Users/Shared/lunet/ext/postgres -std=gnu99 -arch arm64 -o CMakeFiles/lunet.dir/src/socket.c.o -c /Users/Shared/lunet/src/socket.c",
+  "file": "/Users/Shared/lunet/src/socket.c",
+  "output": "CMakeFiles/lunet.dir/src/socket.c.o"
+},
+{
+  "directory": "/Users/Shared/lunet/build_postgres",
+  "command": "/usr/bin/cc -DLUNET_HAS_DB -I/Users/Shared/lunet/include -I/opt/homebrew/include/luajit-2.1 -I/opt/homebrew/include -I/opt/homebrew/opt/libpq/include -I/Users/Shared/lunet/ext/postgres -std=gnu99 -arch arm64 -o CMakeFiles/lunet.dir/src/stl.c.o -c /Users/Shared/lunet/src/stl.c",
+  "file": "/Users/Shared/lunet/src/stl.c",
+  "output": "CMakeFiles/lunet.dir/src/stl.c.o"
+},
+{
+  "directory": "/Users/Shared/lunet/build_postgres",
+  "command": "/usr/bin/cc -DLUNET_HAS_DB -I/Users/Shared/lunet/include -I/opt/homebrew/include/luajit-2.1 -I/opt/homebrew/include -I/opt/homebrew/opt/libpq/include -I/Users/Shared/lunet/ext/postgres -std=gnu99 -arch arm64 -o CMakeFiles/lunet.dir/src/timer.c.o -c /Users/Shared/lunet/src/timer.c",
+  "file": "/Users/Shared/lunet/src/timer.c",
+  "output": "CMakeFiles/lunet.dir/src/timer.c.o"
+},
+{
+  "directory": "/Users/Shared/lunet/build_postgres",
+  "command": "/usr/bin/cc -DLUNET_HAS_DB -I/Users/Shared/lunet/include -I/opt/homebrew/include/luajit-2.1 -I/opt/homebrew/include -I/opt/homebrew/opt/libpq/include -I/Users/Shared/lunet/ext/postgres -std=gnu99 -arch arm64 -o CMakeFiles/lunet.dir/ext/postgres/postgres.c.o -c /Users/Shared/lunet/ext/postgres/postgres.c",
+  "file": "/Users/Shared/lunet/ext/postgres/postgres.c",
+  "output": "CMakeFiles/lunet.dir/ext/postgres/postgres.c.o"
+}
+]

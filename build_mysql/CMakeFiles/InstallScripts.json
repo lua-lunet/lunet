@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/Shared/lunet/build_mysql/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

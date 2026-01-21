@@ -2,12 +2,12 @@
 #include <lua.h>
 #include <lualib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <uv.h>
 
 #include "co.h"
 #include "fs.h"
 #include "lunet_signal.h"
-#include "mysql.h"
 #include "rt.h"
 #include "socket.h"
 #include "timer.h"
@@ -51,15 +51,9 @@ int lunet_open_fs(lua_State *L) {
   return 1;
 }
 
-int lunet_open_mysql(lua_State *L) {
-  luaL_Reg funcs[] = {{"open", lunet_mysql_open},
-                      {"close", lunet_mysql_close},
-                      {"query", lunet_mysql_query},
-                      {"exec", lunet_mysql_exec},
-                      {NULL, NULL}};
-  luaL_newlib(L, funcs);
-  return 1;
-}
+#ifdef LUNET_HAS_DB
+int lunet_open_db(lua_State *L);
+#endif
 
 // register modules
 void lunet_open(lua_State *L) {
@@ -87,12 +81,15 @@ void lunet_open(lua_State *L) {
   lua_pushcfunction(L, lunet_open_fs);
   lua_setfield(L, -2, "lunet.fs");
   lua_pop(L, 2);
-  // register mysql module
+
+#ifdef LUNET_HAS_DB
+  // register unified db module
   lua_getglobal(L, "package");
   lua_getfield(L, -1, "preload");
-  lua_pushcfunction(L, lunet_open_mysql);
-  lua_setfield(L, -2, "lunet.mysql");
+  lua_pushcfunction(L, lunet_open_db);
+  lua_setfield(L, -2, "lunet.db");
   lua_pop(L, 2);
+#endif
 }
 
 int main(int argc, char **argv) {
@@ -119,3 +116,28 @@ int main(int argc, char **argv) {
   lua_close(L);
   return ret;
 }
+
+/* ============================================================================
+ * OFFICIAL EXTENSIONS
+ * Add optional extension modules below. Each extension should be guarded by
+ * its own preprocessor conditional (e.g., LUNET_HAS_DB, LUNET_HAS_HTTP, etc.)
+ * ============================================================================ */
+
+#ifdef LUNET_HAS_DB
+int lunet_db_open(lua_State* L);
+int lunet_db_close(lua_State* L);
+int lunet_db_query(lua_State* L);
+int lunet_db_exec(lua_State* L);
+int lunet_db_escape(lua_State* L);
+
+int lunet_open_db(lua_State *L) {
+  luaL_Reg funcs[] = {{"open", lunet_db_open},
+                      {"close", lunet_db_close},
+                      {"query", lunet_db_query},
+                      {"exec", lunet_db_exec},
+                      {"escape", lunet_db_escape},
+                      {NULL, NULL}};
+  luaL_newlib(L, funcs);
+  return 1;
+}
+#endif

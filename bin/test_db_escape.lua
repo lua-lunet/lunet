@@ -1,4 +1,4 @@
-local db = require("app.lib.db")
+local db = require("lunet.db")
 local s = "test"
 local esc = db.escape(s)
 print("Escaping: test")

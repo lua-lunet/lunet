@@ -49,16 +49,23 @@ macro(find_dependency_flexible NAME PKG_NAME HEADER LIB_NAMES)
                     set(${NAME}_FOUND TRUE)
                 endif()
             elseif("${NAME}" STREQUAL "LUAJIT")
-                # vcpkg exposes LuaJIT via find_package(Lua)
-                find_package(Lua CONFIG QUIET)
-                if(Lua_FOUND OR LUA_FOUND)
-                    message(STATUS "Found ${NAME} via Lua Config (vcpkg)")
-                    if(TARGET lua)
-                        set(${NAME}_LIBRARIES lua)
-                    else()
-                        set(${NAME}_LIBRARIES ${LUA_LIBRARIES})
-                        set(${NAME}_INCLUDE_DIRS ${LUA_INCLUDE_DIR})
-                    endif()
+                # LuaJIT has no CMake config in vcpkg, use find_library directly
+                # On Windows vcpkg, the library is named lua51.lib
+                # On Unix, it's libluajit-5.1.a or libluajit-5.1.so
+                find_library(LUAJIT_LIBRARY_FOUND NAMES lua51 luajit-5.1 luajit luajit-5.1.2
+                    HINTS ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib
+                    PATHS ${CMAKE_PREFIX_PATH}/lib
+                )
+                find_path(LUAJIT_INCLUDE_FOUND NAMES lua.h
+                    HINTS ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/luajit
+                          ${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include
+                    PATHS ${CMAKE_PREFIX_PATH}/include
+                    PATH_SUFFIXES luajit luajit-2.1
+                )
+                if(LUAJIT_LIBRARY_FOUND AND LUAJIT_INCLUDE_FOUND)
+                    message(STATUS "Found ${NAME} via find_library: ${LUAJIT_LIBRARY_FOUND}")
+                    set(${NAME}_LIBRARIES ${LUAJIT_LIBRARY_FOUND})
+                    set(${NAME}_INCLUDE_DIRS ${LUAJIT_INCLUDE_FOUND})
                     set(${NAME}_FOUND TRUE)
                 endif()
             endif()

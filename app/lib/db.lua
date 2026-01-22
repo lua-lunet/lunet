@@ -54,13 +54,20 @@ function db.query(sql, ...)
         return nil, err
     end
 
-    if select("#", ...) > 0 then
-        sql = db.interpolate(sql, ...)
+    local function run(s, ...)
+        if select("#", ...) > 0 then
+            s = db.interpolate(s, ...)
+        end
+        return db.query_raw(conn, s)
     end
 
-    local result, query_err = db.query_raw(conn, sql)
+    local ok, result, query_err = pcall(run, sql, ...)
     db.close(conn)
     
+    if not ok then
+        return nil, result
+    end
+
     if not result then
         return nil, query_err or "query failed"
     end
@@ -74,13 +81,20 @@ function db.exec(sql, ...)
         return nil, err
     end
 
-    if select("#", ...) > 0 then
-        sql = db.interpolate(sql, ...)
+    local function run(s, ...)
+        if select("#", ...) > 0 then
+            s = db.interpolate(s, ...)
+        end
+        return db.exec_raw(conn, s)
     end
 
-    local result, exec_err = db.exec_raw(conn, sql)
+    local ok, result, exec_err = pcall(run, sql, ...)
     db.close(conn)
     
+    if not ok then
+        return nil, result
+    end
+
     if not result then
         return nil, exec_err or "exec failed"
     end

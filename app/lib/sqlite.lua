@@ -108,36 +108,43 @@ function M.query(db, sql)
     colnames[i] = name ~= nil and ffi.string(name) or ("col" .. tostring(i + 1))
   end
 
-  local rows = {}
-  while true do
-    local step_rc = lib.sqlite3_step(stmt)
-    if step_rc == SQLITE_ROW then
-      local row = {}
-      for i = 0, cols - 1 do
-        local t = lib.sqlite3_column_type(stmt, i)
-        local key = colnames[i]
-        if t == SQLITE_NULL then
-          row[key] = nil
-        elseif t == SQLITE_INTEGER then
-          row[key] = tonumber(lib.sqlite3_column_int64(stmt, i))
-        elseif t == SQLITE_FLOAT then
-          row[key] = tonumber(lib.sqlite3_column_double(stmt, i))
-        elseif t == SQLITE_TEXT or t == SQLITE_BLOB then
-          local p = lib.sqlite3_column_text(stmt, i)
-          row[key] = p ~= nil and ffi.string(p) or ""
+  local function fetch_rows()
+    local rows = {}
+    while true do
+      local step_rc = lib.sqlite3_step(stmt)
+      if step_rc == SQLITE_ROW then
+        local row = {}
+        for i = 0, cols - 1 do
+          local t = lib.sqlite3_column_type(stmt, i)
+          local key = colnames[i]
+          if t == SQLITE_NULL then
+            row[key] = nil
+          elseif t == SQLITE_INTEGER then
+            row[key] = tonumber(lib.sqlite3_column_int64(stmt, i))
+          elseif t == SQLITE_FLOAT then
+            row[key] = tonumber(lib.sqlite3_column_double(stmt, i))
+          elseif t == SQLITE_TEXT or t == SQLITE_BLOB then
+            local p = lib.sqlite3_column_text(stmt, i)
+            row[key] = p ~= nil and ffi.string(p) or ""
+          end
         end
+        rows[#rows + 1] = row
+      elseif step_rc == SQLITE_DONE then
+        break
+      else
+        return nil, "sqlite3_step failed: " .. errstr(db)
       end
-      rows[#rows + 1] = row
-    elseif step_rc == SQLITE_DONE then
-      break
-    else
-      lib.sqlite3_finalize(stmt)
-      return nil, "sqlite3_step failed: " .. errstr(db)
     end
+    return rows
   end
 
+  local ok, res, err = pcall(fetch_rows)
   lib.sqlite3_finalize(stmt)
-  return rows
+  
+  if not ok then
+    return nil, res
+  end
+  return res, err
 end
 
 return M

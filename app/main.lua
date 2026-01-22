@@ -166,23 +166,29 @@ local function handle_request(request)
 end
 
 local function handle_client(client)
-    local data = socket.read(client)
-    if not data then
-        socket.close(client)
-        return
-    end
+    local function task()
+        local data = socket.read(client)
+        if not data then
+            return
+        end
 
-    local request, parse_err = http.parse_request(data)
-    if not request then
-        local response = http.error_response(400, {body = {parse_err or "Bad request"}})
+        local request, parse_err = http.parse_request(data)
+        if not request then
+            local response = http.error_response(400, {body = {parse_err or "Bad request"}})
+            socket.write(client, response)
+            return
+        end
+
+        local response = handle_request(request)
         socket.write(client, response)
-        socket.close(client)
-        return
     end
 
-    local response = handle_request(request)
-    socket.write(client, response)
+    local ok, err = pcall(task)
     socket.close(client)
+    
+    if not ok then
+        print("Client handler error: " .. tostring(err))
+    end
 end
 
 lunet.spawn(function()

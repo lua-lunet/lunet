@@ -9,7 +9,7 @@ LUNET_DB ?= sqlite3
 # Build Targets
 # =============================================================================
 
-build: ## Compile C core using CMake (use LUNET_DB=mysql|postgres|sqlite3)
+build: lint ## Compile C core using CMake (use LUNET_DB=mysql|postgres|sqlite3)
 	@echo "=== Building lunet (release mode, LUNET_DB=$(LUNET_DB)) ==="
 	mkdir -p build
 	cd build && cmake -DLUNET_DB=$(LUNET_DB) -DLUNET_TRACE=OFF .. && make
@@ -23,7 +23,7 @@ build-postgres: ## Build with PostgreSQL backend
 build-mysql: ## Build with MySQL backend
 	$(MAKE) build LUNET_DB=mysql
 
-build-debug: ## Build with LUNET_TRACE=ON for debugging (enables safety assertions)
+build-debug: lint ## Build with LUNET_TRACE=ON for debugging (enables safety assertions)
 	@echo "=== Building lunet (debug mode with tracing, LUNET_DB=$(LUNET_DB)) ==="
 	@echo "This build includes zero-cost tracing that will:"
 	@echo "  - Track coroutine reference create/release balance"
@@ -39,7 +39,7 @@ build-debug: ## Build with LUNET_TRACE=ON for debugging (enables safety assertio
 
 lint: ## Check C code for unsafe _lunet_* calls (must use safe wrappers)
 	@echo "=== Linting C code for safety violations ==="
-	@bin/lint_c_safety.sh
+	@lua bin/lint_c_safety.lua
 
 init: ## Install dev dependencies (busted, luacheck) - run once
 	@command -v luarocks >/dev/null 2>&1 || { echo >&2 "Error: luarocks not found. Please install it."; exit 1; }

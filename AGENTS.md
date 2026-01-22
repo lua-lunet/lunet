@@ -214,6 +214,16 @@ After fixing the stack issue, discovered a crash in `db.close()`:
 
 **TODO:** Write up this debugging session in more detail - good example of Lua-C stack debugging methodology.
 
+## Scripting Guidelines
+
+**AVOID SHELL SCRIPTS FOR NON-TRIVIAL WORK.**
+
+This is a **Lua** project. If a task requires logic, loops, parsing, or file manipulation beyond simple command chaining, **write it in Lua**.
+
+*   **Allowed in Shell:** Simple wrappers (e.g., `make` targets), environment setup, `curl` tests.
+*   **Must be Lua:** Linting logic, complex build steps, benchmarks, data processing.
+*   **Rationale:** Shell scripts (sh/bash) are fragile, platform-dependent, and hard to debug. Lua is robust, portable, and native to this environment.
+
 ## Strict Testing Protocol
 
 All agents MUST adhere to this protocol when validating changes or releases.

@@ -213,3 +213,60 @@ After fixing the stack issue, discovered a crash in `db.close()`:
 - `lunet_sqlite_conn_destroy()` - full cleanup including mutex (only called from GC)
 
 **TODO:** Write up this debugging session in more detail - good example of Lua-C stack debugging methodology.
+
+## Strict Testing Protocol
+
+All agents MUST adhere to this protocol when validating changes or releases.
+
+### 1. Build with Tracing (`LUNET_TRACE=ON`)
+The application MUST be built and tested with zero-cost tracing enabled. This activates:
+- Coroutine reference counting (detects leaks/double-frees)
+- Stack integrity checks (detects pollution)
+- Hard crashes on violation
+
+```bash
+make build-debug  # Includes -DLUNET_TRACE=ON
+```
+
+### 2. Run Stress Tests
+Before testing the application logic, ensure the core runtime is stable under load.
+
+```bash
+make stress
+```
+
+### 3. Application Load Testing (RealWorld Conduit)
+The "RealWorld Conduit" demo app (using SQLite) must be subjected to parallel load to exercise the full stack (HTTP -> Router -> Controller -> DB -> Coroutines) with tracing enabled.
+
+**Steps:**
+1. **Start the Traced Server:**
+   ```bash
+   ./build/lunet app/main.lua &
+   PID=$!
+   sleep 2  # Wait for startup
+   ```
+
+2. **Run Functional Tests:**
+   Verify basic API correctness.
+   ```bash
+   bin/test_api.sh
+   ```
+
+3. **Run Parallel Load Test:**
+   Hit the running server with concurrent requests to trigger potential race conditions or reference leaks.
+   *Goal:* Verify the server does NOT crash (which would indicate a tracing assertion failure).
+   ```bash
+   # Example: 50 concurrent connections, 1000 requests
+   ab -c 50 -n 1000 http://127.0.0.1:8080/api/tags
+   # OR if ab/wrk not available, use a loop
+   for i in $(seq 1 50); do curl -s http://127.0.0.1:8080/api/tags >/dev/null & done; wait
+   ```
+
+4. **Cleanup:**
+   ```bash
+   kill $PID
+   wait $PID
+   ```
+
+If the server crashes during load testing (exit code > 0 or SIGABRT), it is a **CRITICAL FAILURE**. Check logs for `[TRACE]` assertions.
+

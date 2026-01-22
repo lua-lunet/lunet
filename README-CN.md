@@ -1,12 +1,20 @@
 # Lunet
 
-基于协程的高性能 LuaJIT 网络库，构建于 libuv 之上。
-
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/Language-C%2BLuaJIT-green.svg)]()
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English Documentation](README.md)
+
+基于协程的高性能 LuaJIT 网络库，构建于 libuv 之上：
+
+> Lunet 是一个用 C 编写的高性能运行时，整合了 LuaJIT 和 libuv，专注于协程驱动的异步编程。
+> 
+> Lunet 的架构设计完全体现了"站在巨人肩膀上"的哲学理念。
+> 
+> 它简化了异步 I/O 和阻塞任务的处理，使开发者能够轻松使用 Lua 脚本编写高并发网络应用。
+> 
+> [Lunet：高性能协程网络库的设计与实现](https://www.ddhigh.com/2025/07/12/lunet-high-performance-coroutine-network-library/)
 
 ## RealWorld Conduit API 示例
 
@@ -303,3 +311,4 @@ Lunet 专为高性能而设计：
 - [LuaJIT](https://luajit.org/) - 快速的 Lua 实现
 - [libuv](https://libuv.org/) - 跨平台异步 I/O
 - [MySQL](https://www.mysql.com/) - 数据库连接
+- [夏磊](https://github.com/xialeistudio) - 项目创始人 / 原作者

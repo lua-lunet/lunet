@@ -2,17 +2,20 @@ describe("DB Module (pure functions)", function()
   local db
 
   setup(function()
-    package.loaded["lunet.mysql"] = {
+    package.loaded["lunet.db"] = {
       open = function() return {} end,
       close = function() end,
       query = function() return {} end,
       exec = function() return {} end,
+      escape = function(s)
+        return s:gsub("\\", "\\\\"):gsub("'", "\\'"):gsub("\n", "\\n"):gsub("\r", "\\r")
+      end,
     }
     db = require("app.lib.db")
   end)
 
   teardown(function()
-    package.loaded["lunet.mysql"] = nil
+    package.loaded["lunet.db"] = nil
     package.loaded["app.lib.db"] = nil
   end)
 

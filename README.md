@@ -1,12 +1,20 @@
 # Lunet
 
-A high-performance coroutine-based networking library for LuaJIT, built on top of libuv.
-
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/Language-C%2BLuaJIT-green.svg)]()
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [中文文档](README-CN.md)
+
+A high-performance coroutine-based networking library for LuaJIT, built on top of libuv:
+
+> Lunet is a high-performance runtime written in C that integrates LuaJIT and libuv, focusing on coroutine-driven asynchronous programming.  
+> 
+> Lunet’s architectural design fully embodies the philosophy of “standing on the shoulders of giants” 
+> 
+> It simplifies the handling of asynchronous I/O and blocking tasks, enabling developers to easily write high-concurrency network applications using Lua scripts.
+> 
+> [Lunet: Design and Implementation of a High-Performance Coroutine Network Library](https://www.ddhigh.com/en/2025/07/12/lunet-high-performance-coroutine-network-library/)
 
 ## RealWorld Conduit API Demo
 
@@ -424,3 +432,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [LuaJIT](https://luajit.org/) - Fast Lua implementation
 - [libuv](https://libuv.org/) - Cross-platform asynchronous I/O
 - [MySQL](https://www.mysql.com/) - Database connectivity
+- [Xia Lei](https://github.com/xialeistudio) - Project originator / Original author
+
+

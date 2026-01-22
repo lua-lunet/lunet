@@ -1,4 +1,4 @@
-.PHONY: all build deps test clean run stop wui init-bench bench-django bench-django-stop help
+.PHONY: all build init test clean run stop wui init-bench bench-django bench-django-stop help
 
 all: build ## Build the project (default)
 
@@ -17,18 +17,19 @@ build-postgres: ## Build with PostgreSQL backend
 build-mysql: ## Build with MySQL backend
 	$(MAKE) build LUNET_DB=mysql
 
-deps: ## Install LuaRocks dependencies
+init: ## Install dev dependencies (busted, luacheck) - run once
 	@command -v luarocks >/dev/null 2>&1 || { echo >&2 "Error: luarocks not found. Please install it."; exit 1; }
-	@echo "Installing dependencies..."
+	@echo "Installing dev dependencies..."
 	luarocks install busted --local
 	luarocks install luacheck --local
+	@echo "Done. Run 'make test' to run tests."
 
-test: deps ## Run unit tests with busted
-	@echo "Running tests..."
+test: ## Run unit tests with busted
+	@eval $$(luarocks path --bin) && command -v busted >/dev/null 2>&1 || { echo >&2 "Error: busted not found. Run 'make init' first."; exit 1; }
 	@eval $$(luarocks path --bin) && busted spec/
 
-check: deps ## Run static analysis with luacheck
-	@echo "Running static analysis..."
+check: ## Run static analysis with luacheck
+	@eval $$(luarocks path --bin) && command -v luacheck >/dev/null 2>&1 || { echo >&2 "Error: luacheck not found. Run 'make init' first."; exit 1; }
 	@eval $$(luarocks path --bin) && luacheck app/
 
 clean: ## Archive build artifacts to .tmp (safe clean)

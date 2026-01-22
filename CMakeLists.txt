@@ -4,6 +4,19 @@ project(lunet C)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# === Tracing Option ===
+# Enable with: cmake -DLUNET_TRACE=ON ..
+# This adds coroutine reference tracking for debugging.
+# When OFF, all tracing code is eliminated by the compiler (zero overhead).
+option(LUNET_TRACE "Enable coroutine reference tracing for debugging" OFF)
+
+if(LUNET_TRACE)
+  message(STATUS "LUNET_TRACE enabled - coroutine reference tracing active")
+  add_compile_definitions(LUNET_TRACE)
+else()
+  message(STATUS "LUNET_TRACE disabled - zero overhead release build")
+endif()
+
 include_directories(include)
 
 # === LuaJIT ===

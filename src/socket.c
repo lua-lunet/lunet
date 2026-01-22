@@ -12,6 +12,7 @@
 
 #include "co.h"
 #include "stl.h"
+#include "trace.h"
 
 static size_t read_buffer_size = 4096;
 
@@ -61,7 +62,7 @@ static void lunet_write_cb(uv_write_t *req, int status) {
   if (ctx->client.write_ref != LUA_NOREF) {
     lua_State *co = ctx->co;
     lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->client.write_ref);
-    luaL_unref(co, LUA_REGISTRYINDEX, ctx->client.write_ref);
+    lunet_coref_release(co, ctx->client.write_ref);
     ctx->client.write_ref = LUA_NOREF;
 
     if (lua_isthread(co, -1)) {
@@ -104,7 +105,7 @@ static void lunet_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
   if (ctx->client.read_ref != LUA_NOREF) {
     lua_State *co = ctx->co;
     lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->client.read_ref);
-    luaL_unref(co, LUA_REGISTRYINDEX, ctx->client.read_ref);
+    lunet_coref_release(co, ctx->client.read_ref);
     ctx->client.read_ref = LUA_NOREF;
 
     if (lua_isthread(co, -1)) {
@@ -145,7 +146,7 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
     if (ctx->server.accept_ref != LUA_NOREF) {
       lua_State *co = ctx->co;
       lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->server.accept_ref);
-      luaL_unref(co, LUA_REGISTRYINDEX, ctx->server.accept_ref);
+      lunet_coref_release(co, ctx->server.accept_ref);
       ctx->server.accept_ref = LUA_NOREF;
 
       if (lua_isthread(co, -1)) {
@@ -194,7 +195,7 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
     // there is a coroutine waiting for accept, wake it up
     lua_State *co = ctx->co;
     lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->server.accept_ref);
-    luaL_unref(co, LUA_REGISTRYINDEX, ctx->server.accept_ref);
+    lunet_coref_release(co, ctx->server.accept_ref);
     ctx->server.accept_ref = LUA_NOREF;
 
     if (lua_isthread(co, -1)) {
@@ -222,9 +223,7 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
 }
 
 int lunet_socket_listen(lua_State *co) {
-  if (lunet_ensure_coroutine(co, "socket.listen") != 0) {
-    return lua_error(co);
-  }
+  lunet_ensure_coroutine(co, "socket.listen");
   const char *protocol = luaL_checkstring(co, 1);
   const char *host = luaL_checkstring(co, 2);
   int port = luaL_checkinteger(co, 3);
@@ -294,10 +293,7 @@ int lunet_socket_listen(lua_State *co) {
 }
 
 int lunet_socket_accept(lua_State *co) {
-  if (lunet_ensure_coroutine(co, "socket.accept") != 0) {
-    return lua_error(co);
-  }
-
+  lunet_ensure_coroutine(co, "socket.accept");
   if (!lua_islightuserdata(co, 1)) {
     lua_pushnil(co);
     lua_pushstring(co, "invalid listener handle");
@@ -330,18 +326,14 @@ int lunet_socket_accept(lua_State *co) {
 
   // there is no connection in the queue, wait for new connection
   // save the current coroutine reference
-  lua_pushthread(co);
-  listener_ctx->server.accept_ref = luaL_ref(co, LUA_REGISTRYINDEX);
+  lunet_coref_create(co, listener_ctx->server.accept_ref);
 
   // yield to wait for new connection
   return lua_yield(co, 0);
 }
 
 int lunet_socket_getpeername(lua_State *L) {
-  if (lunet_ensure_coroutine(L, "socket.getpeername") != 0) {
-    return lua_error(L);
-  }
-
+  lunet_ensure_coroutine(L, "socket.getpeername");
   if (!lua_islightuserdata(L, 1)) {
     lua_pushnil(L);
     lua_pushstring(L, "invalid socket handle");
@@ -395,10 +387,7 @@ int lunet_socket_close(lua_State *L) {
 }
 
 int lunet_socket_read(lua_State *co) {
-  if (lunet_ensure_coroutine(co, "socket.read") != 0) {
-    return lua_error(co);
-  }
-
+  lunet_ensure_coroutine(co, "socket.read");
   if (!lua_islightuserdata(co, 1)) {
     lua_pushnil(co);
     lua_pushstring(co, "invalid socket handle");
@@ -420,14 +409,13 @@ int lunet_socket_read(lua_State *co) {
   }
 
   // save the coroutine reference
-  lua_pushthread(co);
-  ctx->client.read_ref = luaL_ref(co, LUA_REGISTRYINDEX);
+  lunet_coref_create(co, ctx->client.read_ref);
 
   // start reading
   int ret = uv_read_start((uv_stream_t *)&ctx->handle, alloc_buffer, lunet_read_cb);
   if (ret < 0) {
     // failed to start reading, clean up the reference
-    luaL_unref(co, LUA_REGISTRYINDEX, ctx->client.read_ref);
+    lunet_coref_release(co, ctx->client.read_ref);
     ctx->client.read_ref = LUA_NOREF;
 
     lua_pushnil(co);
@@ -439,10 +427,7 @@ int lunet_socket_read(lua_State *co) {
 }
 
 int lunet_socket_write(lua_State *co) {
-  if (lunet_ensure_coroutine(co, "socket.write") != 0) {
-    return lua_error(co);
-  }
-
+  lunet_ensure_coroutine(co, "socket.write");
   if (!lua_islightuserdata(co, 1)) {
     lua_pushstring(co, "invalid socket handle");
     return 1;
@@ -491,14 +476,13 @@ int lunet_socket_write(lua_State *co) {
   uv_buf_t buf = uv_buf_init(write_req->data, data_len);
 
   // save the coroutine reference
-  lua_pushthread(co);
-  ctx->client.write_ref = luaL_ref(co, LUA_REGISTRYINDEX);
+  lunet_coref_create(co, ctx->client.write_ref);
 
   // start writing
   int ret = uv_write(&write_req->req, (uv_stream_t *)&ctx->handle, &buf, 1, lunet_write_cb);
   if (ret < 0) {
     // failed to start writing, clean up the resource
-    luaL_unref(co, LUA_REGISTRYINDEX, ctx->client.write_ref);
+    lunet_coref_release(co, ctx->client.write_ref);
     ctx->client.write_ref = LUA_NOREF;
     free(write_req->data);
     free(write_req);
@@ -525,7 +509,7 @@ static void lunet_connect_cb(uv_connect_t *req, int status) {
 
   // resume coroutine
   lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(co, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(co, ctx->co_ref);
   ctx->co_ref = LUA_NOREF;
 
   if (status == 0) {
@@ -548,10 +532,7 @@ static void lunet_connect_cb(uv_connect_t *req, int status) {
 }
 
 int lunet_socket_connect(lua_State *L) {
-  if (lunet_ensure_coroutine(L, "socket.connect") != 0) {
-    return lua_error(L);
-  }
-
+  lunet_ensure_coroutine(L, "socket.connect");
   const char *host = luaL_checkstring(L, 1);
   int port = luaL_checkinteger(L, 2);
 
@@ -608,12 +589,11 @@ int lunet_socket_connect(lua_State *L) {
   connect_ctx->req.data = connect_ctx;
 
   // save coroutine reference, for resume in connect_cb
-  lua_pushthread(L);
-  connect_ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, connect_ctx->co_ref);
 
   ret = uv_tcp_connect(&connect_ctx->req, &ctx->handle, (const struct sockaddr *)&dest, lunet_connect_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, connect_ctx->co_ref);
+    lunet_coref_release(L, connect_ctx->co_ref);
     connect_ctx->co_ref = LUA_NOREF;
     free(connect_ctx);
     uv_close((uv_handle_t *)&ctx->handle, lunet_close_cb);

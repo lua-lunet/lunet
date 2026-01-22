@@ -10,6 +10,7 @@
 #include "rt.h"
 #include "socket.h"
 #include "timer.h"
+#include "trace.h"
 
 // register core module
 int lunet_open_core(lua_State *L) {
@@ -100,6 +101,9 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  /* Initialize tracing (no-op in release builds) */
+  lunet_trace_init();
+
   lua_State *L = luaL_newstate();
   luaL_openlibs(L);
   set_default_luaL(L);
@@ -115,6 +119,11 @@ int main(int argc, char **argv) {
   }
 
   int ret = uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+  
+  /* Dump trace statistics and assert balance (no-op in release builds) */
+  lunet_trace_dump();
+  lunet_trace_assert_balanced("shutdown");
+  
   lua_close(L);
   return ret;
 }

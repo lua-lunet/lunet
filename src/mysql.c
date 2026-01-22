@@ -3,8 +3,11 @@
 #include <lauxlib.h>
 #include <lua.h>
 #include <mysql/mysql.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "co.h"
+#include "trace.h"
 #include "uv.h"
 
 typedef struct {
@@ -46,7 +49,7 @@ static void mysql_open_after_cb(uv_work_t* req, int status) {
   lua_State* L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in mysql.open\n");
@@ -70,9 +73,7 @@ static void mysql_open_after_cb(uv_work_t* req, int status) {
 }
 
 int lunet_mysql_open(lua_State* L) {
-  if (lunet_ensure_coroutine(L, "mysql.open")) {
-    return lua_error(L);
-  }
+  lunet_ensure_coroutine(L, "mysql.open");
   if (lua_gettop(L) < 1 || !lua_istable(L, 1)) {
     lua_pushstring(L, "mysql.open requires params table");
     return lua_error(L);
@@ -104,12 +105,11 @@ int lunet_mysql_open(lua_State* L) {
   // save coroutine reference to main lua state
   lua_pop(L, 6);
 
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, mysql_open_work_cb, mysql_open_after_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx);
     lua_pushnil(L);
     lua_pushfstring(L, "mysql.open: uv_queue_work failed: %s", uv_strerror(ret));
@@ -120,9 +120,7 @@ int lunet_mysql_open(lua_State* L) {
 }
 
 int lunet_mysql_close(lua_State* L) {
-  if (lunet_ensure_coroutine(L, "mysql.close")) {
-    return lua_error(L);
-  }
+  lunet_ensure_coroutine(L, "mysql.close");
   if (lua_gettop(L) < 1) {
     lua_pushstring(L, "mysql.close requires a connection");
     return 1;
@@ -175,7 +173,7 @@ static void mysql_query_after_cb(uv_work_t* req, int status) {
   lua_State* L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in mysql.query\n");
@@ -249,9 +247,7 @@ static void mysql_query_after_cb(uv_work_t* req, int status) {
 }
 
 int lunet_mysql_query(lua_State* L) {
-  if (lunet_ensure_coroutine(L, "mysql.query")) {
-    return lua_error(L);
-  }
+  lunet_ensure_coroutine(L, "mysql.query");
   if (lua_gettop(L) < 2) {
     lua_pushnil(L);
     lua_pushstring(L, "mysql.query requires connection and sql string");
@@ -290,12 +286,11 @@ int lunet_mysql_query(lua_State* L) {
     return 2;
   }
 
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, mysql_query_work_cb, mysql_query_after_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free((void*)ctx->query);
     free(ctx);
     lua_pushnil(L);
@@ -336,7 +331,7 @@ static void mysql_exec_after_cb(uv_work_t* req, int status) {
   lua_State* L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in mysql.exec\n");
@@ -368,9 +363,7 @@ static void mysql_exec_after_cb(uv_work_t* req, int status) {
 }
 
 int lunet_mysql_exec(lua_State* L) {
-  if (lunet_ensure_coroutine(L, "mysql.exec")) {
-    return lua_error(L);
-  }
+  lunet_ensure_coroutine(L, "mysql.exec");
   if (lua_gettop(L) < 2) {
     lua_pushnil(L);
     lua_pushstring(L, "mysql.exec requires connection and sql string");
@@ -409,12 +402,11 @@ int lunet_mysql_exec(lua_State* L) {
     return 2;
   }
 
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, mysql_exec_work_cb, mysql_exec_after_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free((void*)ctx->query);
     free(ctx);
     lua_pushnil(L);

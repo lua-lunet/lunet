@@ -7,6 +7,7 @@
 #include <uv.h>
 
 #include "co.h"
+#include "trace.h"
 
 typedef struct {
   uv_signal_t handle;
@@ -41,16 +42,13 @@ static void lunet_signal_cb(uv_signal_t *handle, int signo) {
   }
 
   // cleanup
-  luaL_unref(co, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(co, ctx->co_ref);
   uv_signal_stop(&ctx->handle);
   uv_close((uv_handle_t *)&ctx->handle, (uv_close_cb)free);
 }
 
 int lunet_signal_wait(lua_State *L) {
-  if (lunet_ensure_coroutine(L, "signal.wait") != 0) {
-    return lua_error(L);
-  }
-
+  lunet_ensure_coroutine(L, "signal.wait");
   const char *sig_name = luaL_checkstring(L, 1);
 
   // covert string to signal number
@@ -77,8 +75,7 @@ int lunet_signal_wait(lua_State *L) {
   }
 
   ctx->L = L;
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   uv_signal_init(uv_default_loop(), &ctx->handle);
   ctx->handle.data = ctx;

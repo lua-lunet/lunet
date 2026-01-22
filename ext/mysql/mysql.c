@@ -9,6 +9,24 @@
 #include "co.h"
 #include "uv.h"
 
+#define LUNET_MYSQL_CONN_MT "lunet.mysql.conn"
+
+typedef struct {
+  MYSQL* conn;
+  uv_mutex_t mutex;
+  int closed;
+} lunet_mysql_conn_t;
+
+static void lunet_mysql_conn_destroy(lunet_mysql_conn_t* wrapper) {
+  if (!wrapper || wrapper->closed) return;
+  wrapper->closed = 1;
+  if (wrapper->conn) {
+    mysql_close(wrapper->conn);
+    wrapper->conn = NULL;
+  }
+  uv_mutex_destroy(&wrapper->mutex);
+}
+
 typedef struct {
   uv_work_t req;
   lua_State* L;
@@ -56,8 +74,7 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.open\n");
-    mysql_close(ctx->conn);
-    ctx->conn = NULL;
+    if (ctx->conn) mysql_close(ctx->conn);
     free(ctx);
     return;
   }
@@ -65,7 +82,14 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   lua_pop(L, 1);
 
   if (ctx->conn) {
-    lua_pushlightuserdata(co, ctx->conn);
+    lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)lua_newuserdata(co, sizeof(lunet_mysql_conn_t));
+    wrapper->conn = ctx->conn;
+    wrapper->closed = 0;
+    uv_mutex_init(&wrapper->mutex);
+
+    luaL_getmetatable(co, LUNET_MYSQL_CONN_MT);
+    lua_setmetatable(co, -2);
+
     lua_pushnil(co);
   } else {
     lua_pushnil(co);
@@ -80,6 +104,20 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   free(ctx);
 }
 
+static int conn_gc(lua_State* L) {
+  lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)luaL_checkudata(L, 1, LUNET_MYSQL_CONN_MT);
+  lunet_mysql_conn_destroy(wrapper);
+  return 0;
+}
+
+static void register_conn_metatable(lua_State* L) {
+  if (luaL_newmetatable(L, LUNET_MYSQL_CONN_MT)) {
+    lua_pushcfunction(L, conn_gc);
+    lua_setfield(L, -2, "__gc");
+  }
+  lua_pop(L, 1);
+}
+
 int lunet_db_open(lua_State* L) {
   if (lunet_ensure_coroutine(L, "db.open")) {
     return lua_error(L);
@@ -88,6 +126,8 @@ int lunet_db_open(lua_State* L) {
     lua_pushstring(L, "db.open requires params table");
     return lua_error(L);
   }
+
+  register_conn_metatable(L);
 
   db_open_ctx_t* ctx = malloc(sizeof(db_open_ctx_t));
   if (!ctx) {
@@ -137,18 +177,17 @@ int lunet_db_close(lua_State* L) {
     lua_pushstring(L, "db.close requires a connection");
     return 1;
   }
-  if (!lua_isuserdata(L, 1) && !lua_islightuserdata(L, 1)) {
-    lua_pushstring(L, "db.close requires a connection");
+
+  lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)luaL_testudata(L, 1, LUNET_MYSQL_CONN_MT);
+  if (!wrapper) {
+    lua_pushstring(L, "db.close requires a valid connection");
     return 1;
   }
 
-  MYSQL* conn = (MYSQL*)lua_touserdata(L, 1);
-  if (!conn) {
-    lua_pushstring(L, "invalid connection");
-    return 1;
-  }
+  uv_mutex_lock(&wrapper->mutex);
+  lunet_mysql_conn_destroy(wrapper);
+  uv_mutex_unlock(&wrapper->mutex);
 
-  mysql_close(conn);
   lua_pushnil(L);
   return 1;
 }
@@ -158,7 +197,7 @@ typedef struct {
   lua_State* L;
   int co_ref;
 
-  MYSQL* conn;
+  lunet_mysql_conn_t* wrapper;
   char* query;
 
   MYSQL_RES* result;
@@ -168,19 +207,31 @@ typedef struct {
 static void db_query_work_cb(uv_work_t* req) {
   db_query_ctx_t* ctx = (db_query_ctx_t*)req->data;
 
+  uv_mutex_lock(&ctx->wrapper->mutex);
+
   mysql_thread_init();
-  if (mysql_query(ctx->conn, ctx->query)) {
-    snprintf(ctx->err, sizeof(ctx->err), "%s", mysql_error(ctx->conn));
+  if (ctx->wrapper->closed || !ctx->wrapper->conn) {
+    snprintf(ctx->err, sizeof(ctx->err), "connection is closed");
     ctx->result = NULL;
     mysql_thread_end();
+    uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
 
-  ctx->result = mysql_store_result(ctx->conn);
-  if (!ctx->result && mysql_field_count(ctx->conn) != 0) {
-    snprintf(ctx->err, sizeof(ctx->err), "mysql_store_result failed: %s", mysql_error(ctx->conn));
+  if (mysql_query(ctx->wrapper->conn, ctx->query)) {
+    snprintf(ctx->err, sizeof(ctx->err), "%s", mysql_error(ctx->wrapper->conn));
+    ctx->result = NULL;
+    mysql_thread_end();
+    uv_mutex_unlock(&ctx->wrapper->mutex);
+    return;
+  }
+
+  ctx->result = mysql_store_result(ctx->wrapper->conn);
+  if (!ctx->result && mysql_field_count(ctx->wrapper->conn) != 0) {
+    snprintf(ctx->err, sizeof(ctx->err), "mysql_store_result failed: %s", mysql_error(ctx->wrapper->conn));
   }
   mysql_thread_end();
+  uv_mutex_unlock(&ctx->wrapper->mutex);
 }
 
 static void db_query_after_cb(uv_work_t* req, int status) {
@@ -282,16 +333,16 @@ int lunet_db_query(lua_State* L) {
     return 2;
   }
 
-  if (!lua_isuserdata(L, 1) && !lua_islightuserdata(L, 1)) {
+  lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)luaL_testudata(L, 1, LUNET_MYSQL_CONN_MT);
+  if (!wrapper) {
     lua_pushnil(L);
-    lua_pushstring(L, "db.query requires a connection");
+    lua_pushstring(L, "db.query requires a valid connection");
     return 2;
   }
 
-  MYSQL* conn = (MYSQL*)lua_touserdata(L, 1);
-  if (!conn) {
+  if (wrapper->closed || !wrapper->conn) {
     lua_pushnil(L);
-    lua_pushstring(L, "invalid connection");
+    lua_pushstring(L, "connection is closed");
     return 2;
   }
 
@@ -305,7 +356,7 @@ int lunet_db_query(lua_State* L) {
   memset(ctx, 0, sizeof(*ctx));
   ctx->L = L;
   ctx->req.data = ctx;
-  ctx->conn = conn;
+  ctx->wrapper = wrapper;
   ctx->query = strdup(query);
   if (!ctx->query) {
     free(ctx);
@@ -335,7 +386,7 @@ typedef struct {
   lua_State* L;
   int co_ref;
 
-  MYSQL* conn;
+  lunet_mysql_conn_t* wrapper;
   char* query;
 
   int affected_rows;
@@ -346,16 +397,27 @@ typedef struct {
 static void db_exec_work_cb(uv_work_t* req) {
   db_exec_ctx_t* ctx = (db_exec_ctx_t*)req->data;
 
+  uv_mutex_lock(&ctx->wrapper->mutex);
+
   mysql_thread_init();
-  if (mysql_query(ctx->conn, ctx->query)) {
-    snprintf(ctx->err, sizeof(ctx->err), "%s", mysql_error(ctx->conn));
+  if (ctx->wrapper->closed || !ctx->wrapper->conn) {
+    snprintf(ctx->err, sizeof(ctx->err), "connection is closed");
     mysql_thread_end();
+    uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
 
-  ctx->affected_rows = mysql_affected_rows(ctx->conn);
-  ctx->insert_id = mysql_insert_id(ctx->conn);
+  if (mysql_query(ctx->wrapper->conn, ctx->query)) {
+    snprintf(ctx->err, sizeof(ctx->err), "%s", mysql_error(ctx->wrapper->conn));
+    mysql_thread_end();
+    uv_mutex_unlock(&ctx->wrapper->mutex);
+    return;
+  }
+
+  ctx->affected_rows = mysql_affected_rows(ctx->wrapper->conn);
+  ctx->insert_id = mysql_insert_id(ctx->wrapper->conn);
   mysql_thread_end();
+  uv_mutex_unlock(&ctx->wrapper->mutex);
 }
 
 static void db_exec_after_cb(uv_work_t* req, int status) {
@@ -413,16 +475,17 @@ int lunet_db_exec(lua_State* L) {
     lua_pushstring(L, "db.exec requires connection and sql string");
     return 2;
   }
-  if (!lua_isuserdata(L, 1) && !lua_islightuserdata(L, 1)) {
+
+  lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)luaL_testudata(L, 1, LUNET_MYSQL_CONN_MT);
+  if (!wrapper) {
     lua_pushnil(L);
-    lua_pushstring(L, "db.exec requires a connection");
+    lua_pushstring(L, "db.exec requires a valid connection");
     return 2;
   }
 
-  MYSQL* conn = (MYSQL*)lua_touserdata(L, 1);
-  if (!conn) {
+  if (wrapper->closed || !wrapper->conn) {
     lua_pushnil(L);
-    lua_pushstring(L, "invalid connection");
+    lua_pushstring(L, "connection is closed");
     return 2;
   }
 
@@ -437,7 +500,7 @@ int lunet_db_exec(lua_State* L) {
   memset(ctx, 0, sizeof(*ctx));
   ctx->L = L;
   ctx->req.data = ctx;
-  ctx->conn = conn;
+  ctx->wrapper = wrapper;
   ctx->query = strdup(query);
   if (!ctx->query) {
     free(ctx);
@@ -466,7 +529,7 @@ int lunet_db_escape(lua_State* L) {
   luaL_checkstring(L, 1);
   lua_getglobal(L, "string");
   lua_getfield(L, -1, "gsub");
-  lua_remove(L, -2); /* remove string table */
+  lua_remove(L, -2);
 
   if (!lua_isfunction(L, -1)) {
     return luaL_error(L, "string.gsub is not available");

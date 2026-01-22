@@ -9,6 +9,38 @@
 #include "co.h"
 #include "uv.h"
 
+#define LUNET_PG_CONN_MT "lunet.pg.conn"
+
+typedef struct {
+  PGconn* conn;
+  uv_mutex_t mutex;
+  int closed;
+} lunet_pg_conn_t;
+
+static void lunet_pg_conn_destroy(lunet_pg_conn_t* wrapper) {
+  if (!wrapper || wrapper->closed) return;
+  wrapper->closed = 1;
+  if (wrapper->conn) {
+    PQfinish(wrapper->conn);
+    wrapper->conn = NULL;
+  }
+  uv_mutex_destroy(&wrapper->mutex);
+}
+
+static int conn_gc(lua_State* L) {
+  lunet_pg_conn_t* wrapper = (lunet_pg_conn_t*)luaL_checkudata(L, 1, LUNET_PG_CONN_MT);
+  lunet_pg_conn_destroy(wrapper);
+  return 0;
+}
+
+static void register_conn_metatable(lua_State* L) {
+  if (luaL_newmetatable(L, LUNET_PG_CONN_MT)) {
+    lua_pushcfunction(L, conn_gc);
+    lua_setfield(L, -2, "__gc");
+  }
+  lua_pop(L, 1);
+}
+
 typedef struct {
   uv_work_t req;
   lua_State* L;
@@ -50,7 +82,12 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   lua_pop(L, 1);
 
   if (ctx->conn) {
-    lua_pushlightuserdata(co, ctx->conn);
+    lunet_pg_conn_t* wrapper = (lunet_pg_conn_t*)lua_newuserdata(co, sizeof(lunet_pg_conn_t));
+    wrapper->conn = ctx->conn;
+    wrapper->closed = 0;
+    uv_mutex_init(&wrapper->mutex);
+    luaL_getmetatable(co, LUNET_PG_CONN_MT);
+    lua_setmetatable(co, -2);
     lua_pushnil(co);
   } else {
     lua_pushnil(co);
@@ -73,6 +110,8 @@ int lunet_db_open(lua_State* L) {
     lua_pushstring(L, "db.open requires params table");
     return lua_error(L);
   }
+
+  register_conn_metatable(L);
 
   db_open_ctx_t* ctx = malloc(sizeof(db_open_ctx_t));
   if (!ctx) {
@@ -131,18 +170,16 @@ int lunet_db_close(lua_State* L) {
     lua_pushstring(L, "db.close requires a connection");
     return 1;
   }
-  if (!lua_isuserdata(L, 1) && !lua_islightuserdata(L, 1)) {
-    lua_pushstring(L, "db.close requires a connection");
+  lunet_pg_conn_t* wrapper = (lunet_pg_conn_t*)luaL_testudata(L, 1, LUNET_PG_CONN_MT);
+  if (!wrapper) {
+    lua_pushstring(L, "db.close requires a valid connection");
     return 1;
   }
 
-  PGconn* conn = (PGconn*)lua_touserdata(L, 1);
-  if (!conn) {
-    lua_pushstring(L, "invalid connection");
-    return 1;
-  }
+  uv_mutex_lock(&wrapper->mutex);
+  lunet_pg_conn_destroy(wrapper);
+  uv_mutex_unlock(&wrapper->mutex);
 
-  PQfinish(conn);
   lua_pushnil(L);
   return 1;
 }
@@ -152,7 +189,7 @@ typedef struct {
   lua_State* L;
   int co_ref;
 
-  PGconn* conn;
+  lunet_pg_conn_t* wrapper;
   char* query;
 
   PGresult* result;
@@ -162,15 +199,25 @@ typedef struct {
 static void db_query_work_cb(uv_work_t* req) {
   db_query_ctx_t* ctx = (db_query_ctx_t*)req->data;
 
-  ctx->result = PQexec(ctx->conn, ctx->query);
+  uv_mutex_lock(&ctx->wrapper->mutex);
+  if (ctx->wrapper->closed || !ctx->wrapper->conn) {
+    snprintf(ctx->err, sizeof(ctx->err), "connection is closed");
+    ctx->result = NULL;
+    uv_mutex_unlock(&ctx->wrapper->mutex);
+    return;
+  }
+
+  ctx->result = PQexec(ctx->wrapper->conn, ctx->query);
   ExecStatusType status = PQresultStatus(ctx->result);
 
   if (status != PGRES_TUPLES_OK && status != PGRES_COMMAND_OK) {
-    snprintf(ctx->err, sizeof(ctx->err), "%s", PQerrorMessage(ctx->conn));
+    snprintf(ctx->err, sizeof(ctx->err), "%s", PQerrorMessage(ctx->wrapper->conn));
     PQclear(ctx->result);
     ctx->result = NULL;
+    uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
+  uv_mutex_unlock(&ctx->wrapper->mutex);
 }
 
 static void db_query_after_cb(uv_work_t* req, int status) {
@@ -266,16 +313,16 @@ int lunet_db_query(lua_State* L) {
     return 2;
   }
 
-  if (!lua_isuserdata(L, 1) && !lua_islightuserdata(L, 1)) {
+  lunet_pg_conn_t* wrapper = (lunet_pg_conn_t*)luaL_testudata(L, 1, LUNET_PG_CONN_MT);
+  if (!wrapper) {
     lua_pushnil(L);
-    lua_pushstring(L, "db.query requires a connection");
+    lua_pushstring(L, "db.query requires a valid connection");
     return 2;
   }
 
-  PGconn* conn = (PGconn*)lua_touserdata(L, 1);
-  if (!conn) {
+  if (wrapper->closed || !wrapper->conn) {
     lua_pushnil(L);
-    lua_pushstring(L, "invalid connection");
+    lua_pushstring(L, "connection is closed");
     return 2;
   }
 
@@ -289,7 +336,7 @@ int lunet_db_query(lua_State* L) {
   memset(ctx, 0, sizeof(*ctx));
   ctx->L = L;
   ctx->req.data = ctx;
-  ctx->conn = conn;
+  ctx->wrapper = wrapper;
   ctx->query = strdup(query);
   if (!ctx->query) {
     free(ctx);
@@ -319,7 +366,7 @@ typedef struct {
   lua_State* L;
   int co_ref;
 
-  PGconn* conn;
+  lunet_pg_conn_t* wrapper;
   char* query;
 
   long long affected_rows;
@@ -330,12 +377,20 @@ typedef struct {
 static void db_exec_work_cb(uv_work_t* req) {
   db_exec_ctx_t* ctx = (db_exec_ctx_t*)req->data;
 
-  PGresult* result = PQexec(ctx->conn, ctx->query);
+  uv_mutex_lock(&ctx->wrapper->mutex);
+  if (ctx->wrapper->closed || !ctx->wrapper->conn) {
+    snprintf(ctx->err, sizeof(ctx->err), "connection is closed");
+    uv_mutex_unlock(&ctx->wrapper->mutex);
+    return;
+  }
+
+  PGresult* result = PQexec(ctx->wrapper->conn, ctx->query);
   ExecStatusType status = PQresultStatus(result);
 
   if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
-    snprintf(ctx->err, sizeof(ctx->err), "%s", PQerrorMessage(ctx->conn));
+    snprintf(ctx->err, sizeof(ctx->err), "%s", PQerrorMessage(ctx->wrapper->conn));
     PQclear(result);
+    uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
 
@@ -344,6 +399,7 @@ static void db_exec_work_cb(uv_work_t* req) {
   ctx->insert_id = (unsigned long long)PQoidValue(result);
 
   PQclear(result);
+  uv_mutex_unlock(&ctx->wrapper->mutex);
 }
 
 static void db_exec_after_cb(uv_work_t* req, int status) {
@@ -401,16 +457,16 @@ int lunet_db_exec(lua_State* L) {
     lua_pushstring(L, "db.exec requires connection and sql string");
     return 2;
   }
-  if (!lua_isuserdata(L, 1) && !lua_islightuserdata(L, 1)) {
+  lunet_pg_conn_t* wrapper = (lunet_pg_conn_t*)luaL_testudata(L, 1, LUNET_PG_CONN_MT);
+  if (!wrapper) {
     lua_pushnil(L);
-    lua_pushstring(L, "db.exec requires a connection");
+    lua_pushstring(L, "db.exec requires a valid connection");
     return 2;
   }
 
-  PGconn* conn = (PGconn*)lua_touserdata(L, 1);
-  if (!conn) {
+  if (wrapper->closed || !wrapper->conn) {
     lua_pushnil(L);
-    lua_pushstring(L, "invalid connection");
+    lua_pushstring(L, "connection is closed");
     return 2;
   }
 
@@ -425,7 +481,7 @@ int lunet_db_exec(lua_State* L) {
   memset(ctx, 0, sizeof(*ctx));
   ctx->L = L;
   ctx->req.data = ctx;
-  ctx->conn = conn;
+  ctx->wrapper = wrapper;
   ctx->query = strdup(query);
   if (!ctx->query) {
     free(ctx);

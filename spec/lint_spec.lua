@@ -1,7 +1,8 @@
 describe("C safety lint", function()
   it("passes on the current tree", function()
-    local ok = os.execute("lua bin/lint_c_safety.lua >/dev/null 2>&1")
-    -- LuaJIT returns true on success.
-    assert.is_true(ok)
+    local result = os.execute("lua bin/lint_c_safety.lua >/dev/null 2>&1")
+    -- Handle Lua 5.1/LuaJIT (number 0) and Lua 5.2+ (boolean true)
+    local success = (result == true) or (result == 0)
+    assert.is_true(success, "Lint script failed (returned " .. tostring(result) .. ")")
   end)
 end)

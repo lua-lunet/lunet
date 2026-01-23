@@ -214,7 +214,7 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   lua_State* L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.open\n");
@@ -273,12 +273,11 @@ int lunet_db_open(lua_State* L) {
   snprintf(ctx->path, sizeof(ctx->path), "%s", path);
   lua_pop(L, 1);
 
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_open_work_cb, db_open_after_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx);
     lua_pushnil(L);
     lua_pushfstring(L, "db.open: uv_queue_work failed: %s", uv_strerror(ret));
@@ -361,24 +360,76 @@ static void db_query_work_cb(uv_work_t* req) {
   }
 
   ctx->ncols = sqlite3_column_count(stmt);
-  ctx->col_names = malloc(sizeof(char*) * ctx->ncols);
-  ctx->col_types = malloc(sizeof(int) * ctx->ncols);
-  for (int i = 0; i < ctx->ncols; i++) {
-    const char* name = sqlite3_column_name(stmt, i);
-    ctx->col_names[i] = strdup(name ? name : "");
+  if (ctx->ncols > 0) {
+    ctx->col_names = malloc(sizeof(char*) * ctx->ncols);
+    ctx->col_types = malloc(sizeof(int) * ctx->ncols);
+    if (!ctx->col_names || !ctx->col_types) {
+      snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+      free(ctx->col_names);
+      free(ctx->col_types);
+      ctx->col_names = NULL;
+      ctx->col_types = NULL;
+      ctx->ncols = 0;
+      sqlite3_finalize(stmt);
+      uv_mutex_unlock(&ctx->wrapper->mutex);
+      return;
+    }
+    memset(ctx->col_names, 0, sizeof(char*) * ctx->ncols);
+    for (int i = 0; i < ctx->ncols; i++) {
+      const char* name = sqlite3_column_name(stmt, i);
+      ctx->col_names[i] = strdup(name ? name : "");
+      if (!ctx->col_names[i]) {
+        snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+        for (int j = 0; j < i; j++) free(ctx->col_names[j]);
+        free(ctx->col_names);
+        free(ctx->col_types);
+        ctx->col_names = NULL;
+        ctx->col_types = NULL;
+        ctx->ncols = 0;
+        sqlite3_finalize(stmt);
+        uv_mutex_unlock(&ctx->wrapper->mutex);
+        return;
+      }
+    }
+  } else {
+    ctx->col_names = NULL;
+    ctx->col_types = NULL;
   }
 
   int capacity = 16;
   ctx->rows = malloc(sizeof(char**) * capacity);
+  if (!ctx->rows) {
+    snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+    for (int i = 0; i < ctx->ncols; i++) free(ctx->col_names[i]);
+    free(ctx->col_names);
+    free(ctx->col_types);
+    ctx->col_names = NULL;
+    ctx->col_types = NULL;
+    ctx->ncols = 0;
+    sqlite3_finalize(stmt);
+    uv_mutex_unlock(&ctx->wrapper->mutex);
+    return;
+  }
   ctx->nrows = 0;
 
   while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
     if (ctx->nrows >= capacity) {
       capacity *= 2;
-      ctx->rows = realloc(ctx->rows, sizeof(char**) * capacity);
+      char*** new_rows = realloc(ctx->rows, sizeof(char**) * capacity);
+      if (!new_rows) {
+        snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+        break;
+      }
+      ctx->rows = new_rows;
     }
 
     char** row = malloc(sizeof(char*) * ctx->ncols);
+    if (!row) {
+      snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+      break;
+    }
+    memset(row, 0, sizeof(char*) * ctx->ncols);
+    int alloc_failed = 0;
     for (int i = 0; i < ctx->ncols; i++) {
       int t = sqlite3_column_type(stmt, i);
       if (ctx->nrows == 0 && ctx->col_types) ctx->col_types[i] = t;
@@ -386,8 +437,22 @@ static void db_query_work_cb(uv_work_t* req) {
         row[i] = NULL;
       } else {
         const char* val = (const char*)sqlite3_column_text(stmt, i);
-        row[i] = val ? strdup(val) : NULL;
+        if (val) {
+          row[i] = strdup(val);
+          if (!row[i]) {
+            alloc_failed = 1;
+            break;
+          }
+        } else {
+          row[i] = NULL;
+        }
       }
+    }
+    if (alloc_failed) {
+      snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+      for (int i = 0; i < ctx->ncols; i++) free(row[i]);
+      free(row);
+      break;
     }
     ctx->rows[ctx->nrows] = row;
     ctx->nrows++;
@@ -406,7 +471,7 @@ static void db_query_after_cb(uv_work_t* req, int status) {
   lua_State* L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.query\n");
@@ -525,12 +590,11 @@ int lunet_db_query(lua_State* L) {
     return 2;
   }
 
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_query_work_cb, db_query_after_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx->query);
     free(ctx);
     lua_pushnil(L);
@@ -610,7 +674,7 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
   lua_State* L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.exec\n");
@@ -696,12 +760,11 @@ int lunet_db_exec(lua_State* L) {
     return 2;
   }
 
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_exec_work_cb, db_exec_after_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx->query);
     free(ctx);
     lua_pushnil(L);
@@ -783,12 +846,11 @@ int lunet_db_query_params(lua_State* L) {
     return 2;
   }
 
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_query_work_cb, db_query_after_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx->query);
     free_params(ctx->params, ctx->nparams);
     free(ctx);
@@ -852,12 +914,11 @@ int lunet_db_exec_params(lua_State* L) {
     return 2;
   }
 
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_exec_work_cb, db_exec_after_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx->query);
     free_params(ctx->params, ctx->nparams);
     free(ctx);

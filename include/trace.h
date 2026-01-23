@@ -156,6 +156,17 @@ static inline int _lunet_ensure_coroutine_checked(lua_State *L, const char *func
     lunet_trace_coref_remove(__FILE__, __LINE__); \
 } while(0)
 
+/*
+ * lunet_coref_create_raw - For special cases where thread is already on stack
+ * 
+ * Use when lua_pushthread was already called (e.g., after lua_xmove).
+ * The thread must be at the top of stack L before calling this.
+ */
+#define lunet_coref_create_raw(L, ref_var) do { \
+    (ref_var) = luaL_ref(L, LUA_REGISTRYINDEX); \
+    lunet_trace_coref_add(__FILE__, __LINE__); \
+} while(0)
+
 #else /* !LUNET_TRACE */
 
 /*
@@ -191,6 +202,13 @@ static inline int lunet_ensure_coroutine(lua_State *L, const char *func_name) {
  */
 #define lunet_coref_release(L, ref) do { \
     luaL_unref(L, LUA_REGISTRYINDEX, ref); \
+} while(0)
+
+/*
+ * lunet_coref_create_raw - For special cases where thread is already on stack
+ */
+#define lunet_coref_create_raw(L, ref_var) do { \
+    (ref_var) = luaL_ref(L, LUA_REGISTRYINDEX); \
 } while(0)
 
 /*

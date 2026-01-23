@@ -21,7 +21,7 @@ static void lunet_fs_open_cb(uv_fs_t *req) {
 
   // resume coroutine
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
 
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
@@ -130,13 +130,12 @@ int lunet_fs_open(lua_State *L) {
   }
 
   ctx->L = L;
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
   ctx->req.data = ctx;
 
   int rc = uv_fs_open(uv_default_loop(), &ctx->req, path, flags, 0644, lunet_fs_open_cb);
   if (rc < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, uv_strerror(rc));
@@ -158,7 +157,7 @@ static void lunet_fs_close_cb(uv_fs_t *req) {
 
   // resume coroutine
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
 
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
@@ -200,13 +199,12 @@ int lunet_fs_close(lua_State *L) {
   }
 
   ctx->L = L;
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
   ctx->req.data = ctx;
 
   int rc = uv_fs_close(uv_default_loop(), &ctx->req, fd, lunet_fs_close_cb);
   if (rc < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx);
     lua_pushstring(L, uv_strerror(rc));
     return 1;
@@ -226,7 +224,7 @@ static void lunet_fs_stat_cb(uv_fs_t *req) {
   lua_State *L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
 
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
@@ -323,13 +321,12 @@ int lunet_fs_stat(lua_State *L) {
   }
 
   ctx->L = L;
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
   ctx->req.data = ctx;
 
   int rc = uv_fs_stat(uv_default_loop(), &ctx->req, path, lunet_fs_stat_cb);
   if (rc < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, uv_strerror(rc));
@@ -352,7 +349,7 @@ static void lunet_fs_read_cb(uv_fs_t *req) {
   lua_State *L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
 
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
@@ -399,12 +396,11 @@ int lunet_fs_read(lua_State *L) {
   }
 
   ctx->L = L;
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
   ctx->len = len;
   ctx->buf = malloc(len);
   if (!ctx->buf) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, "fs.read out of memory");
@@ -415,7 +411,7 @@ int lunet_fs_read(lua_State *L) {
   uv_buf_t buf = uv_buf_init(ctx->buf, len);
   int rc = uv_fs_read(uv_default_loop(), &ctx->req, fd, &buf, 1, 0, lunet_fs_read_cb);
   if (rc < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx->buf);
     free(ctx);
     lua_pushnil(L);
@@ -440,7 +436,7 @@ static void lunet_fs_write_cb(uv_fs_t *req) {
   lua_State *L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
 
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
@@ -488,12 +484,11 @@ int lunet_fs_write(lua_State *L) {
   }
 
   ctx->L = L;
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
   ctx->len = len;
   ctx->buf = malloc(len);
   if (!ctx->buf) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, "fs.write out of memory");
@@ -506,7 +501,7 @@ int lunet_fs_write(lua_State *L) {
   uv_buf_t buf = uv_buf_init(ctx->buf, len);
   int rc = uv_fs_write(uv_default_loop(), &ctx->req, fd, &buf, 1, 0, lunet_fs_write_cb);
   if (rc < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx->buf);
     free(ctx);
     lua_pushnil(L);
@@ -549,7 +544,7 @@ static void lunet_fs_scandir_cb(uv_fs_t *req) {
   lua_State *L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
 
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
@@ -607,13 +602,12 @@ int lunet_fs_scandir(lua_State *L) {
   }
 
   ctx->L = L;
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
   ctx->req.data = ctx;
 
   int rc = uv_fs_scandir(uv_default_loop(), &ctx->req, path, 0, lunet_fs_scandir_cb);
   if (rc < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, uv_strerror(rc));

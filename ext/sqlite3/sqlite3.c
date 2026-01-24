@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "co.h"
+#include "trace.h"
 #include "uv.h"
 
 #define LUNET_SQLITE_CONN_MT "lunet.sqlite.conn"
@@ -17,14 +18,22 @@ typedef struct {
   int closed;
 } lunet_sqlite_conn_t;
 
-static void lunet_sqlite_conn_destroy(lunet_sqlite_conn_t* wrapper) {
+// Close the SQLite connection but don't destroy the mutex (caller may still hold it)
+static void lunet_sqlite_conn_close(lunet_sqlite_conn_t* wrapper) {
   if (!wrapper || wrapper->closed) return;
   wrapper->closed = 1;
   if (wrapper->conn) {
     sqlite3_close(wrapper->conn);
     wrapper->conn = NULL;
   }
-  uv_mutex_destroy(&wrapper->mutex);
+}
+
+// Full cleanup including mutex - only call when mutex is NOT held (e.g., from GC)
+static void lunet_sqlite_conn_destroy(lunet_sqlite_conn_t* wrapper) {
+  lunet_sqlite_conn_close(wrapper);
+  if (wrapper) {
+    uv_mutex_destroy(&wrapper->mutex);
+  }
 }
 
 static int conn_gc(lua_State* L) {
@@ -39,6 +48,142 @@ static void register_conn_metatable(lua_State* L) {
     lua_setfield(L, -2, "__gc");
   }
   lua_pop(L, 1);
+}
+
+typedef enum {
+    PARAM_TYPE_NIL,
+    PARAM_TYPE_INT,
+    PARAM_TYPE_DOUBLE,
+    PARAM_TYPE_TEXT
+} param_type_t;
+
+typedef struct {
+    param_type_t type;
+    union {
+        long long i;
+        double d;
+        struct {
+            char* data;
+            size_t len;
+        } s;
+    } value;
+} param_t;
+
+static void free_params(param_t* params, int nparams) {
+    if (!params) return;
+    for (int i = 0; i < nparams; i++) {
+        if (params[i].type == PARAM_TYPE_TEXT) {
+            free(params[i].value.s.data);
+        }
+    }
+    free(params);
+}
+
+static param_t* collect_params(lua_State* L, int start, int* nparams) {
+    int top = lua_gettop(L);
+    *nparams = top - start + 1;
+    if (*nparams <= 0) {
+        *nparams = 0;
+        return NULL;
+    }
+    param_t* params = malloc(sizeof(param_t) * (*nparams));
+    if (!params) {
+        *nparams = -1;
+        return NULL;
+    }
+    for (int i = 0; i < *nparams; i++) {
+        int idx = start + i;
+        int type = lua_type(L, idx);
+        switch (type) {
+            case LUA_TNIL:
+                params[i].type = PARAM_TYPE_NIL;
+                break;
+            case LUA_TNUMBER: {
+                lua_Number n = lua_tonumber(L, idx);
+                long long val = (long long)n;
+                if ((lua_Number)val == n) {
+                    params[i].type = PARAM_TYPE_INT;
+                    params[i].value.i = val;
+                } else {
+                    params[i].type = PARAM_TYPE_DOUBLE;
+                    params[i].value.d = n;
+                }
+                break;
+            }
+            case LUA_TBOOLEAN:
+                params[i].type = PARAM_TYPE_INT;
+                params[i].value.i = lua_toboolean(L, idx);
+                break;
+            case LUA_TSTRING: {
+                size_t len;
+                const char* s = lua_tolstring(L, idx, &len);
+                params[i].type = PARAM_TYPE_TEXT;
+                params[i].value.s.data = malloc(len + 1);
+                if (!params[i].value.s.data) {
+                    free_params(params, i);
+                    *nparams = -1;
+                    return NULL;
+                }
+                memcpy(params[i].value.s.data, s, len);
+                params[i].value.s.data[len] = '\0';
+                params[i].value.s.len = len;
+                break;
+            }
+            default: {
+                const char* s = lua_tostring(L, idx);
+                if (s) {
+                    size_t len = strlen(s);
+                    params[i].type = PARAM_TYPE_TEXT;
+                    params[i].value.s.data = strdup(s);
+                    if (!params[i].value.s.data) {
+                        free_params(params, i);
+                        *nparams = -1;
+                        return NULL;
+                    }
+                    params[i].value.s.len = len;
+                } else {
+                    params[i].type = PARAM_TYPE_NIL;
+                }
+                break;
+            }
+        }
+    }
+    return params;
+}
+
+static int bind_params(sqlite3_stmt* stmt, param_t* params, int nparams, char* err, size_t errsize) {
+    int expected = sqlite3_bind_parameter_count(stmt);
+    if (nparams > 0 && !params) {
+        snprintf(err, errsize, "parameter collection failed");
+        return SQLITE_ERROR;
+    }
+    if (nparams != expected) {
+        snprintf(err, errsize, "parameter count mismatch: got %d, expected %d", nparams, expected);
+        return SQLITE_ERROR;
+    }
+    for (int i = 0; i < nparams; i++) {
+        int rc;
+        int idx = i + 1;
+        switch (params[i].type) {
+            case PARAM_TYPE_NIL:
+                rc = sqlite3_bind_null(stmt, idx);
+                break;
+            case PARAM_TYPE_INT:
+                rc = sqlite3_bind_int64(stmt, idx, params[i].value.i);
+                break;
+            case PARAM_TYPE_DOUBLE:
+                rc = sqlite3_bind_double(stmt, idx, params[i].value.d);
+                break;
+            case PARAM_TYPE_TEXT:
+                rc = sqlite3_bind_text(stmt, idx, params[i].value.s.data, params[i].value.s.len, SQLITE_TRANSIENT);
+                break;
+            default:
+                rc = SQLITE_ERROR;
+                break;
+        }
+        if (rc != SQLITE_OK) return rc;
+    }
+    return SQLITE_OK;
 }
 
 typedef struct {
@@ -69,7 +214,7 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   lua_State* L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.open\n");
@@ -128,12 +273,11 @@ int lunet_db_open(lua_State* L) {
   snprintf(ctx->path, sizeof(ctx->path), "%s", path);
   lua_pop(L, 1);
 
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_open_work_cb, db_open_after_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx);
     lua_pushnil(L);
     lua_pushfstring(L, "db.open: uv_queue_work failed: %s", uv_strerror(ret));
@@ -158,8 +302,9 @@ int lunet_db_close(lua_State* L) {
   }
 
   uv_mutex_lock(&wrapper->mutex);
-  lunet_sqlite_conn_destroy(wrapper);
+  lunet_sqlite_conn_close(wrapper);  // Close connection but don't destroy mutex
   uv_mutex_unlock(&wrapper->mutex);
+  // Mutex will be destroyed by GC via lunet_sqlite_conn_destroy
 
   lua_pushnil(L);
   return 1;
@@ -172,6 +317,9 @@ typedef struct {
 
   lunet_sqlite_conn_t* wrapper;
   char* query;
+  
+  param_t* params;
+  int nparams;
 
   char** col_names;
   int* col_types;
@@ -198,26 +346,90 @@ static void db_query_work_cb(uv_work_t* req) {
     uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
+  
+  if (ctx->nparams > 0) {
+      rc = bind_params(stmt, ctx->params, ctx->nparams, ctx->err, sizeof(ctx->err));
+      if (rc != SQLITE_OK) {
+          if (ctx->err[0] == '\0') {
+              snprintf(ctx->err, sizeof(ctx->err), "bind failed: %s", sqlite3_errmsg(ctx->wrapper->conn));
+          }
+          sqlite3_finalize(stmt);
+          uv_mutex_unlock(&ctx->wrapper->mutex);
+          return;
+      }
+  }
 
   ctx->ncols = sqlite3_column_count(stmt);
-  ctx->col_names = malloc(sizeof(char*) * ctx->ncols);
-  ctx->col_types = malloc(sizeof(int) * ctx->ncols);
-  for (int i = 0; i < ctx->ncols; i++) {
-    const char* name = sqlite3_column_name(stmt, i);
-    ctx->col_names[i] = strdup(name ? name : "");
+  if (ctx->ncols > 0) {
+    ctx->col_names = malloc(sizeof(char*) * ctx->ncols);
+    ctx->col_types = malloc(sizeof(int) * ctx->ncols);
+    if (!ctx->col_names || !ctx->col_types) {
+      snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+      free(ctx->col_names);
+      free(ctx->col_types);
+      ctx->col_names = NULL;
+      ctx->col_types = NULL;
+      ctx->ncols = 0;
+      sqlite3_finalize(stmt);
+      uv_mutex_unlock(&ctx->wrapper->mutex);
+      return;
+    }
+    memset(ctx->col_names, 0, sizeof(char*) * ctx->ncols);
+    for (int i = 0; i < ctx->ncols; i++) {
+      const char* name = sqlite3_column_name(stmt, i);
+      ctx->col_names[i] = strdup(name ? name : "");
+      if (!ctx->col_names[i]) {
+        snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+        for (int j = 0; j < i; j++) free(ctx->col_names[j]);
+        free(ctx->col_names);
+        free(ctx->col_types);
+        ctx->col_names = NULL;
+        ctx->col_types = NULL;
+        ctx->ncols = 0;
+        sqlite3_finalize(stmt);
+        uv_mutex_unlock(&ctx->wrapper->mutex);
+        return;
+      }
+    }
+  } else {
+    ctx->col_names = NULL;
+    ctx->col_types = NULL;
   }
 
   int capacity = 16;
   ctx->rows = malloc(sizeof(char**) * capacity);
+  if (!ctx->rows) {
+    snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+    for (int i = 0; i < ctx->ncols; i++) free(ctx->col_names[i]);
+    free(ctx->col_names);
+    free(ctx->col_types);
+    ctx->col_names = NULL;
+    ctx->col_types = NULL;
+    ctx->ncols = 0;
+    sqlite3_finalize(stmt);
+    uv_mutex_unlock(&ctx->wrapper->mutex);
+    return;
+  }
   ctx->nrows = 0;
 
   while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
     if (ctx->nrows >= capacity) {
       capacity *= 2;
-      ctx->rows = realloc(ctx->rows, sizeof(char**) * capacity);
+      char*** new_rows = realloc(ctx->rows, sizeof(char**) * capacity);
+      if (!new_rows) {
+        snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+        break;
+      }
+      ctx->rows = new_rows;
     }
 
     char** row = malloc(sizeof(char*) * ctx->ncols);
+    if (!row) {
+      snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+      break;
+    }
+    memset(row, 0, sizeof(char*) * ctx->ncols);
+    int alloc_failed = 0;
     for (int i = 0; i < ctx->ncols; i++) {
       int t = sqlite3_column_type(stmt, i);
       if (ctx->nrows == 0 && ctx->col_types) ctx->col_types[i] = t;
@@ -225,8 +437,22 @@ static void db_query_work_cb(uv_work_t* req) {
         row[i] = NULL;
       } else {
         const char* val = (const char*)sqlite3_column_text(stmt, i);
-        row[i] = val ? strdup(val) : NULL;
+        if (val) {
+          row[i] = strdup(val);
+          if (!row[i]) {
+            alloc_failed = 1;
+            break;
+          }
+        } else {
+          row[i] = NULL;
+        }
       }
+    }
+    if (alloc_failed) {
+      snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+      for (int i = 0; i < ctx->ncols; i++) free(row[i]);
+      free(row);
+      break;
     }
     ctx->rows[ctx->nrows] = row;
     ctx->nrows++;
@@ -245,7 +471,7 @@ static void db_query_after_cb(uv_work_t* req, int status) {
   lua_State* L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.query\n");
@@ -318,6 +544,7 @@ cleanup:
   free(ctx->col_names);
   free(ctx->col_types);
   free(ctx->query);
+  free_params(ctx->params, ctx->nparams);
   free(ctx);
 }
 
@@ -363,12 +590,11 @@ int lunet_db_query(lua_State* L) {
     return 2;
   }
 
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_query_work_cb, db_query_after_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx->query);
     free(ctx);
     lua_pushnil(L);
@@ -386,6 +612,9 @@ typedef struct {
 
   lunet_sqlite_conn_t* wrapper;
   char* query;
+  
+  param_t* params;
+  int nparams;
 
   long long affected_rows;
   long long insert_id;
@@ -402,13 +631,37 @@ static void db_exec_work_cb(uv_work_t* req) {
     return;
   }
 
-  char* errmsg = NULL;
-  int rc = sqlite3_exec(ctx->wrapper->conn, ctx->query, NULL, NULL, &errmsg);
-  if (rc != SQLITE_OK) {
-    snprintf(ctx->err, sizeof(ctx->err), "%s", errmsg ? errmsg : sqlite3_errmsg(ctx->wrapper->conn));
-    if (errmsg) sqlite3_free(errmsg);
-    uv_mutex_unlock(&ctx->wrapper->mutex);
-    return;
+  if (ctx->nparams > 0) {
+      sqlite3_stmt* stmt = NULL;
+      int rc = sqlite3_prepare_v2(ctx->wrapper->conn, ctx->query, -1, &stmt, NULL);
+      if (rc != SQLITE_OK) {
+          snprintf(ctx->err, sizeof(ctx->err), "%s", sqlite3_errmsg(ctx->wrapper->conn));
+          uv_mutex_unlock(&ctx->wrapper->mutex);
+          return;
+      }
+      rc = bind_params(stmt, ctx->params, ctx->nparams, ctx->err, sizeof(ctx->err));
+      if (rc != SQLITE_OK) {
+          if (ctx->err[0] == '\0') {
+              snprintf(ctx->err, sizeof(ctx->err), "bind failed: %s", sqlite3_errmsg(ctx->wrapper->conn));
+          }
+          sqlite3_finalize(stmt);
+          uv_mutex_unlock(&ctx->wrapper->mutex);
+          return;
+      }
+      rc = sqlite3_step(stmt);
+      if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+          snprintf(ctx->err, sizeof(ctx->err), "%s", sqlite3_errmsg(ctx->wrapper->conn));
+      }
+      sqlite3_finalize(stmt);
+  } else {
+      char* errmsg = NULL;
+      int rc = sqlite3_exec(ctx->wrapper->conn, ctx->query, NULL, NULL, &errmsg);
+      if (rc != SQLITE_OK) {
+        snprintf(ctx->err, sizeof(ctx->err), "%s", errmsg ? errmsg : sqlite3_errmsg(ctx->wrapper->conn));
+        if (errmsg) sqlite3_free(errmsg);
+        uv_mutex_unlock(&ctx->wrapper->mutex);
+        return;
+      }
   }
 
   ctx->affected_rows = sqlite3_changes(ctx->wrapper->conn);
@@ -421,11 +674,12 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
   lua_State* L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.exec\n");
     free(ctx->query);
+    free_params(ctx->params, ctx->nparams);
     free(ctx);
     return;
   }
@@ -459,6 +713,7 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
   }
 
   free(ctx->query);
+  free_params(ctx->params, ctx->nparams);
   free(ctx);
 }
 
@@ -505,12 +760,11 @@ int lunet_db_exec(lua_State* L) {
     return 2;
   }
 
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_exec_work_cb, db_exec_after_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx->query);
     free(ctx);
     lua_pushnil(L);
@@ -539,4 +793,139 @@ int lunet_db_escape(lua_State* L) {
     return lua_error(L);
   }
   return 1;
+}
+
+int lunet_db_query_params(lua_State* L) {
+  if (lunet_ensure_coroutine(L, "db.query_params")) {
+    return lua_error(L);
+  }
+  if (lua_gettop(L) < 2) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.query_params requires connection and sql string");
+    return 2;
+  }
+
+  lunet_sqlite_conn_t* wrapper = (lunet_sqlite_conn_t*)luaL_testudata(L, 1, LUNET_SQLITE_CONN_MT);
+  if (!wrapper) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.query_params requires a valid connection");
+    return 2;
+  }
+
+  if (wrapper->closed || !wrapper->conn) {
+    lua_pushnil(L);
+    lua_pushstring(L, "connection is closed");
+    return 2;
+  }
+
+  const char* query = luaL_checkstring(L, 2);
+
+  db_query_ctx_t* ctx = malloc(sizeof(db_query_ctx_t));
+  if (!ctx) {
+    lua_pushstring(L, "out of memory");
+    return lua_error(L);
+  }
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->L = L;
+  ctx->req.data = ctx;
+  ctx->wrapper = wrapper;
+  ctx->query = strdup(query);
+  if (!ctx->query) {
+    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  ctx->params = collect_params(L, 3, &ctx->nparams);
+  if (ctx->nparams < 0) {
+    free(ctx->query);
+    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  lunet_coref_create(L, ctx->co_ref);
+
+  int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_query_work_cb, db_query_after_cb);
+  if (ret < 0) {
+    lunet_coref_release(L, ctx->co_ref);
+    free(ctx->query);
+    free_params(ctx->params, ctx->nparams);
+    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, uv_strerror(ret));
+    return 2;
+  }
+
+  return lua_yield(L, 0);
+}
+
+int lunet_db_exec_params(lua_State* L) {
+  if (lunet_ensure_coroutine(L, "db.exec_params")) {
+    return lua_error(L);
+  }
+  if (lua_gettop(L) < 2) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.exec_params requires connection and sql string");
+    return 2;
+  }
+
+  lunet_sqlite_conn_t* wrapper = (lunet_sqlite_conn_t*)luaL_testudata(L, 1, LUNET_SQLITE_CONN_MT);
+  if (!wrapper) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.exec_params requires a valid connection");
+    return 2;
+  }
+
+  if (wrapper->closed || !wrapper->conn) {
+    lua_pushnil(L);
+    lua_pushstring(L, "connection is closed");
+    return 2;
+  }
+
+  const char* query = luaL_checkstring(L, 2);
+
+  db_exec_ctx_t* ctx = malloc(sizeof(db_exec_ctx_t));
+  if (!ctx) {
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->L = L;
+  ctx->req.data = ctx;
+  ctx->wrapper = wrapper;
+  ctx->query = strdup(query);
+  if (!ctx->query) {
+    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  ctx->params = collect_params(L, 3, &ctx->nparams);
+  if (ctx->nparams < 0) {
+    free(ctx->query);
+    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  lunet_coref_create(L, ctx->co_ref);
+
+  int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_exec_work_cb, db_exec_after_cb);
+  if (ret < 0) {
+    lunet_coref_release(L, ctx->co_ref);
+    free(ctx->query);
+    free_params(ctx->params, ctx->nparams);
+    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, uv_strerror(ret));
+    return 2;
+  }
+
+  return lua_yield(L, 0);
 }

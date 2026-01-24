@@ -59,9 +59,9 @@ eval "$(mise activate bash)" && python3 --version
 ```
 
 ### Setup Scripts
-- `bin/bench_setup_django.lua` - Clones repo, creates venv, installs deps, runs migrations
-- `bin/bench_start_django.sh` - Starts Django + nginx
-- `bin/bench_stop_django.sh` - Stops both services
+- `bench/bin/bench_setup_django.lua` - Clones repo, creates venv, installs deps, runs migrations
+- `bench/bin/bench_start_django.sh` - Starts Django + nginx
+- `bench/bin/bench_stop_django.sh` - Stops both services
 
 ### Manual Setup
 ```bash
@@ -69,10 +69,10 @@ eval "$(mise activate bash)" && python3 --version
 make init-bench
 
 # 2. Run setup
-lua bin/bench_setup_django.lua
+lua bench/bin/bench_setup_django.lua
 
 # 3. Start services
-./bin/bench_start_django.sh
+bench/bin/bench_start_django.sh
 
 # 4. Access
 # Frontend: http://localhost:9091

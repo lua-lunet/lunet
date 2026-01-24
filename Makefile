@@ -1,12 +1,18 @@
 .PHONY: all build init test clean run stop wui init-bench bench-django bench-django-stop help
+.PHONY: lint build-debug stress release
 
 all: build ## Build the project (default)
 
 LUNET_DB ?= sqlite3
 
-build: ## Compile C dependencies using CMake (use LUNET_DB=mysql|postgres|sqlite3)
+# =============================================================================
+# Build Targets
+# =============================================================================
+
+build: lint ## Compile C core using CMake (use LUNET_DB=mysql|postgres|sqlite3)
+	@echo "=== Building lunet (release mode, LUNET_DB=$(LUNET_DB)) ==="
 	mkdir -p build
-	cd build && cmake -DLUNET_DB=$(LUNET_DB) .. && make
+	cd build && cmake -DLUNET_DB=$(LUNET_DB) -DLUNET_TRACE=OFF .. && make
 
 build-sqlite: ## Build with SQLite3 backend
 	$(MAKE) build LUNET_DB=sqlite3
@@ -16,6 +22,24 @@ build-postgres: ## Build with PostgreSQL backend
 
 build-mysql: ## Build with MySQL backend
 	$(MAKE) build LUNET_DB=mysql
+
+build-debug: lint ## Build with LUNET_TRACE=ON for debugging (enables safety assertions)
+	@echo "=== Building lunet (debug mode with tracing, LUNET_DB=$(LUNET_DB)) ==="
+	@echo "This build includes zero-cost tracing that will:"
+	@echo "  - Track coroutine reference create/release balance"
+	@echo "  - Verify stack integrity after coroutine checks"
+	@echo "  - CRASH on bugs (that's the point - find them early!)"
+	@echo ""
+	mkdir -p build
+	cd build && cmake -DLUNET_DB=$(LUNET_DB) -DLUNET_TRACE=ON .. && make
+
+# =============================================================================
+# Quality Assurance
+# =============================================================================
+
+lint: ## Check C code for unsafe _lunet_* calls (must use safe wrappers)
+	@echo "=== Linting C code for safety violations ==="
+	@lua bin/lint_c_safety.lua
 
 init: ## Install dev dependencies (busted, luacheck) - run once
 	@command -v luarocks >/dev/null 2>&1 || { echo >&2 "Error: luarocks not found. Please install it."; exit 1; }
@@ -31,6 +55,30 @@ test: ## Run unit tests with busted
 check: ## Run static analysis with luacheck
 	@eval $$(luarocks path --bin) && command -v luacheck >/dev/null 2>&1 || { echo >&2 "Error: luacheck not found. Run 'make init' first."; exit 1; }
 	@eval $$(luarocks path --bin) && luacheck app/
+
+stress: build-debug ## Run concurrent stress test with tracing enabled
+	@echo ""
+	@echo "=== Running stress test (debug build with tracing) ==="
+	@echo "This spawns many concurrent coroutines to expose race conditions."
+	@echo "If tracing detects imbalanced refs or stack corruption, it will CRASH."
+	@echo "Config: STRESS_WORKERS=$${STRESS_WORKERS:-50} STRESS_OPS=$${STRESS_OPS:-100}"
+	@echo ""
+	@# Run stress test (config via env vars, defaults: 50 workers x 100 ops)
+	STRESS_WORKERS=$${STRESS_WORKERS:-50} STRESS_OPS=$${STRESS_OPS:-100} ./build/lunet test/stress_test.lua
+	@echo ""
+	@echo "=== Stress test completed successfully ==="
+
+release: lint test stress ## Full release build: lint + test + stress + optimized build
+	@echo ""
+	@echo "=== All checks passed, building optimized release ==="
+	@# Archive the debug build
+	@TS=$$(date +%Y%m%d_%H%M%S); \
+	if [ -d build ]; then mkdir -p .tmp && mv build .tmp/build.debug.$$TS; fi
+	@# Build release
+	$(MAKE) build
+	@echo ""
+	@echo "=== Release build complete ==="
+	@echo "Binary: ./build/lunet"
 
 clean: ## Archive build artifacts to .tmp (safe clean)
 	@echo "Refusing to rm -rf. Move build to .tmp with timestamp instead."
@@ -72,10 +120,10 @@ bench-django: ## Start Django benchmark environment
 	@echo "Starting Django benchmark server..."
 	@command -v mise >/dev/null 2>&1 || { echo >&2 "Error: mise required. See https://mise.jdx.dev"; exit 1; }
 	@command -v nginx >/dev/null 2>&1 || { echo >&2 "Error: nginx required. brew install nginx"; exit 1; }
-	@test -f bin/bench_setup_django.lua || { echo >&2 "Error: bin/bench_setup_django.lua not found"; exit 1; }
-	@test -f bin/bench_start_django.sh || { echo >&2 "Error: bin/bench_start_django.sh not found"; exit 1; }
-	lua bin/bench_setup_django.lua
-	bash bin/bench_start_django.sh
+	@test -f bench/bin/bench_setup_django.lua || { echo >&2 "Error: bench/bin/bench_setup_django.lua not found"; exit 1; }
+	@test -f bench/bin/bench_start_django.sh || { echo >&2 "Error: bench/bin/bench_start_django.sh not found"; exit 1; }
+	lua bench/bin/bench_setup_django.lua
+	bench/bin/bench_start_django.sh
 	@echo ""
 	@echo "Django benchmark running:"
 	@echo "  Frontend: http://localhost:9091"
@@ -83,7 +131,7 @@ bench-django: ## Start Django benchmark environment
 
 bench-django-stop: ## Stop Django benchmark environment
 	@echo "Stopping Django benchmark server..."
-	bash bin/bench_stop_django.sh || true
+	bench/bin/bench_stop_django.sh || true
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'

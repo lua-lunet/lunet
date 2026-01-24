@@ -402,6 +402,47 @@ Lunet is designed for high performance:
 - **libuv**: Battle-tested asynchronous I/O
 - **LuaJIT**: Just-in-time compilation for fast execution
 
+## Safety: Zero-Cost Tracing
+
+Lunet includes a compile-time optional tracing system for detecting concurrency bugs:
+
+- **Stack pollution detection**: Catches Lua-C stack corruption bugs
+- **Coroutine reference tracking**: Detects leaks and double-releases
+- **Zero overhead in release**: All tracing code is eliminated by the compiler
+
+### Debug Build (with tracing)
+
+```bash
+# Build with tracing enabled - assertions crash on bugs
+make build-debug
+
+# Or via CMake directly
+cmake -B build -DLUNET_TRACE=ON -DLUNET_DB=sqlite3
+cmake --build build
+```
+
+When `LUNET_TRACE=ON`, the runtime will:
+- Track all coroutine reference create/release operations
+- Verify stack integrity after every `lunet_ensure_coroutine()` call
+- Print statistics at shutdown
+- Assert and crash if references are unbalanced
+
+### Stress Testing
+
+Run concurrent stress tests to expose race conditions:
+
+```bash
+make stress   # Debug build + concurrent load test
+```
+
+### Release Build
+
+```bash
+make release  # Runs tests, stress test, then builds optimized release
+```
+
+The release build has **zero tracing overhead** - all macros compile to no-ops.
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit issues and pull requests.

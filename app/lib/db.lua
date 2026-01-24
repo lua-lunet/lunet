@@ -8,6 +8,8 @@ db.open = native.open
 db.close = native.close
 db.query_raw = native.query
 db.exec_raw = native.exec
+db.query_params = native.query_params
+db.exec_params = native.exec_params
 
 function db.set_config(cfg)
     if not cfg then return end
@@ -47,18 +49,22 @@ function db.interpolate(sql, ...)
     end)
 end
 
--- Higher level query (handles connection and interpolation)
+-- Higher level query (handles connection and parameters)
 function db.query(sql, ...)
     local conn, err = db.connect()
     if not conn then
         return nil, err
     end
 
+    local result, query_err
     if select("#", ...) > 0 then
-        sql = db.interpolate(sql, ...)
+        -- Use parameterized query if parameters provided
+        result, query_err = db.query_params(conn, sql, ...)
+    else
+        -- Use original implementation for backward compatibility
+        result, query_err = db.query_raw(conn, sql)
     end
-
-    local result, query_err = db.query_raw(conn, sql)
+    
     db.close(conn)
     
     if not result then
@@ -74,11 +80,15 @@ function db.exec(sql, ...)
         return nil, err
     end
 
+    local result, exec_err
     if select("#", ...) > 0 then
-        sql = db.interpolate(sql, ...)
+        -- Use parameterized exec if parameters provided
+        result, exec_err = db.exec_params(conn, sql, ...)
+    else
+        -- Use original implementation for backward compatibility
+        result, exec_err = db.exec_raw(conn, sql)
     end
-
-    local result, exec_err = db.exec_raw(conn, sql)
+    
     db.close(conn)
     
     if not result then

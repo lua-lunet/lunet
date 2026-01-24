@@ -6,6 +6,7 @@
 
 #include "co.h"
 #include "rt.h"
+#include "trace.h"
 
 typedef struct {
   uv_timer_t timer;
@@ -19,7 +20,7 @@ static void lunet_sleep_cb(uv_timer_t *timer) {
 
   // get coroutine reference from registry
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
 
   if (lua_isthread(L, -1) == 0) {
     lua_pop(L, 1);  // pop invalid coroutine
@@ -60,7 +61,8 @@ int lunet_sleep(lua_State *co) {
   ctx->L = default_luaL();
   lua_pushthread(co);
   lua_xmove(co, ctx->L, 1);
-  ctx->co_ref = luaL_ref(ctx->L, LUA_REGISTRYINDEX);
+  // Thread already on stack from xmove, use raw variant
+  lunet_coref_create_raw(ctx->L, ctx->co_ref);
 
   // init timer
   uv_timer_init(uv_default_loop(), &ctx->timer);

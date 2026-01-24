@@ -15,7 +15,7 @@ This document defines the port allocation scheme for benchmark testing across di
 ### Django Setup
 ```bash
 # Start Django API on port 9090
-DJANGO_PORT=9090 bash bin/bench_start_django.sh
+DJANGO_PORT=9090 bench/bin/bench_start_django.sh
 
 # Start nginx proxy on port 9091 (serves frontend + proxies /api to 9090)
 cd bench/django && nginx -p $(pwd) -c nginx.conf

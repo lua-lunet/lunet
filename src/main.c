@@ -11,6 +11,7 @@
 #include "rt.h"
 #include "socket.h"
 #include "timer.h"
+#include "trace.h"
 
 // register core module
 int lunet_open_core(lua_State *L) {
@@ -57,6 +58,8 @@ int lunet_db_close(lua_State* L);
 int lunet_db_query(lua_State* L);
 int lunet_db_exec(lua_State* L);
 int lunet_db_escape(lua_State* L);
+int lunet_db_query_params(lua_State* L);
+int lunet_db_exec_params(lua_State* L);
 
 int lunet_open_db(lua_State *L) {
   luaL_Reg funcs[] = {{"open", lunet_db_open},
@@ -64,6 +67,8 @@ int lunet_open_db(lua_State *L) {
                       {"query", lunet_db_query},
                       {"exec", lunet_db_exec},
                       {"escape", lunet_db_escape},
+                      {"query_params", lunet_db_query_params},
+                      {"exec_params", lunet_db_exec_params},
                       {NULL, NULL}};
   luaL_newlib(L, funcs);
   return 1;
@@ -113,6 +118,9 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  /* Initialize tracing (no-op in release builds) */
+  lunet_trace_init();
+
   lua_State *L = luaL_newstate();
   luaL_openlibs(L);
   set_default_luaL(L);
@@ -128,6 +136,11 @@ int main(int argc, char **argv) {
   }
 
   int ret = uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+  
+  /* Dump trace statistics and assert balance (no-op in release builds) */
+  lunet_trace_dump();
+  lunet_trace_assert_balanced("shutdown");
+  
   lua_close(L);
   return ret;
 }

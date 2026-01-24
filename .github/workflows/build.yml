@@ -46,11 +46,11 @@ jobs:
 
     - name: Configure CMake (Windows)
       if: runner.os == 'Windows'
-      run: cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/cmake/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release
+      run: cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/cmake/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release -DLUNET_DB=sqlite3
 
     - name: Configure CMake (Unix)
       if: runner.os != 'Windows'
-      run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+      run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DLUNET_DB=sqlite3
 
     - name: Build
       run: cmake --build build --config Release

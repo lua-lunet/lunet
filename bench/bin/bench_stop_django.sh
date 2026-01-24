@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 TMP_DIR="$GIT_ROOT/.tmp"

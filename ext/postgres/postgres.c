@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "co.h"
+#include "trace.h"
 #include "uv.h"
 
 #define LUNET_PG_CONN_MT "lunet.pg.conn"
@@ -69,7 +70,7 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   lua_State* L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.open\n");
@@ -147,12 +148,11 @@ int lunet_db_open(lua_State* L) {
   
   /* printf("DEBUG: conninfo='%s'\n", ctx->conninfo); */
 
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_open_work_cb, db_open_after_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx);
     lua_pushnil(L);
     lua_pushfstring(L, "db.open: uv_queue_work failed: %s", uv_strerror(ret));
@@ -225,7 +225,7 @@ static void db_query_after_cb(uv_work_t* req, int status) {
   lua_State* L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.query\n");
@@ -345,12 +345,11 @@ int lunet_db_query(lua_State* L) {
     return 2;
   }
 
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_query_work_cb, db_query_after_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx->query);
     free(ctx);
     lua_pushnil(L);
@@ -407,7 +406,7 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
   lua_State* L = ctx->L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.exec\n");
@@ -490,12 +489,11 @@ int lunet_db_exec(lua_State* L) {
     return 2;
   }
 
-  lua_pushthread(L);
-  ctx->co_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+  lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_exec_work_cb, db_exec_after_cb);
   if (ret < 0) {
-    luaL_unref(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
     free(ctx->query);
     free(ctx);
     lua_pushnil(L);
@@ -531,4 +529,17 @@ int lunet_db_escape(lua_State* L) {
     return lua_error(L);
   }
   return 1;
+}
+
+// Placeholder implementations for parameter functions (to be implemented)
+int lunet_db_query_params(lua_State* L) {
+  // For now, just delegate to the regular query function
+  // This maintains API compatibility while we implement prepared statements
+  return lunet_db_query(L);
+}
+
+int lunet_db_exec_params(lua_State* L) {
+  // For now, just delegate to the regular exec function
+  // This maintains API compatibility while we implement prepared statements
+  return lunet_db_exec(L);
 }

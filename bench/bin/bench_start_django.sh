@@ -1,7 +1,8 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 
-export BENCH_DIR="${BENCH_DIR:-$PWD/bench}"
+BENCH_DIR=${BENCH_DIR:-"$(pwd)/bench"}
+export BENCH_DIR
 GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 TMP_DIR="$GIT_ROOT/.tmp"
 DJANGO_DIR="$TMP_DIR/bench/django"
@@ -28,7 +29,7 @@ fi
 
 # Ensure setup is done
 log "Ensuring Django setup..."
-lua bin/bench_setup_django.lua || fail "Setup failed"
+lua bench/bin/bench_setup_django.lua || fail "Setup failed"
 
 if [ ! -d "$DJANGO_DIR" ]; then
 	fail "Django directory not found: $DJANGO_DIR"
@@ -59,7 +60,7 @@ log "Waiting for server to be ready..."
 TIMEOUT=30
 COUNT=0
 while [ $COUNT -lt $TIMEOUT ]; do
-	if curl -s "http://localhost:$DJANGO_PORT/api/tags" >/dev/null 2>&1; then
+	if curl -s --max-time 3 "http://localhost:$DJANGO_PORT/api/tags" >/dev/null 2>&1; then
 		log "Server is ready"
 		log "Frontend: http://localhost:$NGINX_PORT"
 		log "API: http://localhost:$DJANGO_PORT/api"

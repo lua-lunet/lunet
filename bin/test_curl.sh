@@ -12,17 +12,17 @@
 
 # Check if port 8080 is open
 if ! lsof -i :8080 -sTCP:LISTEN >/dev/null 2>&1; then
-    echo "ERROR: Port 8080 is NOT open. Cannot run curl."
-    exit 1
+	echo "ERROR: Port 8080 is NOT open. Cannot run curl."
+	exit 1
 fi
 
-TS=$(date +%Y%m%d_%H%M%S_%3N)
+TS=$(date +%Y%m%d_%H%M%S)_$$
 LOGDIR=".tmp/logs/$TS"
 mkdir -p "$LOGDIR"
 LOGFILE="$LOGDIR/curl.log"
 
 echo "Running curl with timeout 3s..." | tee -a "$LOGFILE"
-curl -v --max-time 3 "$@" >> "$LOGFILE" 2>&1
+curl -v --max-time 3 "$@" >>"$LOGFILE" 2>&1
 EXIT_CODE=$?
 
 echo "Curl exit code: $EXIT_CODE" | tee -a "$LOGFILE"

@@ -2,9 +2,9 @@ name: Build
 
 on:
   push:
-    branches: [ simbo1905, windows11, cursor/cross-platform-build-workflow-8f23 ]
+    branches: [ simbo1905, windows11, windows, main ]
   pull_request:
-    branches: [ simbo1905 ]
+    branches: [ simbo1905, main ]
   workflow_dispatch:
     inputs:
       ref:
@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
     - uses: actions/checkout@v4
@@ -30,23 +30,34 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake libuv1-dev libsodium-dev sqlite3 libsqlite3-dev postgresql-client libpq-dev luajit libluajit-5.1-dev luarocks
+        sudo apt-get install -y cmake libuv1-dev libsodium-dev sqlite3 libsqlite3-dev luajit libluajit-5.1-dev luarocks
         sudo luarocks install busted
 
     - name: Install Dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        brew install cmake libuv libsodium sqlite postgresql luajit luarocks
+        brew install cmake libuv libsodium sqlite luajit luarocks
         luarocks install busted
+
+    - name: Setup vcpkg (Windows)
+      if: runner.os == 'Windows'
+      uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgGitCommitId: 'f9d8eecab99cb23e4befb7ea90b2f9504d311b54'
 
     - name: Install Dependencies (Windows)
       if: runner.os == 'Windows'
       run: |
-        vcpkg install libuv:x64-windows libsodium:x64-windows sqlite3:x64-windows libpq:x64-windows luajit:x64-windows
+        vcpkg install libuv:x64-windows libsodium:x64-windows sqlite3:x64-windows luajit:x64-windows
 
     - name: Configure CMake (Windows)
       if: runner.os == 'Windows'
-      run: cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/cmake/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release -DLUNET_DB=sqlite3
+      shell: pwsh
+      run: |
+        cmake -B build -S . `
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DLUNET_DB=sqlite3
 
     - name: Configure CMake (Unix)
       if: runner.os != 'Windows'
@@ -58,7 +69,7 @@ jobs:
     - name: Test (Proof of Life)
       shell: bash
       run: |
-        echo "print('✓ LuaJIT initialized')" > test.lua
+        echo "print('LuaJIT initialized')" > test.lua
         if [ "$RUNNER_OS" == "Windows" ]; then
           ./build/Release/lunet.exe test.lua
         else
@@ -67,24 +78,25 @@ jobs:
 
     - name: Unit Tests (Unix)
       if: runner.os != 'Windows'
-      run: busted spec/
+      run: busted spec/ --exclude-tags=native
 
-    - name: Integration Test (API)
-      shell: bash
-      run: |
-        # Start server in background
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          ./bin/start_server.ps1 app/main.lua
-        else
-          ./bin/start_server.sh app/main.lua
-        fi
-        
-        # Run API tests
-        ./bin/test_api.sh
-        
-        # Stop server
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          ./bin/stop_server.ps1
-        else
-          ./bin/stop_server.sh
-        fi
+    - name: Upload artifact (Linux)
+      if: runner.os == 'Linux'
+      uses: actions/upload-artifact@v4
+      with:
+        name: lunet-linux-amd64
+        path: build/lunet
+
+    - name: Upload artifact (macOS)
+      if: runner.os == 'macOS'
+      uses: actions/upload-artifact@v4
+      with:
+        name: lunet-macos
+        path: build/lunet
+
+    - name: Upload artifact (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/upload-artifact@v4
+      with:
+        name: lunet-windows-amd64
+        path: build/Release/

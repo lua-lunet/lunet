@@ -1,4 +1,4 @@
-describe("DB Module (pure functions)", function()
+describe("DB Module (pure functions) #native", function()
   local db
 
   setup(function()

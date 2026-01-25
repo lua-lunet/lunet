@@ -1,6 +1,7 @@
 .env
 .cache
 build/
+build_*
 .vscode
 .tmp/
 .idea

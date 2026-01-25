@@ -1,5 +1,6 @@
 .PHONY: all build init test clean run stop wui init-bench bench-django bench-django-stop help
 .PHONY: lint build-debug stress release
+.PHONY: rocks rock-core rock-sqlite3 rock-mysql rock-postgres rocks-manifest
 
 all: build ## Build the project (default)
 
@@ -132,6 +133,25 @@ bench-django: ## Start Django benchmark environment
 bench-django-stop: ## Stop Django benchmark environment
 	@echo "Stopping Django benchmark server..."
 	bench/bin/bench_stop_django.sh || true
+
+# =============================================================================
+# LuaRocks Package Distribution
+# Creates modular rocks for GitHub distribution (Pages/Releases/Packages)
+# =============================================================================
+
+rocks: rocks-validate ## Validate all rockspecs
+	@echo ""
+	@echo "=== Rockspecs validated ==="
+	@echo "Rockspecs in: rocks/"
+	@ls -1 rocks/*.rockspec
+
+rocks-validate: ## Validate rockspec syntax
+	@echo "=== Validating rockspecs ==="
+	@for spec in rocks/*.rockspec; do \
+		echo "  Checking $$spec..."; \
+		lua -e "dofile('$$spec')" || exit 1; \
+	done
+	@echo "All rockspecs valid."
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'

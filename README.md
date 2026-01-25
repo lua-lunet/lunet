@@ -464,6 +464,42 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 | [03_mcp_sse.lua](examples/03_mcp_sse.lua) | MCP SSE server with Tavily search (18x smaller than Node.js) |
 | [mcp_stdio_pure.lua](examples/mcp_stdio_pure.lua) | Pure Lua stdio MCP for ablation testing |
 
+## Modular LuaRocks Packages
+
+Lunet is distributed as modular LuaRocks packages, enabling minimal installations for lightweight use cases.
+
+### Package Structure
+
+| Package | Purpose | Dependencies |
+|---------|---------|--------------|
+| **lunet-core** | Event loop, coroutines, sockets, JSON | libuv, luajit, libsodium |
+| **lunet-sqlite3** | SQLite3 driver | lunet-core, sqlite3 |
+| **lunet-mysql** | MySQL driver | lunet-core, libmysqlclient |
+| **lunet-postgres** | PostgreSQL driver | lunet-core, libpq |
+
+### Installing from GitHub
+
+Rockspecs are available in the `rocks/` directory and can be installed directly:
+
+```bash
+# Install from GitHub (using rockspec URL)
+luarocks install https://raw.githubusercontent.com/lua-lunet/lunet/main/rocks/lunet-core-scm-0.rockspec
+
+# Or clone and install locally
+git clone https://github.com/lua-lunet/lunet.git
+cd lunet
+luarocks make rocks/lunet-core-scm-0.rockspec
+```
+
+### Validating Rockspecs
+
+```bash
+# Validate all rockspecs
+make rocks
+```
+
+The `rocks/` directory contains rockspecs following LuaRocks conventions. Distribution is via GitHub (Releases, Pages, or direct URLs).
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

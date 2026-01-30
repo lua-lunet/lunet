@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32) && !defined(__CYGWIN__)
+#include <pthread.h>
+#endif
 #include <uv.h>
 
 #include "lunet_lua.h"

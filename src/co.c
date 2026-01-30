@@ -1,6 +1,6 @@
 #include "co.h"
 
-#include <lauxlib.h>
+#include <stdio.h>
 
 int lunet_spawn(lua_State *L) {
   luaL_checktype(L, 1, LUA_TFUNCTION);

@@ -1,6 +1,5 @@
 #include "timer.h"
 
-#include <lauxlib.h>
 #include <stdlib.h>
 #include <uv.h>
 

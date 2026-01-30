@@ -88,10 +88,18 @@ end
 
 -- Watchdog - kills test if it hangs
 local function watchdog()
-    lunet.sleep(TIMEOUT_MS)
+    local waited = 0
+    while waited < TIMEOUT_MS and not _G.__lunet_exit_code do
+        lunet.sleep(100)
+        waited = waited + 100
+    end
+    if _G.__lunet_exit_code then
+        return
+    end
     io.stderr:write(string.format("\n[STRESS] TIMEOUT after %dms!\n", TIMEOUT_MS))
     io.stderr:write(string.format("[STRESS] Completed: %d/%d workers, %d ops, %d errors\n",
         completed_workers, NUM_WORKERS, completed_ops, errors))
+    -- Hard-exit on timeout to avoid wedging CI; this will skip trace shutdown.
     os.exit(1)
 end
 
@@ -126,9 +134,9 @@ lunet.spawn(function()
     
     if errors > 0 then
         print("[STRESS] FAILED - errors detected")
-        os.exit(1)
+        _G.__lunet_exit_code = 1
     else
         print("[STRESS] PASSED")
-        os.exit(0)
+        _G.__lunet_exit_code = 0
     end
 end)

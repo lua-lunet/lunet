@@ -1,7 +1,7 @@
 #ifndef SOCKET_H
 #define SOCKET_H
 
-#include <lua.h>
+#include "lunet_lua.h"
 int lunet_socket_listen(lua_State *L);
 int lunet_socket_accept(lua_State *L);
 int lunet_socket_getpeername(lua_State *L);

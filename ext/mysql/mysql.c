@@ -1,7 +1,5 @@
 #include "mysql.h"
 
-#include <lauxlib.h>
-#include <lua.h>
 #include <mysql/mysql.h>
 #include <stdlib.h>
 #include <string.h>

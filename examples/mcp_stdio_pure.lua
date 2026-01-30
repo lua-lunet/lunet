@@ -10,13 +10,12 @@
 --   # Or with LuaJIT:
 --   luajit examples/mcp_stdio_pure.lua
 --
--- Memory Comparison (measured 2026-01-19):
+-- Memory Usage (measured 2026-01-19):
 --
---   Implementation                   RSS (MB)    vs Node.js
---   --------------------------------------------------------
---   Pure Lua stdio (this file)          1.6       24x smaller
---   Lunet SSE server (LuaJIT+libuv)     2.2       18x smaller
---   Official Tavily MCP (Node.js)      38.0       baseline
+--   Implementation                   RSS (MB)
+--   ------------------------------------------
+--   Pure Lua stdio (this file)          1.6
+--   Lunet SSE server (LuaJIT+libuv)     2.2
 --
 -- Ablation Result:
 --   libuv/networking overhead = 2.2 - 1.6 = 0.6 MB (~27% of total)

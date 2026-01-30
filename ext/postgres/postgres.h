@@ -1,7 +1,7 @@
 #ifndef LUNET_DB_POSTGRES_H
 #define LUNET_DB_POSTGRES_H
 
-#include <lua.h>
+#include "lunet_lua.h"
 
 int lunet_db_open(lua_State* L);
 int lunet_db_close(lua_State* L);

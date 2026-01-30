@@ -23,28 +23,21 @@
 --     -H "Content-Type: application/json" \
 --     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}'
 --
--- Memory Comparison (measured 2026-01-19):
+-- Memory Usage (measured 2026-01-19):
 --
---   Implementation                   RSS (MB)    vs Node.js
---   --------------------------------------------------------
---   Pure Lua stdio (no networking)      1.6       24x smaller
---   Lunet SSE server (LuaJIT+libuv)     2.2       18x smaller
---   Official Tavily MCP (Node.js)      38.0       baseline
+--   Implementation                   RSS (MB)
+--   ------------------------------------------
+--   Pure Lua stdio (no networking)      1.6
+--   Lunet SSE server (LuaJIT+libuv)     2.2
 --
 -- Ablation Analysis:
 --   The pure Lua stdio server (mcp_stdio_pure.lua) uses only 1.6 MB,
 --   while this SSE server uses 2.2 MB. The difference (~0.6 MB) is the
 --   overhead of the libuv event loop and TCP socket handling.
 --
---   Both implementations use curl for HTTPS (Tavily API), so that cost
---   is identical. The 18x memory savings vs Node.js comes from:
---     - LuaJIT: Compact bytecode, efficient GC (~1.6 MB baseline)
---     - libuv: Minimal C library (~0.6 MB overhead)
---     - No V8: Node.js JIT compiler is memory-hungry
---
 -- The Lunet implementation uses:
 --   - LuaJIT: Fast JIT-compiled Lua runtime
---   - libuv: Async I/O (same as Node.js core)
+--   - libuv: Async I/O event loop
 --   - curl: For HTTPS requests to Tavily API (no TLS in Lunet yet)
 
 local lunet = require("lunet")

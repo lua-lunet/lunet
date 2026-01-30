@@ -11,3 +11,5 @@ bench/django/*.pid
 bench/django/*.log
 .idea/
 conduit.db
+.xmake/
+tmp/

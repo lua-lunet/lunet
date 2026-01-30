@@ -1,7 +1,7 @@
 #ifndef LUNET_SIGNAL_H
 #define LUNET_SIGNAL_H
 
-#include <lua.h>
+#include "lunet_lua.h"
 
 int lunet_signal_wait(lua_State *L);
 

@@ -1,7 +1,5 @@
 #include "lunet_sqlite3.h"
 
-#include <lauxlib.h>
-#include <lua.h>
 #include <sqlite3.h>
 #include <stdlib.h>
 #include <string.h>

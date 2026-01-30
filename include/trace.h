@@ -1,8 +1,7 @@
 #ifndef TRACE_H
 #define TRACE_H
 
-#include <lua.h>
-#include <lauxlib.h>
+#include "lunet_lua.h"
 #include "co.h"  /* For _lunet_ensure_coroutine */
 
 /*

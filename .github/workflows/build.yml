@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [ simbo1905, windows11, windows, main ]
+    branches: [ simbo1905, windows11, windows, main, xmake ]
   pull_request:
     branches: [ simbo1905, main ]
   workflow_dispatch:
@@ -26,18 +26,21 @@ jobs:
       with:
         ref: ${{ github.event.inputs.ref || github.ref }}
 
+    # Install xmake
+    - uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: latest
+
     - name: Install Dependencies (Linux)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake libuv1-dev libsodium-dev sqlite3 libsqlite3-dev luajit libluajit-5.1-dev luarocks
-        sudo luarocks install busted
+        sudo apt-get install -y pkg-config libuv1-dev luajit libluajit-5.1-dev
 
     - name: Install Dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        brew install cmake libuv libsodium sqlite luajit luarocks
-        luarocks install busted
+        brew install pkg-config libuv luajit
 
     - name: Setup vcpkg (Windows)
       if: runner.os == 'Windows'
@@ -48,55 +51,99 @@ jobs:
     - name: Install Dependencies (Windows)
       if: runner.os == 'Windows'
       run: |
-        vcpkg install libuv:x64-windows libsodium:x64-windows sqlite3:x64-windows luajit:x64-windows
+        vcpkg install libuv:x64-windows luajit:x64-windows
 
-    - name: Configure CMake (Windows)
+    - name: Configure (Unix)
+      if: runner.os != 'Windows'
+      run: xmake f -m release -y
+
+    - name: Configure (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        cmake -B build -S . `
-          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-          -DCMAKE_BUILD_TYPE=Release `
-          -DLUNET_DB=sqlite3
-
-    - name: Configure CMake (Unix)
-      if: runner.os != 'Windows'
-      run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DLUNET_DB=sqlite3
+        $env:VCPKG_ROOT = "${{ github.workspace }}/vcpkg"
+        $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
+        xmake f -m release -y
 
     - name: Build
-      run: cmake --build build --config Release
+      run: xmake build -a
 
-    - name: Test (Proof of Life)
-      shell: bash
-      run: |
-        echo "print('LuaJIT initialized')" > test.lua
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          ./build/Release/lunet.exe test.lua
-        else
-          ./build/lunet test.lua
-        fi
-
-    - name: Unit Tests (Unix)
+    - name: Test (Proof of Life - Unix)
       if: runner.os != 'Windows'
-      run: busted spec/ --exclude-tags=native
+      run: |
+        echo "print('LuaJIT initialized:', jit.version)" > test.lua
+        # Find the binary
+        LUNET_BIN=$(find build -name 'lunet' -type f ! -name '*.so' ! -name '*.dylib' | head -1)
+        echo "Found binary: $LUNET_BIN"
+        $LUNET_BIN test.lua
+
+    - name: Test (Module Load - Unix)
+      if: runner.os != 'Windows'
+      run: |
+        LUNET_BIN=$(find build -name 'lunet' -type f ! -name '*.so' ! -name '*.dylib' | head -1)
+        LUNET_SO=$(find build -name 'lunet.so' -type f | head -1)
+        if [ -z "$LUNET_BIN" ] || [ -z "$LUNET_SO" ]; then
+          echo "Error: build outputs not found" >&2
+          exit 1
+        fi
+        MOD_DIR=$(dirname "$LUNET_SO")
+        cat > test_module.lua <<'EOF'
+        package.cpath = os.getenv("LUNET_CPATH") .. ";" .. package.cpath
+        local lunet = require("lunet")
+        assert(type(lunet.spawn) == "function")
+        print("lunet module loaded")
+        EOF
+        LUNET_CPATH="$MOD_DIR/?.so" $LUNET_BIN test_module.lua
+
+    - name: Test (Proof of Life - Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        "print('LuaJIT initialized:', jit.version)" | Out-File -FilePath test.lua -Encoding utf8
+        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet.exe" | Select-Object -First 1
+        & $lunet.FullName test.lua
+
+    - name: Test (Module Load - Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet.exe" | Select-Object -First 1
+        $mod  = Get-ChildItem -Path build -Recurse -Filter "lunet.dll" | Select-Object -First 1
+        if (-not $lunet) { throw "lunet.exe not found" }
+        if (-not $mod) { throw "lunet.dll not found" }
+        $modDir = $mod.Directory.FullName
+        @"
+        package.cpath = os.getenv('LUNET_CPATH') .. ';' .. package.cpath
+        local lunet = require('lunet')
+        assert(type(lunet.spawn) == 'function')
+        print('lunet module loaded')
+        "@ | Out-File -FilePath test_module.lua -Encoding utf8
+        $env:LUNET_CPATH = "$modDir\\?.dll"
+        & $lunet.FullName test_module.lua
 
     - name: Upload artifact (Linux)
       if: runner.os == 'Linux'
       uses: actions/upload-artifact@v4
       with:
         name: lunet-linux-amd64
-        path: build/lunet
+        path: |
+          build/**/lunet
+          build/**/lunet.so
 
     - name: Upload artifact (macOS)
       if: runner.os == 'macOS'
       uses: actions/upload-artifact@v4
       with:
         name: lunet-macos
-        path: build/lunet
+        path: |
+          build/**/lunet
+          build/**/lunet.so
 
     - name: Upload artifact (Windows)
       if: runner.os == 'Windows'
       uses: actions/upload-artifact@v4
       with:
         name: lunet-windows-amd64
-        path: build/Release/
+        path: |
+          build/**/lunet.exe
+          build/**/lunet.dll

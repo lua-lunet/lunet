@@ -1,7 +1,7 @@
 #ifndef LUNET_LUNET_DB_MYSQL_H
 #define LUNET_LUNET_DB_MYSQL_H
 
-#include <lua.h>
+#include "lunet_lua.h"
 
 // Connection functions
 int lunet_db_open(lua_State* L);

@@ -10,9 +10,6 @@
 #include <unistd.h> // for unlink
 #endif
 
-#include <lauxlib.h>
-#include <lua.h>
-#include <lualib.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>

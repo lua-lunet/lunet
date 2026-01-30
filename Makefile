@@ -1,38 +1,34 @@
 .PHONY: all build init test clean run stop wui init-bench bench-django bench-django-stop help
-.PHONY: lint build-debug stress release
-.PHONY: rocks rock-core rock-sqlite3 rock-mysql rock-postgres rocks-manifest
+.PHONY: lint build-debug stress release rock
 
 all: build ## Build the project (default)
 
-LUNET_DB ?= sqlite3
-
 # =============================================================================
-# Build Targets
+# Build Targets (xmake)
 # =============================================================================
 
-build: lint ## Compile C core using CMake (use LUNET_DB=mysql|postgres|sqlite3)
-	@echo "=== Building lunet (release mode, LUNET_DB=$(LUNET_DB)) ==="
-	mkdir -p build
-	cd build && cmake -DLUNET_DB=$(LUNET_DB) -DLUNET_TRACE=OFF .. && make
-
-build-sqlite: ## Build with SQLite3 backend
-	$(MAKE) build LUNET_DB=sqlite3
-
-build-postgres: ## Build with PostgreSQL backend
-	$(MAKE) build LUNET_DB=postgres
-
-build-mysql: ## Build with MySQL backend
-	$(MAKE) build LUNET_DB=mysql
+build: lint ## Build lunet shared library and executable with xmake
+	@echo "=== Building lunet with xmake (release mode) ==="
+	xmake f -m release -y
+	xmake build -a
+	@echo ""
+	@echo "Build complete:"
+	@echo "  Module: $$(find build -path '*/release/lunet.so' -type f 2>/dev/null | head -1)"
+	@echo "  Binary: $$(find build -path '*/release/lunet' -type f 2>/dev/null | head -1)"
 
 build-debug: lint ## Build with LUNET_TRACE=ON for debugging (enables safety assertions)
-	@echo "=== Building lunet (debug mode with tracing, LUNET_DB=$(LUNET_DB)) ==="
+	@echo "=== Building lunet with xmake (debug mode with tracing) ==="
 	@echo "This build includes zero-cost tracing that will:"
 	@echo "  - Track coroutine reference create/release balance"
 	@echo "  - Verify stack integrity after coroutine checks"
 	@echo "  - CRASH on bugs (that's the point - find them early!)"
 	@echo ""
-	mkdir -p build
-	cd build && cmake -DLUNET_DB=$(LUNET_DB) -DLUNET_TRACE=ON .. && make
+	xmake f -m debug --trace=y -y
+	xmake build -a
+	@echo ""
+	@echo "Build complete:"
+	@echo "  Module: $$(find build -path '*/debug/lunet.so' -type f 2>/dev/null | head -1)"
+	@echo "  Binary: $$(find build -path '*/debug/lunet' -type f 2>/dev/null | head -1)"
 
 # =============================================================================
 # Quality Assurance
@@ -64,8 +60,10 @@ stress: build-debug ## Run concurrent stress test with tracing enabled
 	@echo "If tracing detects imbalanced refs or stack corruption, it will CRASH."
 	@echo "Config: STRESS_WORKERS=$${STRESS_WORKERS:-50} STRESS_OPS=$${STRESS_OPS:-100}"
 	@echo ""
-	@# Run stress test (config via env vars, defaults: 50 workers x 100 ops)
-	STRESS_WORKERS=$${STRESS_WORKERS:-50} STRESS_OPS=$${STRESS_OPS:-100} ./build/lunet test/stress_test.lua
+	@# Find the built debug binary (must include LUNET_TRACE)
+	@LUNET_BIN=$$(find build -path '*/debug/lunet' -type f 2>/dev/null | head -1); \
+	if [ -z "$$LUNET_BIN" ]; then echo "Error: lunet binary not found"; exit 1; fi; \
+	STRESS_WORKERS=$${STRESS_WORKERS:-50} STRESS_OPS=$${STRESS_OPS:-100} $$LUNET_BIN test/stress_test.lua
 	@echo ""
 	@echo "=== Stress test completed successfully ==="
 
@@ -82,10 +80,17 @@ release: lint test stress ## Full release build: lint + test + stress + optimize
 	@echo "Binary: ./build/lunet"
 
 clean: ## Archive build artifacts to .tmp (safe clean)
-	@echo "Refusing to rm -rf. Move build to .tmp with timestamp instead."
+	@echo "Archiving build artifacts to .tmp..."
 	@TS=$$(date +%Y%m%d_%H%M%S); \
-	if [ -d build ]; then mkdir -p .tmp && mv build .tmp/build.$$TS; echo "Moved build -> .tmp/build.$$TS"; \
-	else echo "No build/ directory to move."; fi
+	mkdir -p .tmp; \
+	if [ -d build ]; then mv build .tmp/build.$$TS; echo "Moved build -> .tmp/build.$$TS"; \
+	else echo "No build/ directory to move."; fi; \
+	if [ -d .xmake ]; then mv .xmake .tmp/.xmake.$$TS; echo "Moved .xmake -> .tmp/.xmake.$$TS"; \
+	else echo "No .xmake/ directory to move."; fi
+
+rock: lint ## Build and install lunet via LuaRocks
+	@echo "=== Building LuaRocks package ==="
+	luarocks make lunet-scm-1.rockspec
 
 # App targets
 run: ## Start the API backend
@@ -136,20 +141,15 @@ bench-django-stop: ## Stop Django benchmark environment
 
 # =============================================================================
 # LuaRocks Package Distribution
-# Creates modular rocks for GitHub distribution (Pages/Releases/Packages)
 # =============================================================================
-
-rocks: rocks-validate ## Validate all rockspecs
-	@echo ""
-	@echo "=== Rockspecs validated ==="
-	@echo "Rockspecs in: rocks/"
-	@ls -1 rocks/*.rockspec
 
 rocks-validate: ## Validate rockspec syntax
 	@echo "=== Validating rockspecs ==="
-	@for spec in rocks/*.rockspec; do \
-		echo "  Checking $$spec..."; \
-		lua -e "dofile('$$spec')" || exit 1; \
+	@for spec in *.rockspec; do \
+		if [ -f "$$spec" ]; then \
+			echo "  Checking $$spec..."; \
+			lua -e "dofile('$$spec')" || exit 1; \
+		fi; \
 	done
 	@echo "All rockspecs valid."
 

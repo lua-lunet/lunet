@@ -1,11 +1,10 @@
-#include <lauxlib.h>
-#include <lua.h>
-#include <lualib.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>
 
+#include "lunet_lua.h"
+#include "lunet_exports.h"
 #include "co.h"
 #include "fs.h"
 #include "lunet_signal.h"
@@ -133,6 +132,25 @@ void lunet_open(lua_State *L) {
 #endif
 }
 
+/**
+ * Module entry point for require("lunet")
+ * 
+ * This function is called when lunet is loaded as a C module via LuaRocks.
+ * It initializes the runtime, registers all submodules in package.preload,
+ * and returns the core module table.
+ * 
+ * Usage from Lua:
+ *   local lunet = require("lunet")
+ *   lunet.spawn(function() ... end)
+ */
+LUNET_API int luaopen_lunet(lua_State *L) {
+  lunet_trace_init();
+  set_default_luaL(L);
+  lunet_open(L);  // Register submodules in package.preload
+  return lunet_open_core(L);  // Return core module table
+}
+
+#ifndef LUNET_NO_MAIN
 int main(int argc, char **argv) {
   if (argc < 2) {
     fprintf(stderr, "Usage: %s [OPTIONS] <lua_file>\n", argv[0]);
@@ -180,6 +198,16 @@ int main(int argc, char **argv) {
   }
 
   int ret = uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+
+  /* Optional: allow Lua script to control process exit status.
+   * Used by stress tests so we can exit without os.exit() (which skips trace shutdown).
+   */
+  int lua_exit_code = -1;
+  lua_getglobal(L, "__lunet_exit_code");
+  if (lua_isnumber(L, -1)) {
+    lua_exit_code = (int)lua_tointeger(L, -1);
+  }
+  lua_pop(L, 1);
   
   /* Dump trace statistics and assert balance (no-op in release builds) */
 #ifdef LUNET_TRACE
@@ -189,5 +217,9 @@ int main(int argc, char **argv) {
   lunet_trace_assert_balanced("shutdown");
   
   lua_close(L);
+  if (lua_exit_code >= 0) {
+    return lua_exit_code;
+  }
   return ret;
 }
+#endif

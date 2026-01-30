@@ -1,8 +1,6 @@
 #include "postgres.h"
 
-#include <lauxlib.h>
 #include <libpq-fe.h>
-#include <lua.h>
 #include <stdlib.h>
 #include <string.h>
 

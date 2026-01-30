@@ -1,7 +1,7 @@
 #ifndef CO_H
 #define CO_H
 
-#include <lua.h>
+#include "lunet_lua.h"
 
 int lunet_spawn(lua_State *L);
 

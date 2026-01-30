@@ -9,8 +9,6 @@
 #include <sys/socket.h>
 #endif
 
-#include <lauxlib.h>
-#include <lua.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>

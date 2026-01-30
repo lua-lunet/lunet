@@ -1,7 +1,7 @@
 #ifndef UDP_H
 #define UDP_H
 
-#include <lua.h>
+#include "lunet_lua.h"
 
 int lunet_udp_bind(lua_State *L);
 int lunet_udp_send(lua_State *L);

@@ -6,6 +6,39 @@ A high-performance coroutine-based networking library for LuaJIT, built on top o
 
 > This project is based on [xialeistudio/lunet](https://github.com/xialeistudio/lunet) by [夏磊 (Xia Lei)](https://github.com/xialeistudio). See also his excellent write-up: [Lunet: Design and Implementation of a High-Performance Coroutine Network Library](https://www.ddhigh.com/en/2025/07/12/lunet-high-performance-coroutine-network-library/).
 
+## Philosophy: No Bloat, No Kitchen Sink
+
+Lunet is **modular by design**. You install only what you need:
+
+- **Core** (`lunet`): TCP/UDP sockets, filesystem, timers, signals
+- **Database drivers** (separate packages):
+  - `lunet-sqlite3` - SQLite3 driver
+  - `lunet-mysql` - MySQL/MariaDB driver
+  - `lunet-postgres` - PostgreSQL driver
+
+Install one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
+
+```bash
+# Install core
+luarocks install lunet
+
+# Install ONLY the database driver you need
+luarocks install lunet-sqlite3   # OR
+luarocks install lunet-mysql     # OR
+luarocks install lunet-postgres
+```
+
+### Why use lunet database drivers?
+
+You might think "I can just use LuaJIT FFI to call sqlite3/libpq/libmysqlclient directly" - and you can. But those calls are **blocking**. They will freeze your entire event loop while waiting for the database.
+
+Lunet database drivers are **coroutine-safe**:
+- Queries run on libuv's thread pool (`uv_work_t`)
+- Connections are mutex-protected for safe concurrent access
+- Your coroutine yields while waiting, other coroutines keep running
+
+If you use raw FFI database bindings inside a lunet application, you lose all the async benefits.
+
 ## Build
 
 ```bash

@@ -6,6 +6,39 @@
 
 > 本项目基于 [夏磊 (Xia Lei)](https://github.com/xialeistudio) 的 [xialeistudio/lunet](https://github.com/xialeistudio/lunet)。详见他的精彩文章：[Lunet：高性能协程网络库的设计与实现](https://www.ddhigh.com/2025/07/12/lunet-high-performance-coroutine-network-library/)。
 
+## 设计理念：无冗余，无臃肿
+
+Lunet 采用**模块化设计**。只安装你需要的：
+
+- **核心** (`lunet`)：TCP/UDP 套接字、文件系统、定时器、信号
+- **数据库驱动** (独立包)：
+  - `lunet-sqlite3` - SQLite3 驱动
+  - `lunet-mysql` - MySQL/MariaDB 驱动
+  - `lunet-postgres` - PostgreSQL 驱动
+
+只安装一个数据库驱动，而不是全部。没有未使用的依赖。不需要为从未使用的库打安全补丁。
+
+```bash
+# 安装核心
+luarocks install lunet
+
+# 只安装你需要的数据库驱动
+luarocks install lunet-sqlite3   # 或者
+luarocks install lunet-mysql     # 或者
+luarocks install lunet-postgres
+```
+
+### 为什么使用 lunet 数据库驱动？
+
+你可能会想"我可以直接用 LuaJIT FFI 调用 sqlite3/libpq/libmysqlclient"——确实可以。但这些调用是**阻塞的**。它们会在等待数据库时冻结整个事件循环。
+
+Lunet 数据库驱动是**协程安全的**：
+- 查询在 libuv 线程池上运行 (`uv_work_t`)
+- 连接使用互斥锁保护，支持安全的并发访问
+- 协程在等待时让出执行权，其他协程继续运行
+
+如果在 lunet 应用中使用原生 FFI 数据库绑定，你将失去所有异步优势。
+
 ## 构建
 
 ```bash

@@ -4,7 +4,7 @@
 
 // Initialize queue
 queue_t* queue_init(void) {
-  queue_t* queue = malloc(sizeof(queue_t));
+  queue_t* queue = (queue_t*)malloc(sizeof(queue_t));
   if (!queue) return NULL;
   queue->head = NULL;
   queue->tail = NULL;
@@ -26,7 +26,7 @@ void queue_destroy(queue_t* queue) {
 int queue_enqueue(queue_t* queue, void* data) {
   if (!queue) return -1;
 
-  queue_node_t* node = malloc(sizeof(queue_node_t));
+  queue_node_t* node = (queue_node_t*)malloc(sizeof(queue_node_t));
   if (!node) return -1;  // memory allocation failed
 
   node->data = data;

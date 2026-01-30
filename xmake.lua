@@ -78,6 +78,8 @@ target("lunet")
     
     -- Windows: export the module entry point and system libs
     if is_plat("windows") then
+        -- Force MSVC to compile .c files as C (not C++).
+        add_cflags("/TC")
         add_defines("LUNET_BUILDING_DLL")
         add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi")
     end
@@ -106,6 +108,7 @@ target("lunet-bin")
     
     -- Windows: system libs
     if is_plat("windows") then
+        add_cflags("/TC")
         add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi")
     end
     

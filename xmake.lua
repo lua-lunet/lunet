@@ -68,6 +68,10 @@ target("lunet")
     
     -- Linux: system libs
     if is_plat("linux") then
+        -- Ensure pthread types/macros are visible in libuv headers and link correctly.
+        -- (Some libc setups require -pthread for pthread_rwlock_t.)
+        add_cflags("-pthread")
+        add_ldflags("-pthread")
         add_syslinks("pthread", "dl", "m")
     end
     
@@ -93,6 +97,8 @@ target("lunet-bin")
     
     -- Linux: system libs
     if is_plat("linux") then
+        add_cflags("-pthread")
+        add_ldflags("-pthread")
         add_syslinks("pthread", "dl", "m")
     end
     

@@ -13,11 +13,42 @@
 
 /*
  * Include luajit.h FIRST to get LUAJIT_VERSION defined.
- * If the include path is wrong (pointing at PUC Lua), this will either:
- * - Fail to find luajit.h (good - obvious error), or
- * - Find lua.h without LUAJIT_VERSION defined (caught by guard below)
+ *
+ * Notes:
+ * - Unix (Homebrew/Debian): headers usually live directly in the include dir
+ *   (e.g. .../include/luajit-2.1/luajit.h, lua.h, lauxlib.h, lualib.h)
+ * - Windows (vcpkg): headers are typically nested under a "luajit" directory
+ *   (e.g. .../include/luajit/luajit.h, .../include/luajit/lua.h)
  */
-#include <luajit.h>
+#if defined(_WIN32) || defined(__CYGWIN__)
+  #if defined(__has_include)
+    #if __has_include(<luajit/luajit.h>)
+      #include <luajit/luajit.h>
+      #include <luajit/lua.h>
+      #include <luajit/lauxlib.h>
+      #include <luajit/lualib.h>
+    #elif __has_include(<luajit.h>)
+      #include <luajit.h>
+      #include <lua.h>
+      #include <lauxlib.h>
+      #include <lualib.h>
+    #else
+      #error "LuaJIT headers not found. Ensure vcpkg luajit is installed and include paths are configured."
+    #endif
+  #else
+    /* Best effort fallback for older preprocessors */
+    #include <luajit/luajit.h>
+    #include <luajit/lua.h>
+    #include <luajit/lauxlib.h>
+    #include <luajit/lualib.h>
+  #endif
+#else
+  #include <luajit.h>
+  /* Now safe to include the rest of the Lua API */
+  #include <lua.h>
+  #include <lauxlib.h>
+  #include <lualib.h>
+#endif
 
 /*
  * HARD GUARD: Reject anything that isn't LuaJIT.
@@ -41,10 +72,5 @@
 #ifndef LUAJIT_VERSION
 #error "Lunet requires LuaJIT. PUC Lua (5.2, 5.3, 5.4) is NOT supported. Check your include paths."
 #endif
-
-/* Now safe to include the rest of the Lua API */
-#include <lua.h>
-#include <lauxlib.h>
-#include <lualib.h>
 
 #endif /* LUNET_LUA_H */

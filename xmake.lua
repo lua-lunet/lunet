@@ -31,15 +31,28 @@ local core_sources = {
     "src/trace.c"
 }
 
--- Use pkg-config packages on Unix, vcpkg on Windows
+-- =============================================================================
+-- Package Requirements (MUST be at root scope, before any targets)
+-- =============================================================================
+
+-- Core dependencies (required)
 if is_plat("windows") then
-    -- Windows: vcpkg integration
     add_requires("vcpkg::luajit", {alias = "luajit"})
     add_requires("vcpkg::libuv", {alias = "libuv"})
 else
-    -- Unix: pkg-config
     add_requires("pkgconfig::luajit", {alias = "luajit"})
     add_requires("pkgconfig::libuv", {alias = "libuv"})
+end
+
+-- Database driver dependencies (optional - only needed if building driver targets)
+if is_plat("windows") then
+    add_requires("vcpkg::sqlite3", {alias = "sqlite3", optional = true})
+    add_requires("vcpkg::libmysql", {alias = "mysql", optional = true})
+    add_requires("vcpkg::libpq", {alias = "pq", optional = true})
+else
+    add_requires("pkgconfig::sqlite3", {alias = "sqlite3", optional = true})
+    add_requires("pkgconfig::mysqlclient", {alias = "mysql", optional = true})
+    add_requires("pkgconfig::libpq", {alias = "pq", optional = true})
 end
 
 -- Shared library target for require("lunet")
@@ -124,82 +137,107 @@ target("lunet-bin")
 -- Each driver produces a lunet.db module. Install only ONE driver.
 -- Usage: xmake build lunet-sqlite3  (or lunet-mysql, lunet-postgres)
 
--- Helper function to configure a database driver target
-local function db_driver_target(name, driver_source, db_package)
-    target(name)
-        set_kind("shared")
-        set_prefixname("")
-        if is_plat("windows") then
-            set_extension(".dll")
-        else
-            set_extension(".so")
-        end
-        
-        -- Core sources + driver source
-        add_files(core_sources)
-        add_files(driver_source)
-        add_includedirs("include", "ext/" .. name:gsub("lunet%-", ""), {public = true})
-        add_packages("luajit", "libuv", db_package)
-        
-        -- Enable the unified db module
-        add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB")
-        
-        -- macOS: build as a bundle
-        if is_plat("macosx") then
-            add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
-        end
-        
-        -- Linux: system libs
-        if is_plat("linux") then
-            add_defines("_GNU_SOURCE")
-            add_cflags("-pthread")
-            add_ldflags("-pthread")
-            add_syslinks("pthread", "dl", "m")
-        end
-        
-        -- Windows: system libs
-        if is_plat("windows") then
-            add_cflags("/TC")
-            add_defines("LUNET_BUILDING_DLL")
-            add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
-        end
-        
-        -- Enable tracing if requested
-        if has_config("trace") then
-            add_defines("LUNET_TRACE")
-        end
-    target_end()
-end
+-- SQLite3 driver
+target("lunet-sqlite3")
+    set_kind("shared")
+    set_prefixname("")
+    if is_plat("windows") then
+        set_extension(".dll")
+    else
+        set_extension(".so")
+    end
+    
+    add_files(core_sources)
+    add_files("ext/sqlite3/sqlite3.c")
+    add_includedirs("include", "ext/sqlite3", {public = true})
+    add_packages("luajit", "libuv", "sqlite3")
+    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB")
+    
+    if is_plat("macosx") then
+        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+    end
+    if is_plat("linux") then
+        add_defines("_GNU_SOURCE")
+        add_cflags("-pthread")
+        add_ldflags("-pthread")
+        add_syslinks("pthread", "dl", "m")
+    end
+    if is_plat("windows") then
+        add_cflags("/TC")
+        add_defines("LUNET_BUILDING_DLL")
+        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
+    end
+    if has_config("trace") then
+        add_defines("LUNET_TRACE")
+    end
+target_end()
 
--- SQLite3 driver: lunet-sqlite3
-if not is_plat("windows") then
-    add_requires("pkgconfig::sqlite3", {alias = "sqlite3", optional = true})
-else
-    add_requires("vcpkg::sqlite3", {alias = "sqlite3", optional = true})
-end
+-- MySQL driver
+target("lunet-mysql")
+    set_kind("shared")
+    set_prefixname("")
+    if is_plat("windows") then
+        set_extension(".dll")
+    else
+        set_extension(".so")
+    end
+    
+    add_files(core_sources)
+    add_files("ext/mysql/mysql.c")
+    add_includedirs("include", "ext/mysql", {public = true})
+    add_packages("luajit", "libuv", "mysql")
+    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB")
+    
+    if is_plat("macosx") then
+        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+    end
+    if is_plat("linux") then
+        add_defines("_GNU_SOURCE")
+        add_cflags("-pthread")
+        add_ldflags("-pthread")
+        add_syslinks("pthread", "dl", "m")
+    end
+    if is_plat("windows") then
+        add_cflags("/TC")
+        add_defines("LUNET_BUILDING_DLL")
+        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
+    end
+    if has_config("trace") then
+        add_defines("LUNET_TRACE")
+    end
+target_end()
 
-if has_package("sqlite3") then
-    db_driver_target("lunet-sqlite3", "ext/sqlite3/sqlite3.c", "sqlite3")
-end
-
--- MySQL driver: lunet-mysql
-if not is_plat("windows") then
-    add_requires("pkgconfig::mysqlclient", {alias = "mysql", optional = true})
-else
-    add_requires("vcpkg::libmysql", {alias = "mysql", optional = true})
-end
-
-if has_package("mysql") then
-    db_driver_target("lunet-mysql", "ext/mysql/mysql.c", "mysql")
-end
-
--- PostgreSQL driver: lunet-postgres
-if not is_plat("windows") then
-    add_requires("pkgconfig::libpq", {alias = "pq", optional = true})
-else
-    add_requires("vcpkg::libpq", {alias = "pq", optional = true})
-end
-
-if has_package("pq") then
-    db_driver_target("lunet-postgres", "ext/postgres/postgres.c", "pq")
-end
+-- PostgreSQL driver
+target("lunet-postgres")
+    set_kind("shared")
+    set_prefixname("")
+    if is_plat("windows") then
+        set_extension(".dll")
+    else
+        set_extension(".so")
+    end
+    
+    add_files(core_sources)
+    add_files("ext/postgres/postgres.c")
+    add_includedirs("include", "ext/postgres", {public = true})
+    add_packages("luajit", "libuv", "pq")
+    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB")
+    
+    if is_plat("macosx") then
+        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+    end
+    if is_plat("linux") then
+        add_defines("_GNU_SOURCE")
+        add_cflags("-pthread")
+        add_ldflags("-pthread")
+        add_syslinks("pthread", "dl", "m")
+    end
+    if is_plat("windows") then
+        add_cflags("/TC")
+        add_defines("LUNET_BUILDING_DLL")
+        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
+    end
+    if has_config("trace") then
+        add_defines("LUNET_TRACE")
+    end
+target_end()

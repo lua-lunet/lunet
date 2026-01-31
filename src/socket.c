@@ -7,7 +7,6 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <unistd.h> // for unlink
 #endif
 
 #include <stdlib.h>
@@ -28,23 +27,22 @@ static int is_loopback_address(const char *host) {
 }
 
 typedef enum {
-  SOCKET_DOMAIN_TCP,
-  SOCKET_DOMAIN_UNIX
-} socket_domain_t;
-
-typedef enum {
   SOCKET_SERVER,
   SOCKET_CLIENT,
 } socket_type_t;
 
 typedef struct {
+  uv_tcp_t tcp;
+  uv_handle_t handle;
+  uv_stream_t stream;
+} tcp_handle_t;
+
+typedef struct {
   union {
     uv_tcp_t tcp;
-    uv_pipe_t pipe;
     uv_handle_t handle;
     uv_stream_t stream;
   } u;
-  socket_domain_t domain;
   
   lua_State *co;
   socket_type_t type;
@@ -117,6 +115,8 @@ static void lunet_write_cb(uv_write_t *req, int status) {
 }
 
 static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
+  (void)handle;
+  (void)suggested_size;
   buf->base = malloc(read_buffer_size);
   buf->len = read_buffer_size;
 }
@@ -200,17 +200,10 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
 
   client_ctx->co = ctx->co;
   client_ctx->type = SOCKET_CLIENT;
-  client_ctx->domain = ctx->domain;
   client_ctx->client.read_ref = LUA_NOREF;
   client_ctx->client.write_ref = LUA_NOREF;
 
-  int ret = 0;
-  if (ctx->domain == SOCKET_DOMAIN_TCP) {
-      ret = uv_tcp_init(uv_default_loop(), &client_ctx->u.tcp);
-  } else {
-      ret = uv_pipe_init(uv_default_loop(), &client_ctx->u.pipe, 0);
-  }
-
+  int ret = uv_tcp_init(uv_default_loop(), &client_ctx->u.tcp);
   if (ret < 0) {
     free(client_ctx);
     return;
@@ -262,26 +255,24 @@ int lunet_socket_listen(lua_State *co) {
   const char *host = luaL_checkstring(co, 2);
   int port = luaL_checkinteger(co, 3);
 
-  socket_domain_t domain;
-  if (strcmp(protocol, "tcp") == 0) {
-      domain = SOCKET_DOMAIN_TCP;
-      // Check for secure binding configuration
-      if (!g_lunet_config.dangerously_skip_loopback_restriction && !is_loopback_address(host)) {
-        lua_pushnil(co);
-        lua_pushstring(co, "binding to non-loopback addresses requires --dangerously-skip-loopback-restriction flag");
-        return 2;
-      }
-      if (port < 1 || port > 65535) {
-        lua_pushnil(co);
-        lua_pushstring(co, "port must be between 1 and 65535");
-        return 2;
-      }
-  } else if (strcmp(protocol, "unix") == 0) {
-      domain = SOCKET_DOMAIN_UNIX;
-  } else {
-      lua_pushnil(co);
-      lua_pushstring(co, "only tcp and unix are supported");
-      return 2;
+  /* Only TCP is supported in the core socket module.
+   * For Unix sockets, use require("lunet.unix") */
+  if (strcmp(protocol, "tcp") != 0) {
+    lua_pushnil(co);
+    lua_pushstring(co, "only 'tcp' protocol is supported in socket module; for Unix sockets use require(\"lunet.unix\")");
+    return 2;
+  }
+
+  // Check for secure binding configuration
+  if (!g_lunet_config.dangerously_skip_loopback_restriction && !is_loopback_address(host)) {
+    lua_pushnil(co);
+    lua_pushstring(co, "binding to non-loopback addresses requires --dangerously-skip-loopback-restriction flag");
+    return 2;
+  }
+  if (port < 1 || port > 65535) {
+    lua_pushnil(co);
+    lua_pushstring(co, "port must be between 1 and 65535");
+    return 2;
   }
 
   socket_ctx_t *ctx = malloc(sizeof(socket_ctx_t));
@@ -292,7 +283,6 @@ int lunet_socket_listen(lua_State *co) {
   }
   ctx->co = co;
   ctx->type = SOCKET_SERVER;
-  ctx->domain = domain;
   ctx->server.accept_ref = LUA_NOREF;
   ctx->server.pending_accepts = queue_init();
   if (!ctx->server.pending_accepts) {
@@ -302,52 +292,29 @@ int lunet_socket_listen(lua_State *co) {
     return 2;
   }
 
-  int ret = 0;
-  if (domain == SOCKET_DOMAIN_TCP) {
-      if ((ret = uv_tcp_init(uv_default_loop(), &ctx->u.tcp)) < 0) {
-        queue_destroy(ctx->server.pending_accepts);
-        free(ctx);
-        lua_pushnil(co);
-        lua_pushfstring(co, "failed to initialize TCP: %s", uv_strerror(ret));
-        return 2;
-      }
-  } else {
-      if ((ret = uv_pipe_init(uv_default_loop(), &ctx->u.pipe, 0)) < 0) {
-        queue_destroy(ctx->server.pending_accepts);
-        free(ctx);
-        lua_pushnil(co);
-        lua_pushfstring(co, "failed to initialize Pipe: %s", uv_strerror(ret));
-        return 2;
-      }
+  int ret = uv_tcp_init(uv_default_loop(), &ctx->u.tcp);
+  if (ret < 0) {
+    queue_destroy(ctx->server.pending_accepts);
+    free(ctx);
+    lua_pushnil(co);
+    lua_pushfstring(co, "failed to initialize TCP: %s", uv_strerror(ret));
+    return 2;
   }
 
   ctx->u.handle.data = ctx;
 
-  if (domain == SOCKET_DOMAIN_TCP) {
-      struct sockaddr_in addr;
-      if (uv_ip4_addr(host, port, &addr) < 0) {
-        uv_close(&ctx->u.handle, lunet_close_cb);
-        lua_pushnil(co);
-        lua_pushstring(co, "invalid host or port");
-        return 2;
-      }
-      if ((ret = uv_tcp_bind(&ctx->u.tcp, (const struct sockaddr *)&addr, 0)) < 0) {
-        uv_close(&ctx->u.handle, lunet_close_cb);
-        lua_pushnil(co);
-        lua_pushfstring(co, "failed to bind: %s", uv_strerror(ret));
-        return 2;
-      }
-  } else {
-      // Unix socket: remove file if exists
-      #ifndef _WIN32
-      unlink(host);
-      #endif
-      if ((ret = uv_pipe_bind(&ctx->u.pipe, host)) < 0) {
-        uv_close(&ctx->u.handle, lunet_close_cb);
-        lua_pushnil(co);
-        lua_pushfstring(co, "failed to bind unix socket: %s", uv_strerror(ret));
-        return 2;
-      }
+  struct sockaddr_in addr;
+  if (uv_ip4_addr(host, port, &addr) < 0) {
+    uv_close(&ctx->u.handle, lunet_close_cb);
+    lua_pushnil(co);
+    lua_pushstring(co, "invalid host or port");
+    return 2;
+  }
+  if ((ret = uv_tcp_bind(&ctx->u.tcp, (const struct sockaddr *)&addr, 0)) < 0) {
+    uv_close(&ctx->u.handle, lunet_close_cb);
+    lua_pushnil(co);
+    lua_pushfstring(co, "failed to bind: %s", uv_strerror(ret));
+    return 2;
   }
 
   if ((ret = uv_listen(&ctx->u.stream, 128, lunet_listen_cb)) < 0) {
@@ -423,31 +390,23 @@ int lunet_socket_getpeername(lua_State *L) {
     return 2;
   }
 
-  if (ctx->domain == SOCKET_DOMAIN_TCP) {
-      struct sockaddr_in addr;
-      int addr_len = sizeof(addr);
-      int ret = uv_tcp_getpeername(&ctx->u.tcp, (struct sockaddr *)&addr, &addr_len);
-      if (ret < 0) {
-        lua_pushnil(L);
-        lua_pushfstring(L, "failed to get peer name: %s", uv_strerror(ret));
-        return 2;
-      }
-
-      char buf[INET_ADDRSTRLEN];
-      if (uv_ip4_name(&addr, buf, sizeof(buf)) < 0) {
-        lua_pushnil(L);
-        lua_pushstring(L, "failed to get peer name");
-        return 2;
-      }
-
-      lua_pushfstring(L, "%s:%d", buf, ntohs(addr.sin_port));
-  } else {
-      // Unix socket: return empty string or path if available?
-      // uv_pipe_getpeername
-      // For now, return "unix"
-      lua_pushstring(L, "unix");
+  struct sockaddr_in addr;
+  int addr_len = sizeof(addr);
+  int ret = uv_tcp_getpeername(&ctx->u.tcp, (struct sockaddr *)&addr, &addr_len);
+  if (ret < 0) {
+    lua_pushnil(L);
+    lua_pushfstring(L, "failed to get peer name: %s", uv_strerror(ret));
+    return 2;
   }
-  
+
+  char buf[INET_ADDRSTRLEN];
+  if (uv_ip4_name(&addr, buf, sizeof(buf)) < 0) {
+    lua_pushnil(L);
+    lua_pushstring(L, "failed to get peer name");
+    return 2;
+  }
+
+  lua_pushfstring(L, "%s:%d", buf, ntohs(addr.sin_port));
   lua_pushnil(L);
   return 2;
 }
@@ -629,15 +588,10 @@ int lunet_socket_connect(lua_State *L) {
   const char *host = luaL_checkstring(L, 1);
   int port = luaL_checkinteger(L, 2);
 
-  socket_domain_t domain = SOCKET_DOMAIN_TCP;
-  if (strchr(host, '/') != NULL) {
-      domain = SOCKET_DOMAIN_UNIX;
-  } else {
-      if (port < 1 || port > 65535) {
-        lua_pushnil(L);
-        lua_pushstring(L, "port must be between 1 and 65535");
-        return 2;
-      }
+  if (port < 1 || port > 65535) {
+    lua_pushnil(L);
+    lua_pushstring(L, "port must be between 1 and 65535");
+    return 2;
   }
 
   socket_ctx_t *ctx = malloc(sizeof(socket_ctx_t));
@@ -649,17 +603,10 @@ int lunet_socket_connect(lua_State *L) {
 
   ctx->co = L;
   ctx->type = SOCKET_CLIENT;
-  ctx->domain = domain;
   ctx->client.read_ref = LUA_NOREF;
   ctx->client.write_ref = LUA_NOREF;
 
-  int ret = 0;
-  if (domain == SOCKET_DOMAIN_TCP) {
-      ret = uv_tcp_init(uv_default_loop(), &ctx->u.tcp);
-  } else {
-      ret = uv_pipe_init(uv_default_loop(), &ctx->u.pipe, 0);
-  }
-
+  int ret = uv_tcp_init(uv_default_loop(), &ctx->u.tcp);
   if (ret < 0) {
     free(ctx);
     lua_pushnil(L);
@@ -672,7 +619,6 @@ int lunet_socket_connect(lua_State *L) {
   connect_ctx_t *connect_ctx = malloc(sizeof(connect_ctx_t));
   if (!connect_ctx) {
     uv_close(&ctx->u.handle, lunet_close_cb);
-    free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, "out of memory");
     return 2;
@@ -686,40 +632,24 @@ int lunet_socket_connect(lua_State *L) {
   // save coroutine reference, for resume in connect_cb
   lunet_coref_create(L, connect_ctx->co_ref);
 
-  if (domain == SOCKET_DOMAIN_TCP) {
-      struct sockaddr_in dest;
-      ret = uv_ip4_addr(host, port, &dest);
-      if (ret < 0) {
-        lunet_coref_release(L, connect_ctx->co_ref);
-        connect_ctx->co_ref = LUA_NOREF;
-        free(connect_ctx);
-        uv_close(&ctx->u.handle, lunet_close_cb);
-        free(ctx);
-        lua_pushnil(L);
-        lua_pushstring(L, "invalid host or port");
-        return 2;
-      }
-      ret = uv_tcp_connect(&connect_ctx->req, &ctx->u.tcp, (const struct sockaddr *)&dest, lunet_connect_cb);
-  } else {
-      uv_pipe_connect(&connect_ctx->req, &ctx->u.pipe, host, lunet_connect_cb);
-      ret = 0; // uv_pipe_connect is void? No, checks say void in some versions?
-      // libuv docs says void uv_pipe_connect(...)
-      // So we assume success? Or check synchronous errors?
-      // Wait, uv_pipe_connect is void in older versions but might be checked?
-      // Checking header...
-      // Usually it's void.
-  }
-  
-  // NOTE: uv_pipe_connect is void. We assume it initiated.
-  // But wait, if ret is not set?
-  // Let's verify libuv version.
-  
+  struct sockaddr_in dest;
+  ret = uv_ip4_addr(host, port, &dest);
   if (ret < 0) {
     lunet_coref_release(L, connect_ctx->co_ref);
     connect_ctx->co_ref = LUA_NOREF;
     free(connect_ctx);
     uv_close(&ctx->u.handle, lunet_close_cb);
-    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "invalid host or port");
+    return 2;
+  }
+
+  ret = uv_tcp_connect(&connect_ctx->req, &ctx->u.tcp, (const struct sockaddr *)&dest, lunet_connect_cb);
+  if (ret < 0) {
+    lunet_coref_release(L, connect_ctx->co_ref);
+    connect_ctx->co_ref = LUA_NOREF;
+    free(connect_ctx);
+    uv_close(&ctx->u.handle, lunet_close_cb);
     lua_pushnil(L);
     lua_pushfstring(L, "failed to start connect: %s", uv_strerror(ret));
     return 2;

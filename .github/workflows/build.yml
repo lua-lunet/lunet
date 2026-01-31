@@ -95,6 +95,13 @@ jobs:
         EOF
         LUNET_CPATH="$MOD_DIR/?.so" $LUNET_BIN test_module.lua
 
+    - name: SQLite3 Smoke Test (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        LUNET_BIN=$(find build -name 'lunet' -type f ! -name '*.so' ! -name '*.dylib' | head -1)
+        echo "Running SQLite3 smoke test..."
+        $LUNET_BIN test/smoke_sqlite3.lua
+
     - name: Test (Proof of Life - Windows)
       if: runner.os == 'Windows'
       shell: pwsh
@@ -120,6 +127,14 @@ jobs:
         "@ | Out-File -FilePath test_module.lua -Encoding utf8
         $env:LUNET_CPATH = "$modDir\\?.dll"
         & $lunet.FullName test_module.lua
+
+    - name: SQLite3 Smoke Test (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet.exe" | Select-Object -First 1
+        Write-Host "Running SQLite3 smoke test..."
+        & $lunet.FullName test/smoke_sqlite3.lua
 
     - name: Upload artifact (Linux)
       if: runner.os == 'Linux'

@@ -49,9 +49,9 @@ test: ## Run unit tests with busted
 	@eval $$(luarocks path --bin) && command -v busted >/dev/null 2>&1 || { echo >&2 "Error: busted not found. Run 'make init' first."; exit 1; }
 	@eval $$(luarocks path --bin) && busted spec/
 
-check: ## Run static analysis with luacheck
+check: ## Run static analysis with luacheck on test files
 	@eval $$(luarocks path --bin) && command -v luacheck >/dev/null 2>&1 || { echo >&2 "Error: luacheck not found. Run 'make init' first."; exit 1; }
-	@eval $$(luarocks path --bin) && luacheck app/
+	@eval $$(luarocks path --bin) && luacheck test/ spec/
 
 stress: build-debug ## Run concurrent stress test with tracing enabled
 	@echo ""
@@ -92,21 +92,7 @@ rock: lint ## Build and install lunet via LuaRocks
 	@echo "=== Building LuaRocks package ==="
 	luarocks make lunet-scm-1.rockspec
 
-# App targets
-run: ## Start the API backend
-	@echo "Starting RealWorld API Backend..."
-	bin/start_server.sh app/main.lua
-
-stop: ## Stop API backend and Frontend
-	@echo "Stopping API and Frontend..."
-	bin/stop_server.sh || true
-	bin/stop_frontend.sh || true
-
-wui: ## Start the React/Vite Frontend
-	@echo "Starting RealWorld Frontend..."
-	@# Ensure backend is running by checking port 8080
-	@lsof -i :8080 -sTCP:LISTEN >/dev/null || { echo "Error: Backend not running. Run 'make run' first."; exit 1; }
-	bin/test_with_frontend.sh
+# Note: Demo app moved to https://github.com/lua-lunet/lunet-realworld-example-app
 
 # =============================================================================
 # Django Benchmark
@@ -154,14 +140,11 @@ rocks-validate: ## Validate rockspec syntax
 	@echo "All rockspecs valid."
 
 # =============================================================================
-# Security / HTTPS Demo
+# Development Utilities
 # =============================================================================
 
 certs: ## Generate self-signed dev certificates
 	bin/generate_dev_certs.sh
-
-nginx-https: certs build ## Start Nginx HTTPS demo with Unix sockets
-	bin/start_nginx_https.sh
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'

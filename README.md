@@ -49,20 +49,9 @@ make build
 make build-debug
 ```
 
-## RealWorld Conduit Demo
+## Example Application
 
-The implementation of the [RealWorld "Conduit"](https://github.com/gothinkster/realworld) API is in `app/`.
-
-```bash
-# 1. Initialize SQLite database
-sqlite3 conduit.db < app/schema_sqlite.sql
-
-# 2. Start the server (port 8080)
-./build/lunet app/main.lua
-
-# 3. Run integration tests
-./bin/test_api.sh
-```
+See [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app) for a complete RealWorld "Conduit" API implementation using lunet.
 
 ## Core Modules
 
@@ -100,6 +89,98 @@ local data, host, port = udp.recv(h)
 
 udp.close(h)
 ```
+
+## Database Drivers
+
+Database drivers are **separate packages**. Install only what you need:
+
+```bash
+luarocks install lunet-sqlite3   # SQLite3
+luarocks install lunet-mysql     # MySQL/MariaDB
+luarocks install lunet-postgres  # PostgreSQL
+```
+
+### SQLite3 (`lunet.sqlite3`)
+
+```lua
+local db = require("lunet.sqlite3")
+
+-- Open database (file path or ":memory:")
+local conn = db.open("myapp.db")
+
+-- Execute (INSERT/UPDATE/DELETE) - returns affected rows
+local rows = db.exec(conn, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+
+-- Query (SELECT) - returns array of row tables
+local users = db.query(conn, "SELECT * FROM users WHERE active = 1")
+for _, user in ipairs(users) do
+    print(user.id, user.name)
+end
+
+-- Parameterized queries (safe from SQL injection)
+local results = db.query_params(conn, "SELECT * FROM users WHERE name = ?", "alice")
+db.exec_params(conn, "INSERT INTO users (name) VALUES (?)", "bob")
+
+-- Escape string (for dynamic SQL - prefer params when possible)
+local safe = db.escape(conn, "O'Brien")
+
+-- Close connection
+db.close(conn)
+```
+
+### MySQL/MariaDB (`lunet.mysql`)
+
+```lua
+local db = require("lunet.mysql")
+
+-- Open connection
+local conn = db.open({
+    host = "127.0.0.1",
+    port = 3306,
+    user = "root",
+    password = "secret",
+    database = "myapp"
+})
+
+-- Same API as SQLite3
+local users = db.query(conn, "SELECT * FROM users")
+db.exec_params(conn, "INSERT INTO users (name) VALUES (?)", "alice")
+
+db.close(conn)
+```
+
+### PostgreSQL (`lunet.postgres`)
+
+```lua
+local db = require("lunet.postgres")
+
+-- Open connection
+local conn = db.open({
+    host = "127.0.0.1",
+    port = 5432,
+    user = "postgres",
+    password = "secret",
+    database = "myapp"
+})
+
+-- Same API as SQLite3
+local users = db.query(conn, "SELECT * FROM users")
+db.exec_params(conn, "INSERT INTO users (name) VALUES ($1)", "alice")  -- PostgreSQL uses $1, $2, etc.
+
+db.close(conn)
+```
+
+### Database API Summary
+
+| Function | Description | Returns |
+|----------|-------------|---------|
+| `db.open(path_or_config)` | Open connection | connection handle |
+| `db.close(conn)` | Close connection | - |
+| `db.query(conn, sql)` | Execute SELECT | array of row tables |
+| `db.exec(conn, sql)` | Execute INSERT/UPDATE/DELETE | affected row count |
+| `db.query_params(conn, sql, ...)` | Parameterized SELECT | array of row tables |
+| `db.exec_params(conn, sql, ...)` | Parameterized INSERT/UPDATE/DELETE | affected row count |
+| `db.escape(conn, str)` | Escape string for SQL | escaped string |
 
 ## Safety: Zero-Cost Tracing
 

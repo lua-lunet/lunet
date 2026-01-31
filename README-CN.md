@@ -49,20 +49,9 @@ make build
 make build-debug
 ```
 
-## RealWorld Conduit 示例
+## 示例应用
 
-[RealWorld "Conduit"](https://github.com/gothinkster/realworld) API 实现位于 `app/` 目录。
-
-```bash
-# 1. 初始化 SQLite 数据库
-sqlite3 conduit.db < app/schema_sqlite.sql
-
-# 2. 启动服务器（端口 8080）
-./build/lunet app/main.lua
-
-# 3. 运行集成测试
-./bin/test_api.sh
-```
+完整的 RealWorld "Conduit" API 实现请参见 [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app)。
 
 ## 核心模块
 
@@ -100,6 +89,98 @@ local data, host, port = udp.recv(h)
 
 udp.close(h)
 ```
+
+## 数据库驱动
+
+数据库驱动是**独立的包**。只安装你需要的：
+
+```bash
+luarocks install lunet-sqlite3   # SQLite3
+luarocks install lunet-mysql     # MySQL/MariaDB
+luarocks install lunet-postgres  # PostgreSQL
+```
+
+### SQLite3 (`lunet.sqlite3`)
+
+```lua
+local db = require("lunet.sqlite3")
+
+-- 打开数据库（文件路径或 ":memory:"）
+local conn = db.open("myapp.db")
+
+-- 执行语句（INSERT/UPDATE/DELETE）- 返回影响的行数
+local rows = db.exec(conn, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+
+-- 查询（SELECT）- 返回行表数组
+local users = db.query(conn, "SELECT * FROM users WHERE active = 1")
+for _, user in ipairs(users) do
+    print(user.id, user.name)
+end
+
+-- 参数化查询（防止 SQL 注入）
+local results = db.query_params(conn, "SELECT * FROM users WHERE name = ?", "alice")
+db.exec_params(conn, "INSERT INTO users (name) VALUES (?)", "bob")
+
+-- 转义字符串（用于动态 SQL - 尽量使用参数化查询）
+local safe = db.escape(conn, "O'Brien")
+
+-- 关闭连接
+db.close(conn)
+```
+
+### MySQL/MariaDB (`lunet.mysql`)
+
+```lua
+local db = require("lunet.mysql")
+
+-- 打开连接
+local conn = db.open({
+    host = "127.0.0.1",
+    port = 3306,
+    user = "root",
+    password = "secret",
+    database = "myapp"
+})
+
+-- 与 SQLite3 相同的 API
+local users = db.query(conn, "SELECT * FROM users")
+db.exec_params(conn, "INSERT INTO users (name) VALUES (?)", "alice")
+
+db.close(conn)
+```
+
+### PostgreSQL (`lunet.postgres`)
+
+```lua
+local db = require("lunet.postgres")
+
+-- 打开连接
+local conn = db.open({
+    host = "127.0.0.1",
+    port = 5432,
+    user = "postgres",
+    password = "secret",
+    database = "myapp"
+})
+
+-- 与 SQLite3 相同的 API
+local users = db.query(conn, "SELECT * FROM users")
+db.exec_params(conn, "INSERT INTO users (name) VALUES ($1)", "alice")  -- PostgreSQL 使用 $1, $2 等
+
+db.close(conn)
+```
+
+### 数据库 API 概览
+
+| 函数 | 描述 | 返回值 |
+|------|------|--------|
+| `db.open(path_or_config)` | 打开连接 | 连接句柄 |
+| `db.close(conn)` | 关闭连接 | - |
+| `db.query(conn, sql)` | 执行 SELECT | 行表数组 |
+| `db.exec(conn, sql)` | 执行 INSERT/UPDATE/DELETE | 影响行数 |
+| `db.query_params(conn, sql, ...)` | 参数化 SELECT | 行表数组 |
+| `db.exec_params(conn, sql, ...)` | 参数化 INSERT/UPDATE/DELETE | 影响行数 |
+| `db.escape(conn, str)` | 转义 SQL 字符串 | 转义后的字符串 |
 
 ## 安全性：零开销追踪
 

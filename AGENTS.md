@@ -4,15 +4,21 @@ You MUST NOT commit unless explicity asked to.
 You MUST NOT push unless explicitiy asked to. 
 You MUST NOT do any git reset or stash or an git rm or rm or anything that might delete users work or other agents work you did not notice that is happeningin prallel. You SHOULD do a soft delete by a `mv xxx .tmp` as the .tmp is in .gitignore. 
 
-# Agent Notes: RealWorld Conduit Backend
+# Agent Notes: Lunet Core Library
 
 ## **Operational Rules (STRICT)**
 
-1.  **NO RAW CURL:** Do not run `curl` directly against the server. Use `bin/test_curl.sh` which enforces timeouts and logging.
-2.  **TIMEOUTS:** All commands interacting with the server or DB must have a timeout (`timeout 3` or `curl --max-time 3`).
-3.  **NO DATA LOSS:** Never use `rm -rf` to clear directories. Move them to `.tmp/` with a timestamp: `mv dir .tmp/dir.YYYYMMDD_HHMMSS`.
-4.  **LOGGING:** All test runs must log stdout/stderr to `.tmp/logs/YYYYMMDD_HHMMSS/`.
-5.  **SECURE BINDING:** Never bind to `0.0.0.0` or public interfaces. Use Unix sockets (preferred) or `127.0.0.1` (development). Only bypass this rule if the user explicitly requests it via CLI flag `--dangerously-skip-loopback-restriction`.
+1.  **TIMEOUTS:** All commands interacting with servers or DB must have a timeout (`timeout 3` or `curl --max-time 3`).
+2.  **NO DATA LOSS:** Never use `rm -rf` to clear directories. Move them to `.tmp/` with a timestamp: `mv dir .tmp/dir.YYYYMMDD_HHMMSS`.
+3.  **LOGGING:** All test runs must log stdout/stderr to `.tmp/logs/YYYYMMDD_HHMMSS/`.
+4.  **SECURE BINDING:** Never bind to `0.0.0.0` or public interfaces. Use Unix sockets (preferred) or `127.0.0.1` (development). Only bypass this rule if the user explicitly requests it via CLI flag `--dangerously-skip-loopback-restriction`.
+
+## Example Application
+
+The RealWorld Conduit demo app lives in a separate repository:
+[https://github.com/lua-lunet/lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app)
+
+For application-level testing and load testing, clone and use that repo.
 
 ## Security & Network Testing
 
@@ -50,27 +56,9 @@ limactl shell mariadb12 sudo mariadb -e "
     FLUSH PRIVILEGES;"
 ```
 
-**3. Load/Reset Schema:**
-Loads the application schema into the `conduit` database.
-```bash
-mariadb -u root -proot -h 127.0.0.1 -P 3306 --skip-ssl conduit < app/schema.sql
-```
-
-**4. Connect via Client:**
+**3. Connect via Client:**
 ```bash
 mariadb -u root -proot -h 127.0.0.1 -P 3306 --skip-ssl conduit
-```
-
-### Config for Application (`app/config.lua`)
-The application connects via TCP to localhost forwarded port.
-```lua
-db = {
-    host = "127.0.0.1",
-    port = 3306,
-    user = "root",
-    password = "root",
-    database = "conduit",
-}
 ```
 
 ## PostgreSQL Infrastructure (Local macOS)
@@ -261,37 +249,8 @@ make stress
 ```
 
 ### 3. Application Load Testing (RealWorld Conduit)
-The "RealWorld Conduit" demo app (using SQLite) must be subjected to parallel load to exercise the full stack (HTTP -> Router -> Controller -> DB -> Coroutines) with tracing enabled.
-
-**Steps:**
-1. **Start the Traced Server:**
-   ```bash
-   ./build/lunet app/main.lua &
-   PID=$!
-   sleep 2  # Wait for startup
-   ```
-
-2. **Run Functional Tests:**
-   Verify basic API correctness.
-   ```bash
-   bin/test_api.sh
-   ```
-
-3. **Run Parallel Load Test:**
-   Hit the running server with concurrent requests to trigger potential race conditions or reference leaks.
-   *Goal:* Verify the server does NOT crash (which would indicate a tracing assertion failure).
-   ```bash
-   # Example: 50 concurrent connections, 1000 requests
-   ab -c 50 -n 1000 http://127.0.0.1:8080/api/tags
-   # OR if ab/wrk not available, use a loop
-   for i in $(seq 1 50); do curl -s http://127.0.0.1:8080/api/tags >/dev/null & done; wait
-   ```
-
-4. **Cleanup:**
-   ```bash
-   kill $PID
-   wait $PID
-   ```
+For full-stack load testing (HTTP -> Router -> Controller -> DB -> Coroutines), use the separate demo app repository:
+[https://github.com/lua-lunet/lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app)
 
 If the server crashes during load testing (exit code > 0 or SIGABRT), it is a **CRITICAL FAILURE**. Check logs for `[TRACE]` assertions.
 

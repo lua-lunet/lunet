@@ -217,7 +217,7 @@ cmake -DCMAKE_C_FLAGS="-fsanitize=leak -g" ..
 
 # With ASan (recommended)
 cmake -DCMAKE_C_FLAGS="-fsanitize=address -g" ..
-ASAN_OPTIONS=detect_leaks=1 ./build/lunet app/main.lua
+ASAN_OPTIONS=detect_leaks=1 ./build/lunet test/stress_test.lua
 ```
 
 ### 4.3 Valgrind

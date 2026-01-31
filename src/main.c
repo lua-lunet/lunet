@@ -69,6 +69,12 @@ int lunet_open_fs(lua_State *L) {
   return 1;
 }
 
+// =============================================================================
+// Database Driver Support
+// =============================================================================
+// Each driver defines LUNET_DB_DRIVER to its name (sqlite3, mysql, postgres).
+// The driver module registers as lunet.<driver> and exports luaopen_lunet_<driver>.
+
 #ifdef LUNET_HAS_DB
 int lunet_db_open(lua_State* L);
 int lunet_db_close(lua_State* L);
@@ -78,7 +84,7 @@ int lunet_db_escape(lua_State* L);
 int lunet_db_query_params(lua_State* L);
 int lunet_db_exec_params(lua_State* L);
 
-int lunet_open_db(lua_State *L) {
+static int lunet_open_db(lua_State *L) {
   luaL_Reg funcs[] = {{"open", lunet_db_open},
                       {"close", lunet_db_close},
                       {"query", lunet_db_query},
@@ -89,6 +95,31 @@ int lunet_open_db(lua_State *L) {
                       {NULL, NULL}};
   luaL_newlib(L, funcs);
   return 1;
+}
+#endif
+
+// Driver-specific module entry points
+#if defined(LUNET_DB_SQLITE3)
+LUNET_API int luaopen_lunet_sqlite3(lua_State *L) {
+  lunet_trace_init();
+  set_default_luaL(L);
+  return lunet_open_db(L);
+}
+#endif
+
+#if defined(LUNET_DB_MYSQL)
+LUNET_API int luaopen_lunet_mysql(lua_State *L) {
+  lunet_trace_init();
+  set_default_luaL(L);
+  return lunet_open_db(L);
+}
+#endif
+
+#if defined(LUNET_DB_POSTGRES)
+LUNET_API int luaopen_lunet_postgres(lua_State *L) {
+  lunet_trace_init();
+  set_default_luaL(L);
+  return lunet_open_db(L);
 }
 #endif
 
@@ -125,14 +156,8 @@ void lunet_open(lua_State *L) {
   lua_setfield(L, -2, "lunet.fs");
   lua_pop(L, 2);
 
-#ifdef LUNET_HAS_DB
-  // register unified db module
-  lua_getglobal(L, "package");
-  lua_getfield(L, -1, "preload");
-  lua_pushcfunction(L, lunet_open_db);
-  lua_setfield(L, -2, "lunet.db");
-  lua_pop(L, 2);
-#endif
+  // Database drivers register themselves via luaopen_lunet_<driver>
+  // No generic lunet.db registration here - each driver is a separate module
 }
 
 /**

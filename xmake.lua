@@ -134,13 +134,15 @@ target("lunet-bin")
 -- =============================================================================
 -- Database Driver Modules (separate packages)
 -- =============================================================================
--- Each driver produces a lunet.db module. Install only ONE driver.
+-- Each driver registers as lunet.<driver> (e.g., lunet.sqlite3, lunet.mysql, lunet.postgres)
 -- Usage: xmake build lunet-sqlite3  (or lunet-mysql, lunet-postgres)
+-- Lua:   local db = require("lunet.sqlite3")
 
--- SQLite3 driver
+-- SQLite3 driver: require("lunet.sqlite3")
 target("lunet-sqlite3")
     set_kind("shared")
     set_prefixname("")
+    set_basename("sqlite3")  -- Output: sqlite3.so (loaded as lunet.sqlite3 from lunet/ dir)
     if is_plat("windows") then
         set_extension(".dll")
     else
@@ -151,7 +153,7 @@ target("lunet-sqlite3")
     add_files("ext/sqlite3/sqlite3.c")
     add_includedirs("include", "ext/sqlite3", {public = true})
     add_packages("luajit", "libuv", "sqlite3")
-    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB")
+    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_SQLITE3")
     
     if is_plat("macosx") then
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
@@ -172,10 +174,11 @@ target("lunet-sqlite3")
     end
 target_end()
 
--- MySQL driver
+-- MySQL driver: require("lunet.mysql")
 target("lunet-mysql")
     set_kind("shared")
     set_prefixname("")
+    set_basename("mysql")  -- Output: mysql.so (loaded as lunet.mysql from lunet/ dir)
     if is_plat("windows") then
         set_extension(".dll")
     else
@@ -186,7 +189,7 @@ target("lunet-mysql")
     add_files("ext/mysql/mysql.c")
     add_includedirs("include", "ext/mysql", {public = true})
     add_packages("luajit", "libuv", "mysql")
-    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB")
+    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_MYSQL")
     
     if is_plat("macosx") then
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
@@ -207,10 +210,11 @@ target("lunet-mysql")
     end
 target_end()
 
--- PostgreSQL driver
+-- PostgreSQL driver: require("lunet.postgres")
 target("lunet-postgres")
     set_kind("shared")
     set_prefixname("")
+    set_basename("postgres")  -- Output: postgres.so (loaded as lunet.postgres from lunet/ dir)
     if is_plat("windows") then
         set_extension(".dll")
     else
@@ -221,7 +225,7 @@ target("lunet-postgres")
     add_files("ext/postgres/postgres.c")
     add_includedirs("include", "ext/postgres", {public = true})
     add_packages("luajit", "libuv", "pq")
-    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB")
+    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_POSTGRES")
     
     if is_plat("macosx") then
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})

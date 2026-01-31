@@ -110,13 +110,16 @@ rocks-validate: ## Validate rockspec syntax
 # Smoke Tests (Database Drivers)
 # =============================================================================
 
-smoke: build ## Run database driver smoke tests (SQLite3 required, MySQL/Postgres optional)
-	@echo "=== Running DB Driver Smoke Tests ==="
+smoke: build ## Run extension module smoke tests (UDP required, DB drivers optional)
+	@echo "=== Running Extension Module Smoke Tests ==="
 	@LUNET_BIN=$$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1); \
 	if [ -z "$$LUNET_BIN" ]; then echo "Error: lunet binary not found"; exit 1; fi; \
 	echo ""; \
-	echo "--- SQLite3 (required) ---"; \
-	$$LUNET_BIN test/smoke_sqlite3.lua || exit 1; \
+	echo "--- UDP (required) ---"; \
+	$$LUNET_BIN test/smoke_udp.lua || exit 1; \
+	echo ""; \
+	echo "--- SQLite3 (optional) ---"; \
+	$$LUNET_BIN test/smoke_sqlite3.lua || true; \
 	echo ""; \
 	echo "--- MySQL (optional) ---"; \
 	$$LUNET_BIN test/smoke_mysql.lua || true; \

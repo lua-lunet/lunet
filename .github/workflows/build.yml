@@ -66,7 +66,7 @@ jobs:
         xmake f -m release -y
 
     - name: Build Core
-      run: xmake build lunet lunet-bin
+      run: xmake build
     
     - name: Build SQLite3 Driver
       run: xmake build lunet-sqlite3

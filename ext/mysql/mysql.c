@@ -1,6 +1,6 @@
 #include "lunet_db_mysql.h"
 
-#include <mysql/mysql.h>
+#include <mysql.h>
 #include <stdlib.h>
 #include <string.h>
 

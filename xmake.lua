@@ -102,6 +102,7 @@ target("lunet")
     if has_config("trace") then
         add_defines("LUNET_TRACE")
     end
+target_end()
 
 -- Standalone executable target for ./lunet-run script.lua
 target("lunet-bin")
@@ -130,6 +131,7 @@ target("lunet-bin")
     if has_config("trace") then
         add_defines("LUNET_TRACE")
     end
+target_end()
 
 -- =============================================================================
 -- Database Driver Modules (separate packages)

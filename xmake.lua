@@ -248,3 +248,47 @@ target("lunet-postgres")
         add_defines("LUNET_TRACE")
     end
 target_end()
+
+-- =============================================================================
+-- Unix Domain Socket Extension Module
+-- =============================================================================
+-- Unix domain socket support as a separate extension: require("lunet.unix")
+-- Usage: xmake build lunet-unix
+-- Lua:   local unix = require("lunet.unix")
+
+-- Unix socket driver: require("lunet.unix")
+target("lunet-unix")
+    set_kind("shared")
+    set_prefixname("")
+    set_basename("unix")  -- Output: lunet/unix.so
+    set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
+    if is_plat("windows") then
+        set_extension(".dll")
+    else
+        set_extension(".so")
+    end
+    
+    add_files(core_sources)
+    add_files("ext/unix/unix.c")
+    add_includedirs("include", "ext/unix", {public = true})
+    add_packages("luajit", "libuv")
+    add_defines("LUNET_NO_MAIN", "LUNET_HAS_UNIX")
+    
+    if is_plat("macosx") then
+        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+    end
+    if is_plat("linux") then
+        add_defines("_GNU_SOURCE")
+        add_cflags("-pthread")
+        add_ldflags("-pthread")
+        add_syslinks("pthread", "dl", "m")
+    end
+    if is_plat("windows") then
+        add_cflags("/TC")
+        add_defines("LUNET_BUILDING_DLL")
+        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
+    end
+    if has_config("trace") then
+        add_defines("LUNET_TRACE")
+    end
+target_end()

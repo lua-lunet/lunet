@@ -1,6 +1,5 @@
 local lunet = require("lunet")
 local socket = require("lunet.socket")
-local db = require("lunet.db")
 
 local escape_chars = {
     ["\\"] = "\\\\",
@@ -71,14 +70,15 @@ local function json_encode(value)
     return encode_value(value)
 end
 
-local function sql_escape(value)
-    if value == nil then return "NULL" end
-    if type(value) == "number" then return tostring(value) end
-    return "'" .. db.escape(tostring(value)) .. "'"
-end
-
 local listener = nil
-local conn = nil
+
+local function parse_request_line(data)
+    local first_line = data:match("^([^\r\n]+)")
+    if not first_line then return nil end
+    local method, path = first_line:match("^(%w+)%s+([^%s]+)")
+    if not method then return nil end
+    return method, path
+end
 
 local function handle_request(client)
     local data, err = socket.read(client)
@@ -87,17 +87,14 @@ local function handle_request(client)
         return
     end
 
-    local users = {}
-    if conn then
-        local rows, qerr = db.query(conn, "SELECT id, name, email FROM users LIMIT 10")
-        if rows then
-            users = rows
-        end
-    end
+    local method, path = parse_request_line(data)
 
     local response_body = json_encode({
         message = "Hello from Lunet!",
-        users = users,
+        request = {
+            method = method,
+            path = path,
+        },
         example = {
             string = "Hello, World!",
             number = 42,
@@ -117,37 +114,17 @@ local function handle_request(client)
 end
 
 lunet.spawn(function()
-    conn = db.open({ path = ":memory:" })
-    if conn then
-        local _, cerr = db.exec(conn, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)")
-        if cerr then print("CREATE TABLE error: " .. cerr) end
-        
-        local _, ierr1 = db.exec(conn, string.format(
-            "INSERT INTO users (name, email) VALUES (%s, %s)",
-            sql_escape("Alice"),
-            sql_escape("alice@example.com")
-        ))
-        if ierr1 then print("INSERT error: " .. ierr1) end
-        
-        local _, ierr2 = db.exec(conn, string.format(
-            "INSERT INTO users (name, email) VALUES (%s, %s)",
-            sql_escape("O'Brien"),
-            sql_escape("obrien@example.com")
-        ))
-        if ierr2 then print("INSERT error: " .. ierr2) end
-        
-        print("Database initialized with sample data")
-    end
-
     local lerr
-    listener, lerr = socket.listen("tcp", "127.0.0.1", 8080)
+    listener, lerr = socket.listen("tcp", "127.0.0.1", 18080)
     if not listener then
         print("Failed to listen: " .. (lerr or "unknown"))
         return
     end
 
-    print("JSON API server listening on http://127.0.0.1:8080")
-    print("Try: curl http://127.0.0.1:8080/")
+    print("HTTP+JSON example server listening on http://127.0.0.1:18080")
+    print("Try:")
+    print("  curl http://127.0.0.1:18080/")
+    print("  curl http://127.0.0.1:18080/hello")
 
     while true do
         local client, cerr = socket.accept(listener)

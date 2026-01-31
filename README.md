@@ -49,6 +49,23 @@ make build
 make build-debug
 ```
 
+## Examples
+
+First build the runner:
+
+```bash
+make build
+LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1)
+```
+
+| # | Example | What it shows | Requires | Run |
+|---:|---------|---------------|----------|-----|
+| 01 | [`examples/01_http_json.lua`](examples/01_http_json.lua) | Minimal HTTP server returning JSON | core (`lunet`, `lunet.socket`) | `"$LUNET_BIN" examples/01_http_json.lua` |
+| 02 | [`examples/02_http_routing.lua`](examples/02_http_routing.lua) | Tiny router with `:params` in paths | core (`lunet`, `lunet.socket`) | `"$LUNET_BIN" examples/02_http_routing.lua` |
+| 03 | [`examples/03_db_sqlite3.lua`](examples/03_db_sqlite3.lua) | SQLite3 CRUD + `query_params` / `exec_params` | `xmake build lunet-sqlite3` | `"$LUNET_BIN" examples/03_db_sqlite3.lua` |
+| 04 | [`examples/04_db_mysql.lua`](examples/04_db_mysql.lua) | MySQL CRUD + prepared statements (`?`) | `xmake build lunet-mysql` + MySQL server | `"$LUNET_BIN" examples/04_db_mysql.lua` |
+| 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + prepared statements (`$1`) | `xmake build lunet-postgres` + Postgres server | `"$LUNET_BIN" examples/05_db_postgres.lua` |
+
 ## Example Application
 
 See [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app) for a complete RealWorld "Conduit" API implementation using lunet.

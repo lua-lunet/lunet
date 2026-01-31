@@ -4,13 +4,16 @@ PostgreSQL Database Demo for lunet
 QUICK START:
   # Option 1: Set environment variables
   export LUNET_DB_USER=$(whoami)   # or your PostgreSQL username
-  ./lunet examples/demo_postgresql.lua
+  LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1)
+  "$LUNET_BIN" examples/05_db_postgres.lua
 
   # Option 2: Edit the db.open() call below to match your setup
 
 Prerequisites:
-  1. Build lunet with PostgreSQL support:
-       cmake -DLUNET_DB=postgres .. && make
+  1. Build core + postgres driver:
+       xmake f -m release -y
+       xmake build
+       xmake build lunet-postgres
 
   2. Create the demo database in PostgreSQL:
        psql
@@ -33,7 +36,7 @@ Environment Variables:
 ]]
 
 local lunet = require('lunet')
-local db = require('lunet.db')
+local db = require('lunet.postgres')
 
 lunet.spawn(function()
     print("=== PostgreSQL Database Demo ===")
@@ -88,15 +91,18 @@ lunet.spawn(function()
     }
 
     for _, user in ipairs(users) do
-        local sql = "INSERT INTO users (name, email, age) VALUES ('" 
-            .. db.escape(user.name) .. "', '" 
-            .. db.escape(user.email) .. "', " 
-            .. user.age .. ")"
-        local result, err = db.exec(conn, sql)
+        local rows, err = db.query_params(
+            conn,
+            "INSERT INTO users (name, email, age) VALUES ($1, $2, $3) RETURNING id",
+            user.name,
+            user.email,
+            user.age
+        )
         if err then
             print("Failed to insert user:", err)
         else
-            print(("Inserted %s (affected=%d)"):format(user.name, result.affected_rows))
+            local id = rows[1] and rows[1].id or "?"
+            print(("Inserted %s (id=%s)"):format(user.name, tostring(id)))
         end
     end
     print()
@@ -112,8 +118,19 @@ lunet.spawn(function()
     end
     print()
 
+    print("Querying one user (query_params):")
+    local rows, err = db.query_params(conn, "SELECT id, name, email FROM users WHERE name = $1", "Alice")
+    if err then
+        print("Query failed:", err)
+    else
+        for _, row in ipairs(rows) do
+            print(("  [%d] %s <%s>"):format(row.id, row.name, row.email))
+        end
+    end
+    print()
+
     print("Updating Bob's age to 36...")
-    local result, err = db.exec(conn, "UPDATE users SET age = 36 WHERE name = 'Bob'")
+    local result, err = db.exec_params(conn, "UPDATE users SET age = $1 WHERE name = $2", 36, "Bob")
     if err then
         print("Update failed:", err)
     else
@@ -121,8 +138,8 @@ lunet.spawn(function()
     end
     print()
 
-    print("Deleting O'Brien (testing escape)...")
-    local result, err = db.exec(conn, "DELETE FROM users WHERE name = '" .. db.escape("O'Brien") .. "'")
+    print("Deleting O'Brien...")
+    local result, err = db.exec_params(conn, "DELETE FROM users WHERE name = $1", "O'Brien")
     if err then
         print("Delete failed:", err)
     else

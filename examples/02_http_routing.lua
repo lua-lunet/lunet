@@ -1,9 +1,25 @@
 local lunet = require("lunet")
 local socket = require("lunet.socket")
 
+local escape_chars = {
+    ["\\"] = "\\\\",
+    ["\""] = "\\\"",
+    ["\b"] = "\\b",
+    ["\f"] = "\\f",
+    ["\n"] = "\\n",
+    ["\r"] = "\\r",
+    ["\t"] = "\\t",
+}
+
+local function escape_string(s)
+    return s:gsub('[\\\"\b\f\n\r\t]', escape_chars):gsub("[%z\1-\31]", function(c)
+        return string.format("\\u%04x", string.byte(c))
+    end)
+end
+
 local function json_encode(t)
     if type(t) ~= "table" then
-        if type(t) == "string" then return '"' .. t .. '"' end
+        if type(t) == "string" then return '"' .. escape_string(t) .. '"' end
         if type(t) == "number" then return tostring(t) end
         if type(t) == "boolean" then return t and "true" or "false" end
         return "null"
@@ -17,7 +33,9 @@ local function json_encode(t)
         return "[" .. table.concat(parts, ",") .. "]"
     else
         for k, v in pairs(t) do
-            parts[#parts + 1] = '"' .. k .. '":' .. json_encode(v)
+            if type(k) == "string" then
+                parts[#parts + 1] = '"' .. escape_string(k) .. '":' .. json_encode(v)
+            end
         end
         return "{" .. table.concat(parts, ",") .. "}"
     end
@@ -116,19 +134,19 @@ local function handle_request(client)
 end
 
 lunet.spawn(function()
-    local listener, err = socket.listen("tcp", "127.0.0.1", 8080)
+    local listener, err = socket.listen("tcp", "127.0.0.1", 18081)
     if not listener then
         print("Failed to listen: " .. (err or "unknown"))
         return
     end
 
-    print("Routing example server listening on http://127.0.0.1:8080")
+    print("Routing example server listening on http://127.0.0.1:18081")
     print("Try these URLs:")
-    print("  curl http://127.0.0.1:8080/")
-    print("  curl http://127.0.0.1:8080/users")
-    print("  curl http://127.0.0.1:8080/users/42")
-    print("  curl http://127.0.0.1:8080/articles/hello-world")
-    print("  curl http://127.0.0.1:8080/articles/my-post/comments/5")
+    print("  curl http://127.0.0.1:18081/")
+    print("  curl http://127.0.0.1:18081/users")
+    print("  curl http://127.0.0.1:18081/users/42")
+    print("  curl http://127.0.0.1:18081/articles/hello-world")
+    print("  curl http://127.0.0.1:18081/articles/my-post/comments/5")
 
     while true do
         local client, cerr = socket.accept(listener)

@@ -1,4 +1,4 @@
-#include "postgres.h"
+#include "lunet_db_postgres.h"
 
 #include <libpq-fe.h>
 #include <stdlib.h>
@@ -46,6 +46,108 @@ static void register_conn_metatable(lua_State* L) {
     lua_setfield(L, -2, "__gc");
   }
   lua_pop(L, 1);
+}
+
+// Parameter handling
+typedef enum {
+    PARAM_TYPE_NIL,
+    PARAM_TYPE_INT,
+    PARAM_TYPE_DOUBLE,
+    PARAM_TYPE_TEXT
+} param_type_t;
+
+typedef struct {
+    param_type_t type;
+    union {
+        long long i;
+        double d;
+        struct {
+            char* data;
+            size_t len;
+        } s;
+    } value;
+} param_t;
+
+static void free_params(param_t* params, int nparams) {
+    if (!params) return;
+    for (int i = 0; i < nparams; i++) {
+        if (params[i].type == PARAM_TYPE_TEXT) {
+            free(params[i].value.s.data);
+        }
+    }
+    free(params);
+}
+
+static param_t* collect_params(lua_State* L, int start, int* nparams) {
+    int top = lua_gettop(L);
+    *nparams = top - start + 1;
+    if (*nparams <= 0) {
+        *nparams = 0;
+        return NULL;
+    }
+    param_t* params = malloc(sizeof(param_t) * (*nparams));
+    if (!params) {
+        *nparams = -1;
+        return NULL;
+    }
+    for (int i = 0; i < *nparams; i++) {
+        int idx = start + i;
+        int type = lua_type(L, idx);
+        switch (type) {
+            case LUA_TNIL:
+                params[i].type = PARAM_TYPE_NIL;
+                break;
+            case LUA_TNUMBER: {
+                lua_Number n = lua_tonumber(L, idx);
+                long long val = (long long)n;
+                if ((lua_Number)val == n) {
+                    params[i].type = PARAM_TYPE_INT;
+                    params[i].value.i = val;
+                } else {
+                    params[i].type = PARAM_TYPE_DOUBLE;
+                    params[i].value.d = n;
+                }
+                break;
+            }
+            case LUA_TBOOLEAN:
+                params[i].type = PARAM_TYPE_INT;
+                params[i].value.i = lua_toboolean(L, idx);
+                break;
+            case LUA_TSTRING: {
+                size_t len;
+                const char* s = lua_tolstring(L, idx, &len);
+                params[i].type = PARAM_TYPE_TEXT;
+                params[i].value.s.data = malloc(len + 1);
+                if (!params[i].value.s.data) {
+                    free_params(params, i);
+                    *nparams = -1;
+                    return NULL;
+                }
+                memcpy(params[i].value.s.data, s, len);
+                params[i].value.s.data[len] = '\0';
+                params[i].value.s.len = len;
+                break;
+            }
+            default: {
+                const char* s = lua_tostring(L, idx);
+                if (s) {
+                    size_t len = strlen(s);
+                    params[i].type = PARAM_TYPE_TEXT;
+                    params[i].value.s.data = strdup(s);
+                    if (!params[i].value.s.data) {
+                        free_params(params, i);
+                        *nparams = -1;
+                        return NULL;
+                    }
+                    params[i].value.s.len = len;
+                } else {
+                    params[i].type = PARAM_TYPE_NIL;
+                }
+                break;
+            }
+        }
+    }
+    return params;
 }
 
 typedef struct {
@@ -197,6 +299,9 @@ typedef struct {
 
   lunet_pg_conn_t* wrapper;
   char* query;
+  
+  param_t* params;
+  int nparams;
 
   PGresult* result;
   char err[256];
@@ -213,7 +318,46 @@ static void db_query_work_cb(uv_work_t* req) {
     return;
   }
 
-  ctx->result = PQexec(ctx->wrapper->conn, ctx->query);
+  if (ctx->nparams > 0) {
+      const char **paramValues = calloc(ctx->nparams, sizeof(char*));
+      int *should_free = calloc(ctx->nparams, sizeof(int));
+      if (!paramValues || !should_free) {
+           snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+           free(paramValues);
+           free(should_free);
+           uv_mutex_unlock(&ctx->wrapper->mutex);
+           return;
+      }
+      
+      for (int i=0; i<ctx->nparams; i++) {
+          if (ctx->params[i].type == PARAM_TYPE_INT) {
+              char buf[64];
+              snprintf(buf, sizeof(buf), "%lld", ctx->params[i].value.i);
+              paramValues[i] = strdup(buf);
+              should_free[i] = 1;
+          } else if (ctx->params[i].type == PARAM_TYPE_DOUBLE) {
+              char buf[64];
+              snprintf(buf, sizeof(buf), "%g", ctx->params[i].value.d);
+              paramValues[i] = strdup(buf);
+              should_free[i] = 1;
+          } else if (ctx->params[i].type == PARAM_TYPE_TEXT) {
+              paramValues[i] = ctx->params[i].value.s.data;
+              should_free[i] = 0;
+          } else {
+              paramValues[i] = NULL;
+              should_free[i] = 0;
+          }
+      }
+
+      ctx->result = PQexecParams(ctx->wrapper->conn, ctx->query, ctx->nparams, NULL, (const char * const *)paramValues, NULL, NULL, 0);
+
+      for(int i=0; i<ctx->nparams; i++) if(should_free[i]) free((void*)paramValues[i]);
+      free(paramValues);
+      free(should_free);
+  } else {
+      ctx->result = PQexec(ctx->wrapper->conn, ctx->query);
+  }
+
   ExecStatusType status = PQresultStatus(ctx->result);
 
   if (status != PGRES_TUPLES_OK && status != PGRES_COMMAND_OK) {
@@ -237,6 +381,7 @@ static void db_query_after_cb(uv_work_t* req, int status) {
     fprintf(stderr, "invalid coroutine in db.query\n");
     if (ctx->result) PQclear(ctx->result);
     free(ctx->query);
+    free_params(ctx->params, ctx->nparams);
     free(ctx);
     return;
   }
@@ -306,6 +451,7 @@ static void db_query_after_cb(uv_work_t* req, int status) {
   }
 
   free(ctx->query);
+  free_params(ctx->params, ctx->nparams);
   free(ctx);
 }
 
@@ -373,6 +519,9 @@ typedef struct {
 
   lunet_pg_conn_t* wrapper;
   char* query;
+  
+  param_t* params;
+  int nparams;
 
   long long affected_rows;
   unsigned long long insert_id;
@@ -389,7 +538,47 @@ static void db_exec_work_cb(uv_work_t* req) {
     return;
   }
 
-  PGresult* result = PQexec(ctx->wrapper->conn, ctx->query);
+  PGresult* result;
+  if (ctx->nparams > 0) {
+      const char **paramValues = calloc(ctx->nparams, sizeof(char*));
+      int *should_free = calloc(ctx->nparams, sizeof(int));
+      if (!paramValues || !should_free) {
+           snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+           free(paramValues);
+           free(should_free);
+           uv_mutex_unlock(&ctx->wrapper->mutex);
+           return;
+      }
+      
+      for (int i=0; i<ctx->nparams; i++) {
+          if (ctx->params[i].type == PARAM_TYPE_INT) {
+              char buf[64];
+              snprintf(buf, sizeof(buf), "%lld", ctx->params[i].value.i);
+              paramValues[i] = strdup(buf);
+              should_free[i] = 1;
+          } else if (ctx->params[i].type == PARAM_TYPE_DOUBLE) {
+              char buf[64];
+              snprintf(buf, sizeof(buf), "%g", ctx->params[i].value.d);
+              paramValues[i] = strdup(buf);
+              should_free[i] = 1;
+          } else if (ctx->params[i].type == PARAM_TYPE_TEXT) {
+              paramValues[i] = ctx->params[i].value.s.data;
+              should_free[i] = 0;
+          } else {
+              paramValues[i] = NULL;
+              should_free[i] = 0;
+          }
+      }
+
+      result = PQexecParams(ctx->wrapper->conn, ctx->query, ctx->nparams, NULL, (const char * const *)paramValues, NULL, NULL, 0);
+
+      for(int i=0; i<ctx->nparams; i++) if(should_free[i]) free((void*)paramValues[i]);
+      free(paramValues);
+      free(should_free);
+  } else {
+      result = PQexec(ctx->wrapper->conn, ctx->query);
+  }
+
   ExecStatusType status = PQresultStatus(result);
 
   if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
@@ -417,6 +606,7 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.exec\n");
     free(ctx->query);
+    free_params(ctx->params, ctx->nparams);
     free(ctx);
     return;
   }
@@ -450,6 +640,7 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
   }
 
   free(ctx->query);
+  free_params(ctx->params, ctx->nparams);
   free(ctx);
 }
 
@@ -537,15 +728,137 @@ int lunet_db_escape(lua_State* L) {
   return 1;
 }
 
-// Placeholder implementations for parameter functions (to be implemented)
 int lunet_db_query_params(lua_State* L) {
-  // For now, just delegate to the regular query function
-  // This maintains API compatibility while we implement prepared statements
-  return lunet_db_query(L);
+  if (lunet_ensure_coroutine(L, "db.query_params")) {
+    return lua_error(L);
+  }
+  if (lua_gettop(L) < 2) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.query_params requires connection and sql string");
+    return 2;
+  }
+
+  lunet_pg_conn_t* wrapper = (lunet_pg_conn_t*)luaL_testudata(L, 1, LUNET_PG_CONN_MT);
+  if (!wrapper) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.query_params requires a valid connection");
+    return 2;
+  }
+
+  if (wrapper->closed || !wrapper->conn) {
+    lua_pushnil(L);
+    lua_pushstring(L, "connection is closed");
+    return 2;
+  }
+
+  const char* query = luaL_checkstring(L, 2);
+
+  db_query_ctx_t* ctx = malloc(sizeof(db_query_ctx_t));
+  if (!ctx) {
+    lua_pushstring(L, "out of memory");
+    return lua_error(L);
+  }
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->L = L;
+  ctx->req.data = ctx;
+  ctx->wrapper = wrapper;
+  ctx->query = strdup(query);
+  if (!ctx->query) {
+    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  ctx->params = collect_params(L, 3, &ctx->nparams);
+  if (ctx->nparams < 0) {
+    free(ctx->query);
+    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  lunet_coref_create(L, ctx->co_ref);
+
+  int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_query_work_cb, db_query_after_cb);
+  if (ret < 0) {
+    lunet_coref_release(L, ctx->co_ref);
+    free(ctx->query);
+    free_params(ctx->params, ctx->nparams);
+    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, uv_strerror(ret));
+    return 2;
+  }
+
+  return lua_yield(L, 0);
 }
 
 int lunet_db_exec_params(lua_State* L) {
-  // For now, just delegate to the regular exec function
-  // This maintains API compatibility while we implement prepared statements
-  return lunet_db_exec(L);
+  if (lunet_ensure_coroutine(L, "db.exec_params")) {
+    return lua_error(L);
+  }
+  if (lua_gettop(L) < 2) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.exec_params requires connection and sql string");
+    return 2;
+  }
+
+  lunet_pg_conn_t* wrapper = (lunet_pg_conn_t*)luaL_testudata(L, 1, LUNET_PG_CONN_MT);
+  if (!wrapper) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.exec_params requires a valid connection");
+    return 2;
+  }
+
+  if (wrapper->closed || !wrapper->conn) {
+    lua_pushnil(L);
+    lua_pushstring(L, "connection is closed");
+    return 2;
+  }
+
+  const char* query = luaL_checkstring(L, 2);
+
+  db_exec_ctx_t* ctx = malloc(sizeof(db_exec_ctx_t));
+  if (!ctx) {
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->L = L;
+  ctx->req.data = ctx;
+  ctx->wrapper = wrapper;
+  ctx->query = strdup(query);
+  if (!ctx->query) {
+    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  ctx->params = collect_params(L, 3, &ctx->nparams);
+  if (ctx->nparams < 0) {
+    free(ctx->query);
+    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  lunet_coref_create(L, ctx->co_ref);
+
+  int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_exec_work_cb, db_exec_after_cb);
+  if (ret < 0) {
+    lunet_coref_release(L, ctx->co_ref);
+    free(ctx->query);
+    free_params(ctx->params, ctx->nparams);
+    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, uv_strerror(ret));
+    return 2;
+  }
+
+  return lua_yield(L, 0);
 }

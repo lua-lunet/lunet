@@ -65,22 +65,25 @@ jobs:
         $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
         xmake f -m release -y
 
-    - name: Build
-      run: xmake build -a
+    - name: Build Core
+      run: xmake build
+    
+    - name: Build SQLite3 Driver
+      run: xmake build lunet-sqlite3
 
     - name: Test (Proof of Life - Unix)
       if: runner.os != 'Windows'
       run: |
         echo "print('LuaJIT initialized:', jit.version)" > test.lua
-        # Find the binary
-        LUNET_BIN=$(find build -name 'lunet' -type f ! -name '*.so' ! -name '*.dylib' | head -1)
+        # Find the binary (lunet-run is the CLI, lunet.so is the module)
+        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
         echo "Found binary: $LUNET_BIN"
         $LUNET_BIN test.lua
 
     - name: Test (Module Load - Unix)
       if: runner.os != 'Windows'
       run: |
-        LUNET_BIN=$(find build -name 'lunet' -type f ! -name '*.so' ! -name '*.dylib' | head -1)
+        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
         LUNET_SO=$(find build -name 'lunet.so' -type f | head -1)
         if [ -z "$LUNET_BIN" ] || [ -z "$LUNET_SO" ]; then
           echo "Error: build outputs not found" >&2
@@ -98,7 +101,7 @@ jobs:
     - name: SQLite3 Smoke Test (Unix)
       if: runner.os != 'Windows'
       run: |
-        LUNET_BIN=$(find build -name 'lunet' -type f ! -name '*.so' ! -name '*.dylib' | head -1)
+        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
         echo "Running SQLite3 smoke test..."
         $LUNET_BIN test/smoke_sqlite3.lua
 
@@ -107,16 +110,16 @@ jobs:
       shell: pwsh
       run: |
         "print('LuaJIT initialized:', jit.version)" | Out-File -FilePath test.lua -Encoding utf8
-        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet.exe" | Select-Object -First 1
+        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
         & $lunet.FullName test.lua
 
     - name: Test (Module Load - Windows)
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet.exe" | Select-Object -First 1
+        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
         $mod  = Get-ChildItem -Path build -Recurse -Filter "lunet.dll" | Select-Object -First 1
-        if (-not $lunet) { throw "lunet.exe not found" }
+        if (-not $lunet) { throw "lunet-run.exe not found" }
         if (-not $mod) { throw "lunet.dll not found" }
         $modDir = $mod.Directory.FullName
         @"
@@ -132,7 +135,7 @@ jobs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet.exe" | Select-Object -First 1
+        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
         Write-Host "Running SQLite3 smoke test..."
         & $lunet.FullName test/smoke_sqlite3.lua
 
@@ -142,8 +145,9 @@ jobs:
       with:
         name: lunet-linux-amd64
         path: |
-          build/**/lunet
+          build/**/lunet-run
           build/**/lunet.so
+          build/**/lunet/*.so
 
     - name: Upload artifact (macOS)
       if: runner.os == 'macOS'
@@ -151,8 +155,9 @@ jobs:
       with:
         name: lunet-macos
         path: |
-          build/**/lunet
+          build/**/lunet-run
           build/**/lunet.so
+          build/**/lunet/*.so
 
     - name: Upload artifact (Windows)
       if: runner.os == 'Windows'
@@ -160,5 +165,6 @@ jobs:
       with:
         name: lunet-windows-amd64
         path: |
-          build/**/lunet.exe
+          build/**/lunet-run.exe
           build/**/lunet.dll
+          build/**/lunet/*.dll

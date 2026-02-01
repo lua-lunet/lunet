@@ -21,6 +21,14 @@
 #include "lunet_udp.h"
 #endif
 
+static char *lunet_resolve_executable_path(const char *argv0) {
+#if defined(_WIN32)
+  return _fullpath(NULL, argv0, 0);
+#else
+  return realpath(argv0, NULL);
+#endif
+}
+
 lunet_runtime_config_t g_lunet_config = {0};
 
 // register core module
@@ -229,24 +237,43 @@ int main(int argc, char **argv) {
   // They're loaded as lunet.sqlite3, so we need lunet/?.so pattern
   // Create symlink-style lookup: binarydir/lunet/?.so -> binarydir/?.so
   {
-    char *script_path = realpath(argv[0], NULL);
-    if (script_path) {
-      char *last_slash = strrchr(script_path, '/');
-      if (last_slash) {
-        *last_slash = '\0';
-        lua_getglobal(L, "package");
-        lua_getfield(L, -1, "cpath");
-        const char *old_cpath = lua_tostring(L, -1);
-        lua_pop(L, 1);
-        char new_cpath[4096];
-        snprintf(new_cpath, sizeof(new_cpath), "%s/lunet/?.so;%s/?.so;%s",
-                 script_path, script_path, old_cpath ? old_cpath : "");
-        lua_pushstring(L, new_cpath);
-        lua_setfield(L, -2, "cpath");
-        lua_pop(L, 1);
-      }
-      free(script_path);
+    char *exe_path = lunet_resolve_executable_path(argv[0]);
+    if (!exe_path) {
+      goto cpath_done;
     }
+
+    char *last_slash = strrchr(exe_path, '/');
+    char *last_backslash = strrchr(exe_path, '\\');
+    char *last_sep = last_slash;
+    if (!last_sep || (last_backslash && last_backslash > last_sep)) {
+      last_sep = last_backslash;
+    }
+    if (!last_sep) {
+      free(exe_path);
+      goto cpath_done;
+    }
+
+    *last_sep = '\0';
+
+    lua_getglobal(L, "package");
+    lua_getfield(L, -1, "cpath");
+    const char *old_cpath = lua_tostring(L, -1);
+    lua_pop(L, 1);
+
+    char new_cpath[4096];
+#if defined(_WIN32)
+    snprintf(new_cpath, sizeof(new_cpath), "%s\\lunet\\?.dll;%s\\?.dll;%s",
+             exe_path, exe_path, old_cpath ? old_cpath : "");
+#else
+    snprintf(new_cpath, sizeof(new_cpath), "%s/lunet/?.so;%s/?.so;%s",
+             exe_path, exe_path, old_cpath ? old_cpath : "");
+#endif
+    lua_pushstring(L, new_cpath);
+    lua_setfield(L, -2, "cpath");
+    lua_pop(L, 1);
+
+    free(exe_path);
+  cpath_done:;
   }
 
   // run lua file

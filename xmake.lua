@@ -101,6 +101,7 @@ target("lunet")
     if has_config("trace") then
         add_defines("LUNET_TRACE")
     end
+target_end()
 
 -- Standalone executable target for ./lunet-run script.lua
 target("lunet-bin")
@@ -129,6 +130,7 @@ target("lunet-bin")
     if has_config("trace") then
         add_defines("LUNET_TRACE")
     end
+target_end()
 
 -- =============================================================================
 -- Database Driver Modules (separate packages)
@@ -139,6 +141,7 @@ target("lunet-bin")
 
 -- SQLite3 driver: require("lunet.sqlite3")
 target("lunet-sqlite3")
+    set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
     set_prefixname("")
     set_basename("sqlite3")  -- Output: lunet/sqlite3.so
@@ -176,6 +179,7 @@ target_end()
 
 -- MySQL driver: require("lunet.mysql")
 target("lunet-mysql")
+    set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
     set_prefixname("")
     set_basename("mysql")  -- Output: lunet/mysql.so
@@ -213,6 +217,7 @@ target_end()
 
 -- PostgreSQL driver: require("lunet.postgres")
 target("lunet-postgres")
+    set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
     set_prefixname("")
     set_basename("postgres")  -- Output: lunet/postgres.so

@@ -2,8 +2,10 @@
 SQLite3 Database Demo for lunet
 
 Prerequisites:
-  Build lunet with SQLite3 support:
-    cmake -DLUNET_DB=sqlite3 .. && make
+  Build core + sqlite3 driver:
+    xmake f -m release -y
+    xmake build
+    xmake build lunet-sqlite3
 
 Schema (created automatically in-memory):
   CREATE TABLE users (
@@ -14,11 +16,12 @@ Schema (created automatically in-memory):
   );
 
 Usage:
-  ./lunet examples/sqlite3.lua
+  LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1)
+  "$LUNET_BIN" examples/03_db_sqlite3.lua
 ]]
 
-local lunet = require('lunet')
-local db = require('lunet.db')
+local lunet = require("lunet")
+local db = require("lunet.sqlite3")
 
 lunet.spawn(function()
     print("=== SQLite3 Database Demo ===")
@@ -53,11 +56,13 @@ lunet.spawn(function()
     }
 
     for _, user in ipairs(users) do
-        local sql = "INSERT INTO users (name, email, age) VALUES ('" 
-            .. db.escape(user.name) .. "', '" 
-            .. db.escape(user.email) .. "', " 
-            .. user.age .. ")"
-        local result, err = db.exec(conn, sql)
+        local result, err = db.exec_params(
+            conn,
+            "INSERT INTO users (name, email, age) VALUES (?, ?, ?)",
+            user.name,
+            user.email,
+            user.age
+        )
         if err then
             print("Failed to insert user:", err)
         else
@@ -77,8 +82,19 @@ lunet.spawn(function()
     end
     print()
 
+    print("Querying users older than 30 (query_params):")
+    local rows, err = db.query_params(conn, "SELECT id, name, age FROM users WHERE age > ? ORDER BY age", 30)
+    if err then
+        print("Query failed:", err)
+    else
+        for _, row in ipairs(rows) do
+            print(("  [%d] %s age=%d"):format(row.id, row.name, row.age))
+        end
+    end
+    print()
+
     print("Updating Bob's age to 36...")
-    local result, err = db.exec(conn, "UPDATE users SET age = 36 WHERE name = 'Bob'")
+    local result, err = db.exec_params(conn, "UPDATE users SET age = ? WHERE name = ?", 36, "Bob")
     if err then
         print("Update failed:", err)
     else
@@ -86,8 +102,8 @@ lunet.spawn(function()
     end
     print()
 
-    print("Deleting O'Brien (testing escape)...")
-    local result, err = db.exec(conn, "DELETE FROM users WHERE name = '" .. db.escape("O'Brien") .. "'")
+    print("Deleting O'Brien...")
+    local result, err = db.exec_params(conn, "DELETE FROM users WHERE name = ?", "O'Brien")
     if err then
         print("Delete failed:", err)
     else

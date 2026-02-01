@@ -202,7 +202,7 @@ If the server crashes during load testing (exit code > 0 or SIGABRT), it is a **
 
 ## UDP Module Tracing
 
-The UDP module (`src/udp.c`) has its own domain-specific tracing macros in addition to the generic coroutine tracing. These trace network I/O operations and are zero-cost in release builds.
+The UDP module (`ext/udp/udp.c`) has its own domain-specific tracing macros in addition to the generic coroutine tracing. These trace network I/O operations and are zero-cost in release builds.
 
 ### UDP Trace Macros
 
@@ -218,7 +218,7 @@ The UDP module (`src/udp.c`) has its own domain-specific tracing macros in addit
 
 ### Counters
 
-The macros maintain **static (file-scope) counters** in `src/udp.c`:
+The macros maintain **static (file-scope) counters** in `ext/udp/udp.c`:
 - `udp_trace_bind_count` - total sockets bound
 - `udp_trace_tx_count` - total datagrams sent
 - `udp_trace_rx_count` - total datagrams received

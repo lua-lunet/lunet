@@ -17,7 +17,7 @@ option("trace")
     set_description("Enable LUNET_TRACE for coroutine reference tracking")
 option_end()
 
--- Common source files for core lunet (UDP moved to ext/udp/)
+-- Core source files
 local core_sources = {
     "src/main.c",
     "src/co.c",
@@ -253,14 +253,7 @@ target("lunet-postgres")
     end
 target_end()
 
--- =============================================================================
--- UDP Extension Module (separate package)
--- =============================================================================
--- UDP is now a separate module, loadable as require("lunet.udp")
--- Usage: xmake build lunet-udp
--- Lua:   local udp = require("lunet.udp")
-
--- UDP driver: require("lunet.udp")
+-- UDP extension: require("lunet.udp")
 target("lunet-udp")
     set_kind("shared")
     set_prefixname("")

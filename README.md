@@ -49,7 +49,36 @@ make build
 make build-debug
 ```
 
-## Examples
+## Example: MCP-SSE Server
+
+[lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) is a production-ready MCP (Model Context Protocol) server with Tavily web search, demonstrating:
+
+- **SSE transport** - Server-Sent Events for real-time streaming
+- **JSON-RPC over HTTP** - Stateful session management
+- **External API calls** - Tavily search integration via curl
+- **Zero-cost tracing** - Debug logging with no production overhead
+
+**Why lunet for MCP servers?**
+
+MCP servers are often deployed as sidecar processes. Lunet's dependencies (libuv, LuaJIT) are mature, stable libraries with Debian LTS support - no npm/pip churn or constant security patches.
+
+| Implementation | Image Size | Runtime Memory |
+|----------------|------------|----------------|
+| **lunet-mcp-sse** | **171 MB** | **7 MB** |
+| tavily-mcp (Node.js) | 420 MB | 18 MB |
+| tavily-mcp (Bun) | 382 MB | 14 MB |
+| FastMCP (Python) | 367 MB | 28 MB |
+
+```bash
+# Quick start
+curl -L -o lunet-mcp-sse.tar.gz \
+  https://github.com/lua-lunet/lunet-mcp-sse/releases/download/nightly/lunet-mcp-sse-linux-arm64.tar.gz
+tar -xzf lunet-mcp-sse.tar.gz
+echo "TAVILY_API_KEY=your_key" > .env
+./run.sh
+```
+
+## How-To Examples
 
 First build the runner:
 
@@ -66,9 +95,7 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1
 | 04 | [`examples/04_db_mysql.lua`](examples/04_db_mysql.lua) | MySQL CRUD + prepared statements (`?`) | `xmake build lunet-mysql` + MySQL server | `"$LUNET_BIN" examples/04_db_mysql.lua` |
 | 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + prepared statements (`$1`) | `xmake build lunet-postgres` + Postgres server | `"$LUNET_BIN" examples/05_db_postgres.lua` |
 
-## Example Application
-
-See [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app) for a complete RealWorld "Conduit" API implementation using lunet.
+See also [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app) for a complete RealWorld "Conduit" API implementation.
 
 ## Core Modules
 

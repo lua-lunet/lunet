@@ -51,7 +51,7 @@ make build-debug
 
 ## Example: MCP-SSE Server
 
-[lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) is a production-ready MCP (Model Context Protocol) server with Tavily web search, demonstrating:
+[lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) is an MCP (Model Context Protocol) server with Tavily web search, demonstrating:
 
 - **SSE transport** - Server-Sent Events for real-time streaming
 - **JSON-RPC over HTTP** - Stateful session management

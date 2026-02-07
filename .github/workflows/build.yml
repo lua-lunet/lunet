@@ -3,6 +3,8 @@ name: Build
 on:
   push:
     branches: [ simbo1905, windows11, windows, main, xmake ]
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
   pull_request:
     branches: [ simbo1905, main ]
   workflow_dispatch:
@@ -168,3 +170,39 @@ jobs:
           build/**/lunet-run.exe
           build/**/lunet.dll
           build/**/lunet/*.dll
+
+  release:
+    name: Upload Release Binaries
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package Linux
+        run: |
+          cd artifacts/lunet-linux-amd64
+          tar -czvf ../lunet-linux-amd64.tar.gz .
+
+      - name: Package macOS
+        run: |
+          cd artifacts/lunet-macos
+          tar -czvf ../lunet-macos.tar.gz .
+
+      - name: Package Windows
+        run: |
+          cd artifacts/lunet-windows-amd64
+          zip -r ../lunet-windows-amd64.zip .
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/lunet-linux-amd64.tar.gz
+            artifacts/lunet-macos.tar.gz
+            artifacts/lunet-windows-amd64.zip

@@ -71,6 +71,7 @@ jobs:
         VCPKG_RETRY_COUNT: '3'
         VCPKG_RETRY_DELAY: '2'
         VCPKG_USE_HEAD_VERSION: 'false'
+        VCPKG_CMAKE_VERSION: '3.31.10'
 
     - name: Install Dependencies (Windows)
       if: runner.os == 'Windows'

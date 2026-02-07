@@ -63,9 +63,7 @@ jobs:
       run: |
         vcpkg install libuv:x64-windows
         vcpkg install luajit:x64-windows
-        vcpkg install libpq:x64-windows --feature lz4
-        vcpkg install libpq:x64-windows --feature openssl
-        vcpkg install libpq:x64-windows --feature zlib
+        vcpkg install libpq:x64-windows[lz4,openssl,zlib]
 
     - name: Configure (Unix)
       if: runner.os != 'Windows'

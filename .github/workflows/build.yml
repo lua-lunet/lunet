@@ -55,26 +55,8 @@ jobs:
       uses: lukka/run-vcpkg@v11
       with:
         vcpkgGitCommitId: '66c0373dc7fca549e5803087b9487edfe3aca0a1'
-        vcpkgDirectory: D:\a\lunet\lunet\vcpkg
-        runVcpkgInstall: false
-        vcpkgGitURL: https://github.com/microsoft/vcpkg.git
-        doNotUpdateVcpkg: false
-        doNotCache: true
-        vcpkgJsonGlob: **/vcpkg.json
-        vcpkgJsonIgnores: ['**/vcpkg/**']
-        vcpkgConfigurationJsonGlob: **/vcpkg-configuration.json
-        runVcpkgFormatString: ['install', '--recurse', '--clean-after-build', '--x-install-root', '$\u005benv.VCPKG_INSTALLED_DIR\u005d', '--triplet', '$\u005benv.VCPKG_DEFAULT_TRIPLET\u005d']
-        useShell: true
-        logCollectionRegExps: \s*'(.+CMakeOutput\.log)'\.\s*;\s*'(.+CMakeError\.log)'\.\s*;\s*(.+)out\.log\s*;\s+(.+)err\.log\s*;\s*(.+vcpkg.+\.log)\s*
       env:
         VCPKG_BINARY_SOURCES: 'clear;nuget,readwrite'
-        VCPKG_RETRY_COUNT: '3'
-        VCPKG_RETRY_DELAY: '2'
-        VCPKG_USE_HEAD_VERSION: 'false'
-        VCPKG_CMAKE_VERSION: '3.31.10'
-        VCPKG_DISABLE_METRICS: 'true'
-        VCPKG_DISABLE_METRICS: 'true'
-        VCPKG_DISABLE_METRICS: 'true'
 
     - name: Install Dependencies (Windows)
       if: runner.os == 'Windows'
@@ -86,7 +68,7 @@ jobs:
     - name: Configure (Unix)
       if: runner.os != 'Windows'
       run: |
-        xmake f -m release -y -C
+        xmake f -m release -y -C .
 
     - name: Configure (Windows)
       if: runner.os == 'Windows'
@@ -94,9 +76,9 @@ jobs:
       run: |
         $env:VCPKG_ROOT = "${{ github.workspace }}/vcpkg"
         $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
-        $env:CL = "/MP"  # Multi-processor compilation
+        $env:CL = "/MP"
         $env:CI = "true"
-        xmake f -m release -y -C
+        xmake f -m release -y -C .
 
     - name: Build
       run: |

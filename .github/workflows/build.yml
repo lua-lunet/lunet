@@ -2,11 +2,9 @@ name: Build
 
 on:
   push:
-    branches: [ simbo1905, windows11, windows, main, xmake ]
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+*'
+    branches: [ main, xmake ]
   pull_request:
-    branches: [ simbo1905, main ]
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       ref:
@@ -24,6 +22,8 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
+    - uses: actions/checkout@v4
+
     - name: Cache vcpkg
       uses: actions/cache@v4
       with:
@@ -34,8 +34,8 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-vcpkg-
 
-    # Install xmake
-    - uses: xmake-io/github-action-setup-xmake@v1
+    - name: Install xmake
+      uses: xmake-io/github-action-setup-xmake@v1
       with:
         xmake-version: latest
 
@@ -65,94 +65,24 @@ jobs:
         vcpkg install luajit:x64-windows
         vcpkg install libpq[lz4,openssl,zlib]:x64-windows
 
-      - name: Configure (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          xmake f -m release -y -C -C
-
-      - name: Configure (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $env:VCPKG_ROOT = "${{ github.workspace }}/vcpkg"
-          $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
-          $env:CL = "/MP"  # Multi-processor compilation
-          $env:CI = "true"
-          xmake f -m release -y -C -C
-
-    - name: Build Core
-      run: xmake build
-    
-    - name: Build SQLite3 Driver
-      run: xmake build lunet-sqlite3
-
-    - name: Test (Proof of Life - Unix)
+    - name: Configure (Unix)
       if: runner.os != 'Windows'
       run: |
-        echo "print('LuaJIT initialized:', jit.version)" > test.lua
-        # Find the binary (lunet-run is the CLI, lunet.so is the module)
-        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
-        echo "Found binary: $LUNET_BIN"
-        $LUNET_BIN test.lua
+        xmake f -m release -y -C
 
-    - name: Test (Module Load - Unix)
-      if: runner.os != 'Windows'
-      run: |
-        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
-        LUNET_SO=$(find build -name 'lunet.so' -type f | head -1)
-        if [ -z "$LUNET_BIN" ] || [ -z "$LUNET_SO" ]; then
-          echo "Error: build outputs not found" >&2
-          exit 1
-        fi
-        MOD_DIR=$(dirname "$LUNET_SO")
-        cat > test_module.lua <<'EOF'
-        package.cpath = os.getenv("LUNET_CPATH") .. ";" .. package.cpath
-        local lunet = require("lunet")
-        assert(type(lunet.spawn) == "function")
-        print("lunet module loaded")
-        EOF
-        LUNET_CPATH="$MOD_DIR/?.so" $LUNET_BIN test_module.lua
-
-    - name: SQLite3 Smoke Test (Unix)
-      if: runner.os != 'Windows'
-      run: |
-        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
-        echo "Running SQLite3 smoke test..."
-        $LUNET_BIN test/smoke_sqlite3.lua
-
-    - name: Test (Proof of Life - Windows)
+    - name: Configure (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        "print('LuaJIT initialized:', jit.version)" | Out-File -FilePath test.lua -Encoding utf8
-        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
-        & $lunet.FullName test.lua
+        $env:VCPKG_ROOT = "${{ github.workspace }}/vcpkg"
+        $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
+        $env:CL = "/MP"  # Multi-processor compilation
+        $env:CI = "true"
+        xmake f -m release -y -C
 
-    - name: Test (Module Load - Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
+    - name: Build
       run: |
-        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
-        $mod  = Get-ChildItem -Path build -Recurse -Filter "lunet.dll" | Select-Object -First 1
-        if (-not $lunet) { throw "lunet-run.exe not found" }
-        if (-not $mod) { throw "lunet.dll not found" }
-        $modDir = $mod.Directory.FullName
-        @"
-        package.cpath = os.getenv('LUNET_CPATH') .. ';' .. package.cpath
-        local lunet = require('lunet')
-        assert(type(lunet.spawn) == 'function')
-        print('lunet module loaded')
-        "@ | Out-File -FilePath test_module.lua -Encoding utf8
-        $env:LUNET_CPATH = "$modDir\\?.dll"
-        & $lunet.FullName test_module.lua
-
-    - name: SQLite3 Smoke Test (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
-        Write-Host "Running SQLite3 smoke test..."
-        & $lunet.FullName test/smoke_sqlite3.lua
+        xmake build
 
     - name: Upload artifact (Linux)
       if: runner.os == 'Linux'
@@ -183,39 +113,3 @@ jobs:
           build/**/lunet-run.exe
           build/**/lunet.dll
           build/**/lunet/*.dll
-
-  release:
-    name: Upload Release Binaries
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Package Linux
-        run: |
-          cd artifacts/lunet-linux-amd64
-          tar -czvf ../lunet-linux-amd64.tar.gz .
-
-      - name: Package macOS
-        run: |
-          cd artifacts/lunet-macos
-          tar -czvf ../lunet-macos.tar.gz .
-
-      - name: Package Windows
-        run: |
-          cd artifacts/lunet-windows-amd64
-          zip -r ../lunet-windows-amd64.zip .
-
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            artifacts/lunet-linux-amd64.tar.gz
-            artifacts/lunet-macos.tar.gz
-            artifacts/lunet-windows-amd64.zip

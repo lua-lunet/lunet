@@ -65,19 +65,20 @@ jobs:
         vcpkg install luajit:x64-windows
         vcpkg install libpq[lz4,openssl,zlib]:x64-windows
 
-    - name: Configure (Unix)
-      if: runner.os != 'Windows'
-      run: xmake f -m release -y
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          xmake f -m release -y -C
 
-    - name: Configure (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        $env:VCPKG_ROOT = "${{ github.workspace }}/vcpkg"
-        $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
-        $env:CL = "/MP"  # Multi-processor compilation
-        $env:CI = "true"
-        xmake f -m release -y
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:VCPKG_ROOT = "${{ github.workspace }}/vcpkg"
+          $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
+          $env:CL = "/MP"  # Multi-processor compilation
+          $env:CI = "true"
+          xmake f -m release -y -C
 
     - name: Build Core
       run: xmake build

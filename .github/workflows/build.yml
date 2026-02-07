@@ -54,7 +54,7 @@ jobs:
       if: runner.os == 'Windows'
       uses: lukka/run-vcpkg@v11
       with:
-        vcpkgGitCommitId: '2026.01.16'
+        vcpkgGitCommitId: '66c0373'
       env:
         VCPKG_BINARY_SOURCES: 'clear;nuget,readwrite'
 

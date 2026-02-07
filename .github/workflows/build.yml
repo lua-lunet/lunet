@@ -52,13 +52,6 @@ jobs:
 
     - name: Setup vcpkg (Windows)
       if: runner.os == 'Windows'
-      uses: lukka/get-cmake@latest
-      with:
-        cmakeVersion: 3.31.10
-        cmakeArchitecture: x64
-
-    - name: Setup vcpkg (Windows)
-      if: runner.os == 'Windows'
       uses: lukka/run-vcpkg@v11
       with:
         vcpkgGitCommitId: '66c0373dc7fca549e5803087b9487edfe3aca0a1'
@@ -75,6 +68,7 @@ jobs:
         logCollectionRegExps: \s*'(.+CMakeOutput\.log)'\.\s*;\s*'(.+CMakeError\.log)'\.\s*;\s*(.+)out\.log\s*;\s+(.+)err\.log\s*;\s*(.+vcpkg.+\.log)\s*
       env:
         VCPKG_BINARY_SOURCES: 'clear;nuget,readwrite'
+        VCPKG_CMAKE_VERSION: '3.31.10'
 
     - name: Install Dependencies (Windows)
       if: runner.os == 'Windows'

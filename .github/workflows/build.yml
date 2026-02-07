@@ -67,8 +67,7 @@ jobs:
 
     - name: Configure (Unix)
       if: runner.os != 'Windows'
-      run: |
-        xmake f -m release -y -C .
+      run: xmake f -m release -y
 
     - name: Configure (Windows)
       if: runner.os == 'Windows'
@@ -78,7 +77,7 @@ jobs:
         $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
         $env:CL = "/MP"
         $env:CI = "true"
-        xmake f -m release -y -C .
+        xmake f -m release -y
 
     - name: Build
       run: |

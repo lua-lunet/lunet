@@ -24,9 +24,15 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Cache vcpkg
+      uses: actions/cache@v4
       with:
-        ref: ${{ github.event.inputs.ref || github.ref }}
+        path: |
+          vcpkg/installed
+          vcpkg/packages
+        key: ${{ runner.os }}-vcpkg-${{ hashFiles('xmake.lua') }}-${{ hashFiles('vcpkg.json', 'ports/*/vcpkg.json') }}
+        restore-keys: |
+          ${{ runner.os }}-vcpkg-
 
     # Install xmake
     - uses: xmake-io/github-action-setup-xmake@v1
@@ -48,12 +54,15 @@ jobs:
       if: runner.os == 'Windows'
       uses: lukka/run-vcpkg@v11
       with:
-        vcpkgGitCommitId: 'f9d8eecab99cb23e4befb7ea90b2f9504d311b54'
+        vcpkgGitCommitId: '2026.01.16'
+      env:
+        VCPKG_BINARY_SOURCES: 'clear;nuget,readwrite'
 
     - name: Install Dependencies (Windows)
       if: runner.os == 'Windows'
       run: |
         vcpkg install libuv:x64-windows luajit:x64-windows
+        vcpkg install libpq:x64-windows --feature-options=lz4,openssl,zlib
 
     - name: Configure (Unix)
       if: runner.os != 'Windows'
@@ -65,6 +74,8 @@ jobs:
       run: |
         $env:VCPKG_ROOT = "${{ github.workspace }}/vcpkg"
         $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
+        $env:CL = "/MP"  # Multi-processor compilation
+        $env:CI = "true"
         xmake f -m release -y
 
     - name: Build Core

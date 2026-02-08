@@ -36,7 +36,7 @@ build-debug: lint ## Build with LUNET_TRACE=ON for debugging (enables safety ass
 
 lint: ## Check C code for unsafe _lunet_* calls (must use safe wrappers)
 	@echo "=== Linting C code for safety violations ==="
-	@lua bin/lint_c_safety.lua
+	@xmake lua bin/lint_c_safety.lua
 
 init: ## Install dev dependencies (busted, luacheck) - run once
 	@command -v luarocks >/dev/null 2>&1 || { echo >&2 "Error: luarocks not found. Please install it."; exit 1; }

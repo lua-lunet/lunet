@@ -1,5 +1,5 @@
-#ifndef UDP_H
-#define UDP_H
+#ifndef LUNET_UDP_H
+#define LUNET_UDP_H
 
 #include "lunet_lua.h"
 
@@ -12,4 +12,7 @@ int lunet_udp_close(lua_State *L);
 void lunet_udp_trace_summary(void);
 #endif
 
-#endif  // UDP_H
+// Module entry point
+LUNET_API int luaopen_lunet_udp(lua_State *L);
+
+#endif  // LUNET_UDP_H

@@ -1,4 +1,6 @@
-#include "udp.h"
+#include "lunet_udp.h"
+#include "lunet_exports.h"
+#include "rt.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -462,4 +464,20 @@ int lunet_udp_close(lua_State *L) {
   lua_pushboolean(L, 1);
   lua_pushnil(L);
   return 2;
+}
+
+static int lunet_open_udp(lua_State *L) {
+  luaL_Reg funcs[] = {{"bind", lunet_udp_bind},
+                      {"send", lunet_udp_send},
+                      {"recv", lunet_udp_recv},
+                      {"close", lunet_udp_close},
+                      {NULL, NULL}};
+  luaL_newlib(L, funcs);
+  return 1;
+}
+
+LUNET_API int luaopen_lunet_udp(lua_State *L) {
+  lunet_trace_init();
+  set_default_luaL(L);
+  return lunet_open_udp(L);
 }

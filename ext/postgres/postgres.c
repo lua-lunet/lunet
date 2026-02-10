@@ -497,12 +497,22 @@ int lunet_db_query(lua_State* L) {
     return 2;
   }
 
+  ctx->params = collect_params(L, 3, &ctx->nparams);
+  if (ctx->nparams < 0) {
+    free(ctx->query);
+    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
   lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_query_work_cb, db_query_after_cb);
   if (ret < 0) {
     lunet_coref_release(L, ctx->co_ref);
     free(ctx->query);
+    free_params(ctx->params, ctx->nparams);
     free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, uv_strerror(ret));
@@ -686,12 +696,22 @@ int lunet_db_exec(lua_State* L) {
     return 2;
   }
 
+  ctx->params = collect_params(L, 3, &ctx->nparams);
+  if (ctx->nparams < 0) {
+    free(ctx->query);
+    free(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
   lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_exec_work_cb, db_exec_after_cb);
   if (ret < 0) {
     lunet_coref_release(L, ctx->co_ref);
     free(ctx->query);
+    free_params(ctx->params, ctx->nparams);
     free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, uv_strerror(ret));

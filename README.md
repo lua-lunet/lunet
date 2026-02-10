@@ -162,11 +162,8 @@ for _, user in ipairs(users) do
 end
 
 -- Parameterized queries (safe from SQL injection)
-local results = db.query_params(conn, "SELECT * FROM users WHERE name = ?", "alice")
-db.exec_params(conn, "INSERT INTO users (name) VALUES (?)", "bob")
-
--- Escape string (for dynamic SQL - prefer params when possible)
-local safe = db.escape(conn, "O'Brien")
+local results = db.query(conn, "SELECT * FROM users WHERE name = ?", "alice")
+db.exec(conn, "INSERT INTO users (name) VALUES (?)", "bob")
 
 -- Close connection
 db.close(conn)
@@ -188,7 +185,7 @@ local conn = db.open({
 
 -- Same API as SQLite3
 local users = db.query(conn, "SELECT * FROM users")
-db.exec_params(conn, "INSERT INTO users (name) VALUES (?)", "alice")
+db.exec(conn, "INSERT INTO users (name) VALUES (?)", "alice")
 
 db.close(conn)
 ```
@@ -209,7 +206,7 @@ local conn = db.open({
 
 -- Same API as SQLite3
 local users = db.query(conn, "SELECT * FROM users")
-db.exec_params(conn, "INSERT INTO users (name) VALUES ($1)", "alice")  -- PostgreSQL uses $1, $2, etc.
+db.exec(conn, "INSERT INTO users (name) VALUES ($1)", "alice")  -- PostgreSQL uses $1, $2, etc.
 
 db.close(conn)
 ```
@@ -220,11 +217,13 @@ db.close(conn)
 |----------|-------------|---------|
 | `db.open(path_or_config)` | Open connection | connection handle |
 | `db.close(conn)` | Close connection | - |
-| `db.query(conn, sql)` | Execute SELECT | array of row tables |
-| `db.exec(conn, sql)` | Execute INSERT/UPDATE/DELETE | affected row count |
-| `db.query_params(conn, sql, ...)` | Parameterized SELECT | array of row tables |
-| `db.exec_params(conn, sql, ...)` | Parameterized INSERT/UPDATE/DELETE | affected row count |
-| `db.escape(conn, str)` | Escape string for SQL | escaped string |
+| `db.query(conn, sql, ...)` | Execute SELECT (with optional parameters) | array of row tables |
+| `db.exec(conn, sql, ...)` | Execute INSERT/UPDATE/DELETE (with optional parameters) | affected row count |
+| `db.query_params(conn, sql, ...)` | Alias for `db.query` (legacy) | array of row tables |
+| `db.exec_params(conn, sql, ...)` | Alias for `db.exec` (legacy) | affected row count |
+| `db.escape(conn, str)` | Escape string for SQL (rarely needed) | escaped string |
+
+**Note**: All three drivers now use native prepared statements internally. Parameters are automatically bound using driver-native functions (`sqlite3_bind_*`, `mysql_stmt_bind_param`, `PQexecParams`), eliminating SQL injection risks.
 
 ## Safety: Zero-Cost Tracing
 

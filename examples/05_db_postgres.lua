@@ -91,7 +91,7 @@ lunet.spawn(function()
     }
 
     for _, user in ipairs(users) do
-        local rows, err = db.query_params(
+        local rows, err = db.query(
             conn,
             "INSERT INTO users (name, email, age) VALUES ($1, $2, $3) RETURNING id",
             user.name,
@@ -118,8 +118,8 @@ lunet.spawn(function()
     end
     print()
 
-    print("Querying one user (query_params):")
-    local rows, err = db.query_params(conn, "SELECT id, name, email FROM users WHERE name = $1", "Alice")
+    print("Querying one user (with parameters):")
+    local rows, err = db.query(conn, "SELECT id, name, email FROM users WHERE name = $1", "Alice")
     if err then
         print("Query failed:", err)
     else
@@ -130,7 +130,7 @@ lunet.spawn(function()
     print()
 
     print("Updating Bob's age to 36...")
-    local result, err = db.exec_params(conn, "UPDATE users SET age = $1 WHERE name = $2", 36, "Bob")
+    local result, err = db.exec(conn, "UPDATE users SET age = $1 WHERE name = $2", 36, "Bob")
     if err then
         print("Update failed:", err)
     else
@@ -139,7 +139,7 @@ lunet.spawn(function()
     print()
 
     print("Deleting O'Brien...")
-    local result, err = db.exec_params(conn, "DELETE FROM users WHERE name = $1", "O'Brien")
+    local result, err = db.exec(conn, "DELETE FROM users WHERE name = $1", "O'Brien")
     if err then
         print("Delete failed:", err)
     else

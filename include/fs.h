@@ -9,4 +9,11 @@ int lunet_fs_read(lua_State *L);
 int lunet_fs_write(lua_State *L);
 int lunet_fs_stat(lua_State *L);
 int lunet_fs_scandir(lua_State *L);
+
+#ifdef LUNET_TRACE
+void lunet_fs_trace_summary(void);
+#else
+static inline void lunet_fs_trace_summary(void) {}
+#endif
+
 #endif

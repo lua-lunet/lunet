@@ -11,10 +11,19 @@ set_languages("c99")
 add_rules("mode.debug", "mode.release")
 
 -- Debug tracing option (enables LUNET_TRACE for coroutine debugging)
-option("trace")
+-- NOTE: Do not name this option "trace" because xmake reserves --trace.
+option("lunet_trace")
     set_default(false)
     set_showmenu(true)
-    set_description("Enable LUNET_TRACE for coroutine reference tracking")
+    set_description("Enable LUNET_TRACE for counters, canaries and reference tracking")
+option_end()
+
+-- Verbose tracing option (enables LUNET_TRACE_VERBOSE for per-event logging)
+option("lunet_verbose_trace")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Enable LUNET_TRACE_VERBOSE for per-event stderr logging")
+    add_deps("lunet_trace") -- verbose trace implies trace
 option_end()
 
 -- Common source files for core lunet
@@ -28,7 +37,8 @@ local core_sources = {
     "src/udp.c",
     "src/stl.c",
     "src/timer.c",
-    "src/trace.c"
+    "src/trace.c",
+    "src/lunet_mem.c"  -- New memory wrapper implementation
 }
 
 -- =============================================================================
@@ -44,7 +54,9 @@ else
     add_requires("pkgconfig::libuv", {alias = "libuv"})
 end
 
--- Database driver dependencies (optional - only needed if building driver targets)
+-- Database driver dependencies (optional)
+-- NOTE: these are optional packages; xmake may prompt to install them.
+-- Use `xmake f -y` to auto-confirm.
 if is_plat("windows") then
     add_requires("vcpkg::sqlite3", {alias = "sqlite3", optional = true})
     add_requires("vcpkg::libmysql", {alias = "mysql", optional = true})
@@ -99,8 +111,11 @@ target("lunet")
     end
     
     -- Enable tracing if requested
-    if has_config("trace") then
+    if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+    end
+    if has_config("lunet_verbose_trace") then
+        add_defines("LUNET_TRACE_VERBOSE")
     end
 target_end()
 
@@ -128,8 +143,11 @@ target("lunet-bin")
     end
     
     -- Enable tracing if requested
-    if has_config("trace") then
+    if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+    end
+    if has_config("lunet_verbose_trace") then
+        add_defines("LUNET_TRACE_VERBOSE")
     end
 target_end()
 
@@ -146,7 +164,7 @@ target("lunet-sqlite3")
     set_kind("shared")
     set_prefixname("")
     set_basename("sqlite3")  -- Output: lunet/sqlite3.so
-    set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
+    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
     else
@@ -173,8 +191,11 @@ target("lunet-sqlite3")
         add_defines("LUNET_BUILDING_DLL")
         add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
     end
-    if has_config("trace") then
+    if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+    end
+    if has_config("lunet_verbose_trace") then
+        add_defines("LUNET_TRACE_VERBOSE")
     end
 target_end()
 
@@ -184,7 +205,7 @@ target("lunet-mysql")
     set_kind("shared")
     set_prefixname("")
     set_basename("mysql")  -- Output: lunet/mysql.so
-    set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
+    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
     else
@@ -211,8 +232,11 @@ target("lunet-mysql")
         add_defines("LUNET_BUILDING_DLL")
         add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
     end
-    if has_config("trace") then
+    if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+    end
+    if has_config("lunet_verbose_trace") then
+        add_defines("LUNET_TRACE_VERBOSE")
     end
 target_end()
 
@@ -222,7 +246,7 @@ target("lunet-postgres")
     set_kind("shared")
     set_prefixname("")
     set_basename("postgres")  -- Output: lunet/postgres.so
-    set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
+    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
     else
@@ -249,7 +273,10 @@ target("lunet-postgres")
         add_defines("LUNET_BUILDING_DLL")
         add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
     end
-    if has_config("trace") then
+    if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+    end
+    if has_config("lunet_verbose_trace") then
+        add_defines("LUNET_TRACE_VERBOSE")
     end
 target_end()

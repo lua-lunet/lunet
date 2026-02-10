@@ -17,6 +17,7 @@
 #include "udp.h"
 #include "trace.h"
 #include "runtime.h"
+#include "lunet_mem.h"
 
 static char *lunet_resolve_executable_path(const char *argv0) {
 #if defined(_WIN32)
@@ -106,10 +107,23 @@ static int lunet_open_db(lua_State *L) {
 }
 #endif
 
+/*
+ * Unified tracing initialization
+ * Replaces the redundant calls scattered across functions
+ */
+static void lunet_init_once(void) {
+    static int initialized = 0;
+    if (initialized) return;
+    initialized = 1;
+    
+    lunet_mem_init();
+    lunet_trace_init();
+}
+
 // Driver-specific module entry points
 #if defined(LUNET_DB_SQLITE3)
 LUNET_API int luaopen_lunet_sqlite3(lua_State *L) {
-  lunet_trace_init();
+  lunet_init_once();
   set_default_luaL(L);
   return lunet_open_db(L);
 }
@@ -117,7 +131,7 @@ LUNET_API int luaopen_lunet_sqlite3(lua_State *L) {
 
 #if defined(LUNET_DB_MYSQL)
 LUNET_API int luaopen_lunet_mysql(lua_State *L) {
-  lunet_trace_init();
+  lunet_init_once();
   set_default_luaL(L);
   return lunet_open_db(L);
 }
@@ -125,7 +139,7 @@ LUNET_API int luaopen_lunet_mysql(lua_State *L) {
 
 #if defined(LUNET_DB_POSTGRES)
 LUNET_API int luaopen_lunet_postgres(lua_State *L) {
-  lunet_trace_init();
+  lunet_init_once();
   set_default_luaL(L);
   return lunet_open_db(L);
 }
@@ -180,10 +194,24 @@ void lunet_open(lua_State *L) {
  *   lunet.spawn(function() ... end)
  */
 LUNET_API int luaopen_lunet(lua_State *L) {
-  lunet_trace_init();
+  lunet_init_once();
   set_default_luaL(L);
   lunet_open(L);  // Register submodules in package.preload
   return lunet_open_core(L);  // Return core module table
+}
+
+static void lunet_trace_shutdown(void) {
+#ifdef LUNET_TRACE
+    lunet_mem_summary();
+    lunet_socket_trace_summary();
+    lunet_udp_trace_summary();
+    lunet_timer_trace_summary();
+    lunet_signal_trace_summary();
+    lunet_fs_trace_summary();
+    lunet_trace_dump();
+    lunet_trace_assert_balanced("shutdown");
+    lunet_mem_assert_balanced("shutdown");
+#endif
 }
 
 #ifndef LUNET_NO_MAIN
@@ -194,6 +222,8 @@ int main(int argc, char **argv) {
     fprintf(stderr, "  --dangerously-skip-loopback-restriction\n");
     fprintf(stderr, "      Allow binding to any network interface. By default, binding is restricted\n");
     fprintf(stderr, "      to loopback (127.0.0.1, ::1) or Unix sockets.\n");
+    fprintf(stderr, "  --verbose-trace\n");
+    fprintf(stderr, "      Enable verbose per-event tracing (debug builds only)\n");
     return 1;
   }
 
@@ -202,6 +232,9 @@ int main(int argc, char **argv) {
     if (strcmp(argv[i], "--dangerously-skip-loopback-restriction") == 0) {
       g_lunet_config.dangerously_skip_loopback_restriction = 1;
       fprintf(stderr, "WARNING: Loopback restriction disabled. Binding to public interfaces allowed.\n");
+    } else if (strcmp(argv[i], "--verbose-trace") == 0) {
+      // Handled at compile time currently via LUNET_TRACE_VERBOSE
+      // Could be runtime flag in future
     } else if (argv[i][0] == '-') {
       fprintf(stderr, "Unknown option: %s\n", argv[i]);
       return 1;
@@ -216,8 +249,8 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  /* Initialize tracing (no-op in release builds) */
-  lunet_trace_init();
+  /* Initialize tracing */
+  lunet_init_once();
 
   lua_State *L = luaL_newstate();
   luaL_openlibs(L);
@@ -289,12 +322,8 @@ int main(int argc, char **argv) {
   }
   lua_pop(L, 1);
   
-  /* Dump trace statistics and assert balance (no-op in release builds) */
-#ifdef LUNET_TRACE
-  lunet_udp_trace_summary();
-#endif
-  lunet_trace_dump();
-  lunet_trace_assert_balanced("shutdown");
+  /* Dump trace statistics and assert balance */
+  lunet_trace_shutdown();
   
   lua_close(L);
   if (lua_exit_code >= 0) {

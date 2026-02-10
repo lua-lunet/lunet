@@ -17,6 +17,7 @@
 #include "co.h"
 #include "stl.h"
 #include "trace.h"
+#include "lunet_mem.h"
 #include "runtime.h"
 
 static size_t read_buffer_size = 4096;
@@ -37,6 +38,9 @@ typedef enum {
   SOCKET_CLIENT,
 } socket_type_t;
 
+/* Canary value for socket contexts - ASCII "SOCK" */
+#define SOCKET_CTX_CANARY 0x534F434BU
+
 typedef struct {
   union {
     uv_tcp_t tcp;
@@ -45,9 +49,16 @@ typedef struct {
     uv_stream_t stream;
   } u;
   socket_domain_t domain;
-  
+
   lua_State *co;
   socket_type_t type;
+  int closing;
+  int ref_count;
+
+#ifdef LUNET_TRACE
+  uint32_t canary;
+  int pending_writes;
+#endif
   union {
     struct {
       int accept_ref;
@@ -68,13 +79,167 @@ typedef struct {
   char *data;
 } write_req_t;
 
-static void lunet_close_cb(uv_handle_t *handle) {
-  socket_ctx_t *ctx = (socket_ctx_t *)handle->data;
-  if (ctx) {
+/*
+ * Socket domain tracing
+ * Tier 1 (LUNET_TRACE): counters + canary checks
+ * Tier 2 (LUNET_TRACE_VERBOSE): per-event stderr logging
+ */
+#ifdef LUNET_TRACE
+
+static int socket_trace_listen_count = 0;
+static int socket_trace_accept_count = 0;
+static int socket_trace_connect_count = 0;
+static int socket_trace_read_count = 0;
+static int socket_trace_write_count = 0;
+static int socket_trace_close_count = 0;
+
+static void socket_ctx_init_canary(socket_ctx_t *ctx) {
+    ctx->canary = SOCKET_CTX_CANARY;
+    ctx->pending_writes = 0;
+}
+
+/* Returns 0 if canary is valid, -1 if corrupted (use-after-free detected) */
+static int socket_ctx_check_canary(socket_ctx_t *ctx, const char *where) {
+    if (!ctx) return -1;
+    if (ctx->canary != SOCKET_CTX_CANARY) {
+        fprintf(stderr, "[SOCKET_TRACE] CANARY_FAIL ctx=%p in %s "
+                "(expected 0x%08X got 0x%08X) -- USE-AFTER-FREE DETECTED\n",
+                (void *)ctx, where, SOCKET_CTX_CANARY, ctx->canary);
+        return -1;
+    }
+    return 0;
+}
+
+#ifdef LUNET_TRACE_VERBOSE
+#define SOCKET_TRACE_LISTEN(ctx, domain, host, port) \
+    do { socket_trace_listen_count++; \
+         fprintf(stderr, "[SOCKET_TRACE] LISTEN #%d ctx=%p domain=%s %s:%d\n", \
+                 socket_trace_listen_count, (void*)(ctx), \
+                 (domain) == SOCKET_DOMAIN_TCP ? "tcp" : "unix", (host), (port)); \
+    } while(0)
+
+#define SOCKET_TRACE_ACCEPT(ctx) \
+    do { socket_trace_accept_count++; \
+         fprintf(stderr, "[SOCKET_TRACE] ACCEPT #%d ctx=%p\n", \
+                 socket_trace_accept_count, (void*)(ctx)); \
+    } while(0)
+
+#define SOCKET_TRACE_CONNECT(ctx, host, port) \
+    do { socket_trace_connect_count++; \
+         fprintf(stderr, "[SOCKET_TRACE] CONNECT #%d ctx=%p -> %s:%d\n", \
+                 socket_trace_connect_count, (void*)(ctx), (host), (port)); \
+    } while(0)
+
+#define SOCKET_TRACE_READ(ctx, nread) \
+    do { socket_trace_read_count++; \
+         fprintf(stderr, "[SOCKET_TRACE] READ #%d ctx=%p bytes=%zd\n", \
+                 socket_trace_read_count, (void*)(ctx), (ssize_t)(nread)); \
+    } while(0)
+
+#define SOCKET_TRACE_WRITE_START(ctx, len) \
+    do { socket_trace_write_count++; (ctx)->pending_writes++; \
+         fprintf(stderr, "[SOCKET_TRACE] WRITE_START #%d ctx=%p bytes=%zu pending=%d\n", \
+                 socket_trace_write_count, (void*)(ctx), (size_t)(len), (ctx)->pending_writes); \
+    } while(0)
+
+#define SOCKET_TRACE_WRITE_CB(ctx, status) \
+    do { \
+         fprintf(stderr, "[SOCKET_TRACE] WRITE_CB ctx=%p status=%d pending=%d\n", \
+                 (void*)(ctx), (status), (ctx)->pending_writes); \
+         (ctx)->pending_writes--; \
+    } while(0)
+
+#define SOCKET_TRACE_CLOSE(ctx) \
+    do { socket_trace_close_count++; \
+         fprintf(stderr, "[SOCKET_TRACE] CLOSE #%d ctx=%p type=%s pending_writes=%d\n", \
+                 socket_trace_close_count, (void*)(ctx), \
+                 (ctx)->type == SOCKET_SERVER ? "server" : "client", \
+                 (ctx)->pending_writes); \
+    } while(0)
+
+#define SOCKET_TRACE_FREE(ctx) \
+    fprintf(stderr, "[SOCKET_TRACE] FREE ctx=%p\n", (void*)(ctx))
+
+#define SOCKET_TRACE_REF(ctx, op) ((void)0)
+
+#else /* LUNET_TRACE but not VERBOSE */
+
+#define SOCKET_TRACE_LISTEN(ctx, domain, host, port) \
+    do { socket_trace_listen_count++; } while(0)
+
+#define SOCKET_TRACE_ACCEPT(ctx) \
+    do { socket_trace_accept_count++; } while(0)
+
+#define SOCKET_TRACE_CONNECT(ctx, host, port) \
+    do { socket_trace_connect_count++; } while(0)
+
+#define SOCKET_TRACE_READ(ctx, nread) \
+    do { socket_trace_read_count++; } while(0)
+
+#define SOCKET_TRACE_WRITE_START(ctx, len) \
+    do { socket_trace_write_count++; (ctx)->pending_writes++; } while(0)
+
+#define SOCKET_TRACE_WRITE_CB(ctx, status) \
+    do { (ctx)->pending_writes--; } while(0)
+
+#define SOCKET_TRACE_CLOSE(ctx) \
+    do { socket_trace_close_count++; } while(0)
+
+#define SOCKET_TRACE_FREE(ctx) ((void)0)
+#define SOCKET_TRACE_REF(ctx, op) ((void)0)
+
+#endif /* LUNET_TRACE_VERBOSE */
+
+void lunet_socket_trace_summary(void) {
+    fprintf(stderr, "[SOCKET_TRACE] SUMMARY: listen=%d accept=%d connect=%d "
+            "read=%d write=%d close=%d\n",
+            socket_trace_listen_count, socket_trace_accept_count,
+            socket_trace_connect_count, socket_trace_read_count,
+            socket_trace_write_count, socket_trace_close_count);
+}
+
+#else /* !LUNET_TRACE */
+
+#define socket_ctx_init_canary(ctx) ((void)0)
+#define socket_ctx_check_canary(ctx, where) (0)
+#define SOCKET_TRACE_LISTEN(ctx, domain, host, port) ((void)0)
+#define SOCKET_TRACE_ACCEPT(ctx) ((void)0)
+#define SOCKET_TRACE_CONNECT(ctx, host, port) ((void)0)
+#define SOCKET_TRACE_READ(ctx, nread) ((void)0)
+#define SOCKET_TRACE_WRITE_START(ctx, len) ((void)0)
+#define SOCKET_TRACE_WRITE_CB(ctx, status) ((void)0)
+#define SOCKET_TRACE_CLOSE(ctx) ((void)0)
+#define SOCKET_TRACE_FREE(ctx) ((void)0)
+#define SOCKET_TRACE_REF(ctx, op) ((void)0)
+
+void lunet_socket_trace_summary(void) {}
+
+#endif /* LUNET_TRACE */
+
+static void socket_ctx_retain(socket_ctx_t *ctx) {
+  if (!ctx) return;
+  ctx->ref_count++;
+}
+
+static void socket_ctx_release(socket_ctx_t *ctx) {
+  if (!ctx) return;
+  ctx->ref_count--;
+  if (ctx->ref_count == 0) {
+    SOCKET_TRACE_FREE(ctx);
     if (ctx->type == SOCKET_SERVER) {
       queue_destroy(ctx->server.pending_accepts);
     }
-    free(ctx);
+    lunet_free(ctx);
+  }
+}
+
+static void lunet_close_cb(uv_handle_t *handle) {
+  socket_ctx_t *ctx = (socket_ctx_t *)handle->data;
+  /* Null out handle->data FIRST so any straggler callback sees NULL */
+  handle->data = NULL;
+  if (ctx) {
+    /* Release the handle's reference. Pending ops (read/write) keep ctx alive. */
+    socket_ctx_release(ctx);
   }
 }
 
@@ -83,11 +248,55 @@ static void lunet_write_cb(uv_write_t *req, int status) {
   write_req_t *write_req = (write_req_t *)req;
   socket_ctx_t *ctx = write_req->ctx;
 
+#ifdef LUNET_TRACE_VERBOSE
+  fprintf(stderr, "[SOCKET_TRACE] WRITE_CB_ENTER req=%p ctx=%p status=%d\n",
+          (void *)write_req, (void *)ctx, status);
+#endif
+
+  /* ---- UAF guard (Issue #50) ----
+   * If close_cb already ran and socket_ctx_release freed ctx, write_req->ctx
+   * may be stale. With refcount, ctx stays alive until we release. But if
+   * something went very wrong, guard against NULL. */
+  if (!ctx) {
+    if (write_req->data) {
+      free(write_req->data);
+    }
+    free(write_req);
+    return;
+  }
+
+#ifdef LUNET_TRACE
+  if (socket_ctx_check_canary(ctx, "lunet_write_cb") != 0) {
+    if (write_req->data) {
+      lunet_free(write_req->data);
+    }
+    lunet_free_nonnull(write_req);
+    return;
+  }
+  SOCKET_TRACE_WRITE_CB(ctx, status);
+#endif
+
+  /* Handle is closing — free resources, release coref, release retain, skip Lua resume */
+  if (ctx->closing) {
+    if (ctx->client.write_ref != LUA_NOREF) {
+      lunet_coref_release(ctx->co, ctx->client.write_ref);
+      ctx->client.write_ref = LUA_NOREF;
+    }
+    if (write_req->data) {
+      lunet_free(write_req->data);
+    }
+    lunet_free_nonnull(write_req);
+    socket_ctx_release(ctx);
+    return;
+  }
+
   if (ctx->client.write_ref != LUA_NOREF) {
     lua_State *co = ctx->co;
-    lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->client.write_ref);
-    lunet_coref_release(co, ctx->client.write_ref);
+    int write_ref = ctx->client.write_ref;
     ctx->client.write_ref = LUA_NOREF;
+
+    lua_rawgeti(co, LUA_REGISTRYINDEX, write_ref);
+    lunet_coref_release(co, write_ref);
 
     if (lua_isthread(co, -1)) {
       lua_State *waiting_co = lua_tothread(co, -1);
@@ -99,25 +308,37 @@ static void lunet_write_cb(uv_write_t *req, int status) {
         lua_pushstring(waiting_co, uv_strerror(status));
       }
 
-      int resume_status = lua_resume(waiting_co, 1);
+      int resume_status = lunet_co_resume(waiting_co, 1);
       if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
         const char *err = lua_tostring(waiting_co, -1);
         if (err) {
           fprintf(stderr, "[lunet] resume error in lunet_write_cb: %s\n", err);
         }
       }
+    } else {
+      lua_pop(co, 1);  /* pop the non-thread value */
     }
   }
 
   // release write request and data
   if (write_req->data) {
-    free(write_req->data);
+    lunet_free(write_req->data);
   }
-  free(write_req);
+  lunet_free_nonnull(write_req);
+
+  /* Release the write operation's reference */
+  socket_ctx_release(ctx);
 }
 
 static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
-  buf->base = malloc(read_buffer_size);
+  /* If handle is closing or ctx was already freed, return empty buffer.
+   * libuv will then call read_cb with nread=UV_ENOBUFS which we handle. */
+  if (!handle->data || uv_is_closing(handle)) {
+    buf->base = NULL;
+    buf->len = 0;
+    return;
+  }
+  buf->base = lunet_alloc(read_buffer_size);
   buf->len = read_buffer_size;
 }
 
@@ -126,11 +347,49 @@ static void lunet_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
 
   uv_read_stop(stream);
 
+  /* ---- UAF guard (Issue #50) ----
+   * If close_cb already ran, handle->data is NULL. Free the buffer and bail.
+   * No socket_ctx_release here because the ctx is already gone. */
+  if (!ctx) {
+    if (buf && buf->base) {
+      free(buf->base);  /* raw free: ctx/lunet_mem may already be torn down */
+    }
+    return;
+  }
+
+#ifdef LUNET_TRACE
+  if (socket_ctx_check_canary(ctx, "lunet_read_cb") != 0) {
+    if (buf && buf->base) {
+      lunet_free_nonnull(buf->base);
+    }
+    /* Canary failed — ctx is garbage. Don't touch it further. */
+    return;
+  }
+#endif
+
+  /* Handle is closing — free buffer, release our retain, skip Lua resume */
+  if (ctx->closing || uv_is_closing((uv_handle_t *)stream)) {
+    if (buf && buf->base) {
+      lunet_free_nonnull(buf->base);
+    }
+    /* Release the read_ref if still held, so the coref count balances */
+    if (ctx->type == SOCKET_CLIENT && ctx->client.read_ref != LUA_NOREF) {
+      lunet_coref_release(ctx->co, ctx->client.read_ref);
+      ctx->client.read_ref = LUA_NOREF;
+    }
+    socket_ctx_release(ctx);
+    return;
+  }
+
+  SOCKET_TRACE_READ(ctx, nread);
+
   if (ctx->client.read_ref != LUA_NOREF) {
     lua_State *co = ctx->co;
-    lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->client.read_ref);
-    lunet_coref_release(co, ctx->client.read_ref);
+    int read_ref = ctx->client.read_ref;
     ctx->client.read_ref = LUA_NOREF;
+
+    lua_rawgeti(co, LUA_REGISTRYINDEX, read_ref);
+    lunet_coref_release(co, read_ref);
 
     if (lua_isthread(co, -1)) {
       lua_State *waiting_co = lua_tothread(co, -1);
@@ -147,19 +406,24 @@ static void lunet_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
         lua_pushstring(waiting_co, uv_strerror(nread));
       }
 
-      int resume_status = lua_resume(waiting_co, 2);
+      int resume_status = lunet_co_resume(waiting_co, 2);
       if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
         const char *err = lua_tostring(waiting_co, -1);
         if (err) {
           fprintf(stderr, "[lunet] resume error in on_read: %s\n", err);
         }
       }
+    } else {
+      lua_pop(co, 1);  /* pop the non-thread value */
     }
   }
 
-  if (buf->base) {
-    free(buf->base);
+  if (buf && buf->base) {
+    lunet_free_nonnull(buf->base);
   }
+
+  /* Release the read operation's reference */
+  socket_ctx_release(ctx);
 }
 
 static void lunet_listen_cb(uv_stream_t *server, int status) {
@@ -180,7 +444,7 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
         lua_pushnil(waiting_co);
         lua_pushstring(waiting_co, uv_strerror(status));
 
-        int resume_status = lua_resume(waiting_co, 2);
+        int resume_status = lunet_co_resume(waiting_co, 2);
         if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
           const char *err = lua_tostring(waiting_co, -1);
           if (err) {
@@ -193,7 +457,7 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
   }
 
   // create new client connection
-  socket_ctx_t *client_ctx = malloc(sizeof(socket_ctx_t));
+  socket_ctx_t *client_ctx = lunet_alloc(sizeof(socket_ctx_t));
   if (!client_ctx) {
     return;  // ignore this connection
   }
@@ -201,8 +465,13 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
   client_ctx->co = ctx->co;
   client_ctx->type = SOCKET_CLIENT;
   client_ctx->domain = ctx->domain;
+  client_ctx->closing = 0;
+  client_ctx->ref_count = 1;
   client_ctx->client.read_ref = LUA_NOREF;
   client_ctx->client.write_ref = LUA_NOREF;
+  socket_ctx_init_canary(client_ctx);
+
+  SOCKET_TRACE_ACCEPT(client_ctx);
 
   int ret = 0;
   if (ctx->domain == SOCKET_DOMAIN_TCP) {
@@ -212,7 +481,7 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
   }
 
   if (ret < 0) {
-    free(client_ctx);
+    lunet_free(client_ctx);
     return;
   }
 
@@ -237,7 +506,7 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
       lua_pushlightuserdata(waiting_co, client_ctx);
       lua_pushnil(waiting_co);
 
-      int resume_status = lua_resume(waiting_co, 2);
+      int resume_status = lunet_co_resume(waiting_co, 2);
       if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
         const char *err = lua_tostring(waiting_co, -1);
         if (err) {
@@ -284,7 +553,7 @@ int lunet_socket_listen(lua_State *co) {
       return 2;
   }
 
-  socket_ctx_t *ctx = malloc(sizeof(socket_ctx_t));
+  socket_ctx_t *ctx = lunet_alloc(sizeof(socket_ctx_t));
   if (!ctx) {
     lua_pushnil(co);
     lua_pushstring(co, "out of memory");
@@ -293,10 +562,13 @@ int lunet_socket_listen(lua_State *co) {
   ctx->co = co;
   ctx->type = SOCKET_SERVER;
   ctx->domain = domain;
+  ctx->closing = 0;
+  ctx->ref_count = 1;
   ctx->server.accept_ref = LUA_NOREF;
   ctx->server.pending_accepts = queue_init();
+  socket_ctx_init_canary(ctx);
   if (!ctx->server.pending_accepts) {
-    free(ctx);
+    lunet_free(ctx);
     lua_pushnil(co);
     lua_pushstring(co, "out of memory");
     return 2;
@@ -306,7 +578,7 @@ int lunet_socket_listen(lua_State *co) {
   if (domain == SOCKET_DOMAIN_TCP) {
       if ((ret = uv_tcp_init(uv_default_loop(), &ctx->u.tcp)) < 0) {
         queue_destroy(ctx->server.pending_accepts);
-        free(ctx);
+        lunet_free(ctx);
         lua_pushnil(co);
         lua_pushfstring(co, "failed to initialize TCP: %s", uv_strerror(ret));
         return 2;
@@ -314,7 +586,7 @@ int lunet_socket_listen(lua_State *co) {
   } else {
       if ((ret = uv_pipe_init(uv_default_loop(), &ctx->u.pipe, 0)) < 0) {
         queue_destroy(ctx->server.pending_accepts);
-        free(ctx);
+        lunet_free(ctx);
         lua_pushnil(co);
         lua_pushfstring(co, "failed to initialize Pipe: %s", uv_strerror(ret));
         return 2;
@@ -356,6 +628,8 @@ int lunet_socket_listen(lua_State *co) {
     lua_pushfstring(co, "failed to listen: %s", uv_strerror(ret));
     return 2;
   }
+
+  SOCKET_TRACE_LISTEN(ctx, domain, host, port);
   
   lua_pushlightuserdata(co, ctx);
   lua_pushnil(co);
@@ -464,7 +738,18 @@ int lunet_socket_close(lua_State *L) {
     return 1;
   }
 
-  uv_close(&ctx->u.handle, lunet_close_cb);
+  SOCKET_TRACE_CLOSE(ctx);
+
+  if (!ctx->closing) {
+      ctx->closing = 1;
+
+      /* Stop reading immediately so libuv won't fire read_cb after close */
+      if (ctx->type == SOCKET_CLIENT) {
+        uv_read_stop(&ctx->u.stream);
+      }
+
+      uv_close(&ctx->u.handle, lunet_close_cb);
+  }
 
   lua_pushnil(L);
   return 1;
@@ -499,8 +784,10 @@ int lunet_socket_read(lua_State *co) {
   lunet_coref_create(co, ctx->client.read_ref);
 
   // start reading
+  socket_ctx_retain(ctx);
   int ret = uv_read_start(&ctx->u.stream, alloc_buffer, lunet_read_cb);
   if (ret < 0) {
+    socket_ctx_release(ctx);
     // failed to start reading, clean up the reference
     lunet_coref_release(co, ctx->client.read_ref);
     ctx->client.read_ref = LUA_NOREF;
@@ -545,16 +832,16 @@ int lunet_socket_write(lua_State *co) {
   const char *data = lua_tolstring(co, 2, &data_len);
 
   // allocate write request
-  write_req_t *write_req = malloc(sizeof(write_req_t));
+  write_req_t *write_req = lunet_alloc(sizeof(write_req_t));
   if (!write_req) {
     lua_pushstring(co, "out of memory");
     return 1;
   }
 
   // copy data to heap memory
-  write_req->data = malloc(data_len);
+  write_req->data = lunet_alloc(data_len);
   if (!write_req->data) {
-    free(write_req);
+    lunet_free(write_req);
     lua_pushstring(co, "out of memory");
     return 1;
   }
@@ -568,14 +855,20 @@ int lunet_socket_write(lua_State *co) {
   // save the coroutine reference
   lunet_coref_create(co, ctx->client.write_ref);
 
+  SOCKET_TRACE_WRITE_START(ctx, data_len);
+
+  /* Hold ctx alive until write callback fires */
+  socket_ctx_retain(ctx);
+
   // start writing
   int ret = uv_write(&write_req->req, &ctx->u.stream, &buf, 1, lunet_write_cb);
   if (ret < 0) {
+    socket_ctx_release(ctx);
     // failed to start writing, clean up the resource
     lunet_coref_release(co, ctx->client.write_ref);
     ctx->client.write_ref = LUA_NOREF;
-    free(write_req->data);
-    free(write_req);
+    lunet_free(write_req->data);
+    lunet_free(write_req);
 
     lua_pushfstring(co, "failed to start writing: %s", uv_strerror(ret));
     return 1;
@@ -610,7 +903,7 @@ static void lunet_connect_cb(uv_connect_t *req, int status) {
     lua_pushstring(co, uv_strerror(status));
   }
 
-  int resume_status = lua_resume(co, 2);
+  int resume_status = lunet_co_resume(co, 2);
   if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
     const char *err = lua_tostring(co, -1);
     if (err) {
@@ -618,7 +911,7 @@ static void lunet_connect_cb(uv_connect_t *req, int status) {
     }
   }
 
-  free(ctx);
+  lunet_free_nonnull(ctx);
 }
 
 int lunet_socket_connect(lua_State *L) {
@@ -640,7 +933,7 @@ int lunet_socket_connect(lua_State *L) {
       }
   }
 
-  socket_ctx_t *ctx = malloc(sizeof(socket_ctx_t));
+  socket_ctx_t *ctx = lunet_alloc(sizeof(socket_ctx_t));
   if (!ctx) {
     lua_pushnil(L);
     lua_pushstring(L, "out of memory");
@@ -650,8 +943,11 @@ int lunet_socket_connect(lua_State *L) {
   ctx->co = L;
   ctx->type = SOCKET_CLIENT;
   ctx->domain = domain;
+  ctx->closing = 0;
+  ctx->ref_count = 1;
   ctx->client.read_ref = LUA_NOREF;
   ctx->client.write_ref = LUA_NOREF;
+  socket_ctx_init_canary(ctx);
 
   int ret = 0;
   if (domain == SOCKET_DOMAIN_TCP) {
@@ -661,7 +957,7 @@ int lunet_socket_connect(lua_State *L) {
   }
 
   if (ret < 0) {
-    free(ctx);
+    lunet_free(ctx);
     lua_pushnil(L);
     lua_pushfstring(L, "failed to initialize socket: %s", uv_strerror(ret));
     return 2;
@@ -669,10 +965,9 @@ int lunet_socket_connect(lua_State *L) {
 
   ctx->u.handle.data = ctx;
 
-  connect_ctx_t *connect_ctx = malloc(sizeof(connect_ctx_t));
+  connect_ctx_t *connect_ctx = lunet_alloc(sizeof(connect_ctx_t));
   if (!connect_ctx) {
     uv_close(&ctx->u.handle, lunet_close_cb);
-    free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, "out of memory");
     return 2;
@@ -686,15 +981,16 @@ int lunet_socket_connect(lua_State *L) {
   // save coroutine reference, for resume in connect_cb
   lunet_coref_create(L, connect_ctx->co_ref);
 
+  SOCKET_TRACE_CONNECT(ctx, host, port);
+
   if (domain == SOCKET_DOMAIN_TCP) {
       struct sockaddr_in dest;
       ret = uv_ip4_addr(host, port, &dest);
       if (ret < 0) {
         lunet_coref_release(L, connect_ctx->co_ref);
         connect_ctx->co_ref = LUA_NOREF;
-        free(connect_ctx);
+        lunet_free(connect_ctx);
         uv_close(&ctx->u.handle, lunet_close_cb);
-        free(ctx);
         lua_pushnil(L);
         lua_pushstring(L, "invalid host or port");
         return 2;
@@ -702,24 +998,14 @@ int lunet_socket_connect(lua_State *L) {
       ret = uv_tcp_connect(&connect_ctx->req, &ctx->u.tcp, (const struct sockaddr *)&dest, lunet_connect_cb);
   } else {
       uv_pipe_connect(&connect_ctx->req, &ctx->u.pipe, host, lunet_connect_cb);
-      ret = 0; // uv_pipe_connect is void? No, checks say void in some versions?
-      // libuv docs says void uv_pipe_connect(...)
-      // So we assume success? Or check synchronous errors?
-      // Wait, uv_pipe_connect is void in older versions but might be checked?
-      // Checking header...
-      // Usually it's void.
+      ret = 0;
   }
-  
-  // NOTE: uv_pipe_connect is void. We assume it initiated.
-  // But wait, if ret is not set?
-  // Let's verify libuv version.
   
   if (ret < 0) {
     lunet_coref_release(L, connect_ctx->co_ref);
     connect_ctx->co_ref = LUA_NOREF;
-    free(connect_ctx);
+    lunet_free(connect_ctx);
     uv_close(&ctx->u.handle, lunet_close_cb);
-    free(ctx);
     lua_pushnil(L);
     lua_pushfstring(L, "failed to start connect: %s", uv_strerror(ret));
     return 2;

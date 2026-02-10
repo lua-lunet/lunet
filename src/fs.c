@@ -7,6 +7,50 @@
 
 #include "co.h"
 #include "trace.h"
+#include "lunet_mem.h"
+
+/*
+ * FS domain tracing
+ */
+#ifdef LUNET_TRACE
+static int fs_trace_open_count = 0;
+static int fs_trace_close_count = 0;
+static int fs_trace_read_count = 0;
+static int fs_trace_write_count = 0;
+static int fs_trace_stat_count = 0;
+static int fs_trace_scandir_count = 0;
+
+#ifdef LUNET_TRACE_VERBOSE
+#define FS_TRACE_OPEN(path)    do { fs_trace_open_count++; fprintf(stderr, "[FS_TRACE] OPEN #%d %s\n", fs_trace_open_count, (path)); } while(0)
+#define FS_TRACE_CLOSE(fd)     do { fs_trace_close_count++; fprintf(stderr, "[FS_TRACE] CLOSE #%d fd=%d\n", fs_trace_close_count, (int)(fd)); } while(0)
+#define FS_TRACE_READ(fd, len) do { fs_trace_read_count++; fprintf(stderr, "[FS_TRACE] READ #%d fd=%d len=%zu\n", fs_trace_read_count, (int)(fd), (size_t)(len)); } while(0)
+#define FS_TRACE_WRITE(fd, len) do { fs_trace_write_count++; fprintf(stderr, "[FS_TRACE] WRITE #%d fd=%d len=%zu\n", fs_trace_write_count, (int)(fd), (size_t)(len)); } while(0)
+#define FS_TRACE_STAT(path)    do { fs_trace_stat_count++; fprintf(stderr, "[FS_TRACE] STAT #%d %s\n", fs_trace_stat_count, (path)); } while(0)
+#define FS_TRACE_SCANDIR(path) do { fs_trace_scandir_count++; fprintf(stderr, "[FS_TRACE] SCANDIR #%d %s\n", fs_trace_scandir_count, (path)); } while(0)
+#else
+#define FS_TRACE_OPEN(path)    do { fs_trace_open_count++; } while(0)
+#define FS_TRACE_CLOSE(fd)     do { fs_trace_close_count++; } while(0)
+#define FS_TRACE_READ(fd, len) do { fs_trace_read_count++; } while(0)
+#define FS_TRACE_WRITE(fd, len) do { fs_trace_write_count++; } while(0)
+#define FS_TRACE_STAT(path)    do { fs_trace_stat_count++; } while(0)
+#define FS_TRACE_SCANDIR(path) do { fs_trace_scandir_count++; } while(0)
+#endif
+
+void lunet_fs_trace_summary(void) {
+    fprintf(stderr, "[FS_TRACE] SUMMARY: open=%d close=%d read=%d write=%d stat=%d scandir=%d\n",
+            fs_trace_open_count, fs_trace_close_count, fs_trace_read_count,
+            fs_trace_write_count, fs_trace_stat_count, fs_trace_scandir_count);
+}
+
+#else /* !LUNET_TRACE */
+#define FS_TRACE_OPEN(path) ((void)0)
+#define FS_TRACE_CLOSE(fd) ((void)0)
+#define FS_TRACE_READ(fd, len) ((void)0)
+#define FS_TRACE_WRITE(fd, len) ((void)0)
+#define FS_TRACE_STAT(path) ((void)0)
+#define FS_TRACE_SCANDIR(path) ((void)0)
+void lunet_fs_trace_summary(void) {}
+#endif
 
 typedef struct {
   uv_fs_t req;
@@ -18,7 +62,6 @@ static void lunet_fs_open_cb(uv_fs_t *req) {
   fs_ctx_t *ctx = (fs_ctx_t *)req->data;
   lua_State *L = ctx->L;
 
-  // resume coroutine
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
 
@@ -29,7 +72,7 @@ static void lunet_fs_open_cb(uv_fs_t *req) {
   }
 
   lua_State *co = lua_tothread(L, -1);
-  lua_pop(L, 1);  // pop coroutine
+  lua_pop(L, 1);
 
   if (req->result >= 0) {
     lua_pushinteger(co, req->result);
@@ -39,14 +82,13 @@ static void lunet_fs_open_cb(uv_fs_t *req) {
     lua_pushstring(co, uv_strerror((int)req->result));
   }
 
-  lua_resume(co, 2);
+  lunet_co_resume(co, 2);
 
 cleanup:
   uv_fs_req_cleanup(req);
-  free(ctx);
+  lunet_free(ctx);
 }
 
-// mode to uv_fs_open flags
 static int fs_mode_to_flags(const char *mode, size_t mode_len) {
   if (mode_len == 0) return -1;
 
@@ -54,50 +96,45 @@ static int fs_mode_to_flags(const char *mode, size_t mode_len) {
   bool has_plus = false;
   bool has_x = false;
 
-  // Check for '+' and 'x' modifiers first
   for (size_t i = 0; i < mode_len; i++) {
     if (mode[i] == '+') has_plus = true;
     if (mode[i] == 'x') has_x = true;
   }
 
-  // Handle primary mode
   switch (mode[0]) {
     case 'r':
       if (has_plus) {
-        flags = O_RDWR;  // r+ - read/write, file must exist
+        flags = O_RDWR;
       } else {
-        flags = O_RDONLY;  // r - read only
+        flags = O_RDONLY;
       }
       break;
-
     case 'w':
       if (has_plus) {
-        flags = O_RDWR | O_CREAT | O_TRUNC;  // w+ - read/write, create/truncate
+        flags = O_RDWR | O_CREAT | O_TRUNC;
       } else {
-        flags = O_WRONLY | O_CREAT | O_TRUNC;  // w - write only, create/truncate
+        flags = O_WRONLY | O_CREAT | O_TRUNC;
       }
       break;
-
     case 'a':
       if (has_plus) {
-        flags = O_RDWR | O_CREAT | O_APPEND;  // a+ - read/write, create/append
+        flags = O_RDWR | O_CREAT | O_APPEND;
       } else {
-        flags = O_WRONLY | O_CREAT | O_APPEND;  // a - write only, create/append
+        flags = O_WRONLY | O_CREAT | O_APPEND;
       }
       break;
-
     case 'x':
       if (has_plus) {
-        flags = O_RDWR | O_CREAT | O_EXCL;  // x+ - read/write, create new, fail if exists
+        flags = O_RDWR | O_CREAT | O_EXCL;
       } else {
-        flags = O_WRONLY | O_CREAT | O_EXCL;  // x - write only, create new, fail if exists
+        flags = O_WRONLY | O_CREAT | O_EXCL;
       }
       break;
-
     default:
-      return -1;  // Invalid mode
+      return -1;
   }
 
+  (void)has_x;
   return flags;
 }
 
@@ -121,7 +158,7 @@ int lunet_fs_open(lua_State *L) {
     return 2;
   }
 
-  fs_ctx_t *ctx = malloc(sizeof(fs_ctx_t));
+  fs_ctx_t *ctx = lunet_alloc(sizeof(fs_ctx_t));
   if (!ctx) {
     lua_pushnil(L);
     lua_pushstring(L, "fs.open: out of memory");
@@ -132,10 +169,12 @@ int lunet_fs_open(lua_State *L) {
   lunet_coref_create(L, ctx->co_ref);
   ctx->req.data = ctx;
 
+  FS_TRACE_OPEN(path);
+
   int rc = uv_fs_open(uv_default_loop(), &ctx->req, path, flags, 0644, lunet_fs_open_cb);
   if (rc < 0) {
     lunet_coref_release(L, ctx->co_ref);
-    free(ctx);
+    lunet_free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, uv_strerror(rc));
     return 2;
@@ -154,7 +193,6 @@ static void lunet_fs_close_cb(uv_fs_t *req) {
   fs_close_ctx_t *ctx = (fs_close_ctx_t *)req->data;
   lua_State *L = ctx->L;
 
-  // resume coroutine
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
 
@@ -173,11 +211,11 @@ static void lunet_fs_close_cb(uv_fs_t *req) {
     lua_pushstring(co, uv_strerror((int)req->result));
   }
 
-  lua_resume(co, 1);
+  lunet_co_resume(co, 1);
 
 cleanup:
   uv_fs_req_cleanup(req);
-  free(ctx);
+  lunet_free(ctx);
 }
 
 int lunet_fs_close(lua_State *L) {
@@ -191,7 +229,7 @@ int lunet_fs_close(lua_State *L) {
 
   uv_file fd = (uv_file)lua_tointeger(L, 1);
 
-  fs_close_ctx_t *ctx = malloc(sizeof(fs_close_ctx_t));
+  fs_close_ctx_t *ctx = lunet_alloc(sizeof(fs_close_ctx_t));
   if (!ctx) {
     lua_pushstring(L, "fs.close: out of memory");
     return 1;
@@ -201,10 +239,12 @@ int lunet_fs_close(lua_State *L) {
   lunet_coref_create(L, ctx->co_ref);
   ctx->req.data = ctx;
 
+  FS_TRACE_CLOSE(fd);
+
   int rc = uv_fs_close(uv_default_loop(), &ctx->req, fd, lunet_fs_close_cb);
   if (rc < 0) {
     lunet_coref_release(L, ctx->co_ref);
-    free(ctx);
+    lunet_free(ctx);
     lua_pushstring(L, uv_strerror(rc));
     return 1;
   }
@@ -232,27 +272,10 @@ static void lunet_fs_stat_cb(uv_fs_t *req) {
   }
 
   lua_State *co = lua_tothread(L, -1);
-  lua_pop(L, 1);  // pop thread
+  lua_pop(L, 1);
 
   if (req->result == 0) {
     uv_stat_t *s = &req->statbuf;
-    // lua_pushinteger(co, (lua_Integer)s->st_size);
-    // uint64_t st_dev;
-    // uint64_t st_mode;
-    // uint64_t st_nlink;
-    // uint64_t st_uid;
-    // uint64_t st_gid;
-    // uint64_t st_rdev;
-    // uint64_t st_ino;
-    // uint64_t st_size;
-    // uint64_t st_blksize;
-    // uint64_t st_blocks;
-    // uint64_t st_flags;
-    // uint64_t st_gen;
-    // uv_timespec_t st_atim;
-    // uv_timespec_t st_mtim;
-    // uv_timespec_t st_ctim;
-    // uv_timespec_t st_birthtim;、
     lua_newtable(co);
     lua_pushinteger(co, (lua_Integer)s->st_dev);
     lua_setfield(co, -2, "dev");
@@ -292,11 +315,11 @@ static void lunet_fs_stat_cb(uv_fs_t *req) {
     lua_pushstring(co, uv_strerror((int)req->result));
   }
 
-  lua_resume(co, 2);
+  lunet_co_resume(co, 2);
 
 cleanup:
   uv_fs_req_cleanup(req);
-  free(ctx);
+  lunet_free(ctx);
 }
 
 int lunet_fs_stat(lua_State *L) {
@@ -312,7 +335,7 @@ int lunet_fs_stat(lua_State *L) {
 
   const char *path = luaL_checkstring(L, 1);
 
-  fs_stat_ctx_t *ctx = malloc(sizeof(fs_stat_ctx_t));
+  fs_stat_ctx_t *ctx = lunet_alloc(sizeof(fs_stat_ctx_t));
   if (!ctx) {
     lua_pushnil(L);
     lua_pushstring(L, "fs.fstat out of memory");
@@ -323,10 +346,12 @@ int lunet_fs_stat(lua_State *L) {
   lunet_coref_create(L, ctx->co_ref);
   ctx->req.data = ctx;
 
+  FS_TRACE_STAT(path);
+
   int rc = uv_fs_stat(uv_default_loop(), &ctx->req, path, lunet_fs_stat_cb);
   if (rc < 0) {
     lunet_coref_release(L, ctx->co_ref);
-    free(ctx);
+    lunet_free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, uv_strerror(rc));
     return 2;
@@ -367,13 +392,14 @@ static void lunet_fs_read_cb(uv_fs_t *req) {
     lua_pushstring(co, uv_strerror((int)req->result));
   }
 
-  lua_resume(co, 2);
+  lunet_co_resume(co, 2);
 
 cleanup:
   uv_fs_req_cleanup(req);
-  free(ctx->buf);
-  free(ctx);
+  lunet_free_nonnull(ctx->buf);
+  lunet_free(ctx);
 }
+
 int lunet_fs_read(lua_State *L) {
   if (lunet_ensure_coroutine(L, "fs.read") != 0) {
     return lua_error(L);
@@ -387,7 +413,7 @@ int lunet_fs_read(lua_State *L) {
   uv_file fd = (uv_file)lua_tointeger(L, 1);
   size_t len = (size_t)lua_tointeger(L, 2);
 
-  fs_read_ctx_t *ctx = malloc(sizeof(fs_read_ctx_t));
+  fs_read_ctx_t *ctx = lunet_alloc(sizeof(fs_read_ctx_t));
   if (!ctx) {
     lua_pushnil(L);
     lua_pushstring(L, "fs.read out of memory");
@@ -397,22 +423,24 @@ int lunet_fs_read(lua_State *L) {
   ctx->L = L;
   lunet_coref_create(L, ctx->co_ref);
   ctx->len = len;
-  ctx->buf = malloc(len);
+  ctx->buf = lunet_alloc(len);
   if (!ctx->buf) {
     lunet_coref_release(L, ctx->co_ref);
-    free(ctx);
+    lunet_free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, "fs.read out of memory");
     return 2;
   }
   ctx->req.data = ctx;
 
+  FS_TRACE_READ(fd, len);
+
   uv_buf_t buf = uv_buf_init(ctx->buf, len);
   int rc = uv_fs_read(uv_default_loop(), &ctx->req, fd, &buf, 1, 0, lunet_fs_read_cb);
   if (rc < 0) {
     lunet_coref_release(L, ctx->co_ref);
-    free(ctx->buf);
-    free(ctx);
+    lunet_free_nonnull(ctx->buf);
+    lunet_free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, uv_strerror(rc));
     return 2;
@@ -425,7 +453,6 @@ typedef struct {
   uv_fs_t req;
   lua_State *L;
   int co_ref;
-
   size_t len;
   char *buf;
 } fs_write_ctx_t;
@@ -454,12 +481,12 @@ static void lunet_fs_write_cb(uv_fs_t *req) {
     lua_pushstring(co, uv_strerror((int)req->result));
   }
 
-  lua_resume(co, 2);
+  lunet_co_resume(co, 2);
 
 cleanup:
   uv_fs_req_cleanup(req);
-  free(ctx->buf);
-  free(ctx);
+  lunet_free_nonnull(ctx->buf);
+  lunet_free(ctx);
 }
 
 int lunet_fs_write(lua_State *L) {
@@ -475,7 +502,7 @@ int lunet_fs_write(lua_State *L) {
   const char *data = luaL_checkstring(L, 2);
   size_t len = strlen(data);
 
-  fs_write_ctx_t *ctx = malloc(sizeof(fs_write_ctx_t));
+  fs_write_ctx_t *ctx = lunet_alloc(sizeof(fs_write_ctx_t));
   if (!ctx) {
     lua_pushnil(L);
     lua_pushstring(L, "fs.write out of memory");
@@ -485,10 +512,10 @@ int lunet_fs_write(lua_State *L) {
   ctx->L = L;
   lunet_coref_create(L, ctx->co_ref);
   ctx->len = len;
-  ctx->buf = malloc(len);
+  ctx->buf = lunet_alloc(len);
   if (!ctx->buf) {
     lunet_coref_release(L, ctx->co_ref);
-    free(ctx);
+    lunet_free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, "fs.write out of memory");
     return 2;
@@ -497,12 +524,14 @@ int lunet_fs_write(lua_State *L) {
   memcpy(ctx->buf, data, len);
   ctx->req.data = ctx;
 
+  FS_TRACE_WRITE(fd, len);
+
   uv_buf_t buf = uv_buf_init(ctx->buf, len);
   int rc = uv_fs_write(uv_default_loop(), &ctx->req, fd, &buf, 1, 0, lunet_fs_write_cb);
   if (rc < 0) {
     lunet_coref_release(L, ctx->co_ref);
-    free(ctx->buf);
-    free(ctx);
+    lunet_free_nonnull(ctx->buf);
+    lunet_free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, uv_strerror(rc));
     return 2;
@@ -519,22 +548,14 @@ typedef struct {
 
 const char *dirent_type_to_string(uv_dirent_type_t type) {
   switch (type) {
-    case UV_DIRENT_FILE:
-      return "file";
-    case UV_DIRENT_DIR:
-      return "dir";
-    case UV_DIRENT_LINK:
-      return "link";
-    case UV_DIRENT_FIFO:
-      return "fifo";
-    case UV_DIRENT_SOCKET:
-      return "socket";
-    case UV_DIRENT_CHAR:
-      return "char";
-    case UV_DIRENT_BLOCK:
-      return "block";
-    default:
-      return "unknown";
+    case UV_DIRENT_FILE:   return "file";
+    case UV_DIRENT_DIR:    return "dir";
+    case UV_DIRENT_LINK:   return "link";
+    case UV_DIRENT_FIFO:   return "fifo";
+    case UV_DIRENT_SOCKET: return "socket";
+    case UV_DIRENT_CHAR:   return "char";
+    case UV_DIRENT_BLOCK:  return "block";
+    default:               return "unknown";
   }
 }
 
@@ -574,11 +595,11 @@ static void lunet_fs_scandir_cb(uv_fs_t *req) {
     lua_pushnil(co);
   }
 
-  lua_resume(co, 2);
+  lunet_co_resume(co, 2);
 
 cleanup:
   uv_fs_req_cleanup(req);
-  free(ctx);
+  lunet_free(ctx);
 }
 
 int lunet_fs_scandir(lua_State *L) {
@@ -593,7 +614,7 @@ int lunet_fs_scandir(lua_State *L) {
 
   const char *path = luaL_checkstring(L, 1);
 
-  fs_scandir_ctx_t *ctx = malloc(sizeof(fs_scandir_ctx_t));
+  fs_scandir_ctx_t *ctx = lunet_alloc(sizeof(fs_scandir_ctx_t));
   if (!ctx) {
     lua_pushnil(L);
     lua_pushstring(L, "fs.scandir out of memory");
@@ -604,10 +625,12 @@ int lunet_fs_scandir(lua_State *L) {
   lunet_coref_create(L, ctx->co_ref);
   ctx->req.data = ctx;
 
+  FS_TRACE_SCANDIR(path);
+
   int rc = uv_fs_scandir(uv_default_loop(), &ctx->req, path, 0, lunet_fs_scandir_cb);
   if (rc < 0) {
     lunet_coref_release(L, ctx->co_ref);
-    free(ctx);
+    lunet_free(ctx);
     lua_pushnil(L);
     lua_pushstring(L, uv_strerror(rc));
     return 2;

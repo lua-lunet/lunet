@@ -16,6 +16,7 @@
 #include "co.h"
 #include "stl.h"
 #include "trace.h"
+#include "lunet_mem.h"
 
 /*
  * UDP Context Structure
@@ -34,13 +35,16 @@ typedef struct {
 
 /*
  * UDP-specific tracing macros
- * Zero-cost in release builds (LUNET_TRACE not defined)
+ * Tier 1 (LUNET_TRACE): counters only
+ * Tier 2 (LUNET_TRACE_VERBOSE): per-event stderr logging
  */
 #ifdef LUNET_TRACE
 
 static int udp_trace_tx_count = 0;
 static int udp_trace_rx_count = 0;
 static int udp_trace_bind_count = 0;
+
+#ifdef LUNET_TRACE_VERBOSE
 
 static void udp_trace_bind_actual(uv_udp_t *handle) {
     struct sockaddr_storage addr;
@@ -101,8 +105,26 @@ static void udp_trace_bind_actual(uv_udp_t *handle) {
     fprintf(stderr, "[UDP_TRACE] CLOSE (local: tx=%d rx=%d) (global: tx=%d rx=%d)\n", \
             (ctx)->trace_tx, (ctx)->trace_rx, udp_trace_tx_count, udp_trace_rx_count)
 
+#else /* LUNET_TRACE but not VERBOSE */
+
+#define UDP_TRACE_BIND(handle) \
+    do { udp_trace_bind_count++; } while(0)
+
+#define UDP_TRACE_TX(ctx, dest_host, dest_port, len) \
+    do { udp_trace_tx_count++; (ctx)->trace_tx++; } while(0)
+
+#define UDP_TRACE_RX(ctx, src_host, src_port, len) \
+    do { udp_trace_rx_count++; (ctx)->trace_rx++; } while(0)
+
+#define UDP_TRACE_RECV_WAIT() ((void)0)
+#define UDP_TRACE_RECV_RESUME(host, port, len) ((void)0)
+#define UDP_TRACE_RECV_DELIVER(host, port, len) ((void)0)
+#define UDP_TRACE_CLOSE(ctx) ((void)0)
+
+#endif /* LUNET_TRACE_VERBOSE */
+
 void lunet_udp_trace_summary(void) {
-    fprintf(stderr, "[UDP_TRACE] SUMMARY: binds=%d tx=%d rx=%d\n", \
+    fprintf(stderr, "[UDP_TRACE] SUMMARY: binds=%d tx=%d rx=%d\n",
             udp_trace_bind_count, udp_trace_tx_count, udp_trace_rx_count);
 }
 
@@ -132,11 +154,11 @@ typedef struct {
   int port;
 } udp_msg_t;
 
-static void udp_on_close(uv_handle_t *handle) { free(handle->data); }
+static void udp_on_close(uv_handle_t *handle) { lunet_free_nonnull(handle->data); }
 
 static void udp_alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
   (void)handle;
-  char *data = (char *)malloc(suggested_size);
+  char *data = (char *)lunet_alloc(suggested_size);
   buf->base = data;
   buf->len = suggested_size;
 }
@@ -147,13 +169,13 @@ static void udp_recv_cb(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
   udp_ctx_t *ctx = (udp_ctx_t *)handle->data;
 
   if (nread <= 0 || addr == NULL) {
-    free(buf->base);
+    lunet_free_nonnull(buf->base);
     return;
   }
 
-  udp_msg_t *msg = (udp_msg_t *)malloc(sizeof(udp_msg_t));
+  udp_msg_t *msg = (udp_msg_t *)lunet_alloc(sizeof(udp_msg_t));
   if (msg == NULL) {
-    free(buf->base);
+    lunet_free_nonnull(buf->base);
     return;
   }
 
@@ -175,8 +197,8 @@ static void udp_recv_cb(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
   UDP_TRACE_RX(ctx, msg->host, msg->port, msg->len);
 
   if (queue_enqueue(ctx->pending, msg) != 0) {
-    free(msg->data);
-    free(msg);
+    lunet_free_nonnull(msg->data);
+    lunet_free(msg);
     return;
   }
 
@@ -198,14 +220,14 @@ static void udp_recv_cb(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
       lua_pushlstring(waiting_co, to_deliver->data, to_deliver->len);
       lua_pushstring(waiting_co, to_deliver->host);
       lua_pushinteger(waiting_co, to_deliver->port);
-      free(to_deliver->data);
-      free(to_deliver);
-      int resume_status = lua_resume(waiting_co, 3);
+      lunet_free_nonnull(to_deliver->data);
+      lunet_free(to_deliver);
+      int resume_status = lunet_co_resume(waiting_co, 3);
       if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
         fprintf(stderr, "udp recv resume error: %s\n", lua_tostring(waiting_co, -1));
       }
     } else {
-      int resume_status = lua_resume(waiting_co, 0);
+      int resume_status = lunet_co_resume(waiting_co, 0);
       if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
         fprintf(stderr, "udp recv resume error: %s\n", lua_tostring(waiting_co, -1));
       }
@@ -216,8 +238,8 @@ static void udp_recv_cb(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
 static void udp_send_cb(uv_udp_send_t *req, int status) {
   (void)status;
   udp_send_ctx_t *send_ctx = (udp_send_ctx_t *)req->data;
-  free(send_ctx->data);
-  free(send_ctx);
+  lunet_free_nonnull(send_ctx->data);
+  lunet_free_nonnull(send_ctx);
 }
 
 int lunet_udp_bind(lua_State *co) {
@@ -226,7 +248,7 @@ int lunet_udp_bind(lua_State *co) {
   const char *host = luaL_checkstring(co, 1);
   int port = (int)luaL_checkinteger(co, 2);
 
-  udp_ctx_t *ctx = (udp_ctx_t *)calloc(1, sizeof(udp_ctx_t));
+  udp_ctx_t *ctx = (udp_ctx_t *)lunet_calloc(1, sizeof(udp_ctx_t));
   if (ctx == NULL) {
     lua_pushnil(co);
     lua_pushstring(co, "out of memory");
@@ -234,7 +256,7 @@ int lunet_udp_bind(lua_State *co) {
   }
   ctx->pending = queue_init();
   if (ctx->pending == NULL) {
-    free(ctx);
+    lunet_free(ctx);
     lua_pushnil(co);
     lua_pushstring(co, "out of memory");
     return 2;
@@ -244,7 +266,7 @@ int lunet_udp_bind(lua_State *co) {
   int ret = uv_udp_init(loop, &ctx->handle);
   if (ret < 0) {
     queue_destroy(ctx->pending);
-    free(ctx);
+    lunet_free(ctx);
     lua_pushnil(co);
     lua_pushfstring(co, "failed to init udp: %s", uv_strerror(ret));
     return 2;
@@ -339,7 +361,7 @@ int lunet_udp_send(lua_State *co) {
     memcpy(&addr, &a4, sizeof(a4));
   }
 
-  udp_send_ctx_t *send_ctx = (udp_send_ctx_t *)malloc(sizeof(udp_send_ctx_t));
+  udp_send_ctx_t *send_ctx = (udp_send_ctx_t *)lunet_alloc(sizeof(udp_send_ctx_t));
   if (send_ctx == NULL) {
     lua_pushnil(co);
     lua_pushstring(co, "out of memory");
@@ -347,9 +369,9 @@ int lunet_udp_send(lua_State *co) {
   }
   memset(send_ctx, 0, sizeof(*send_ctx));
 
-  send_ctx->data = (char *)malloc(len);
+  send_ctx->data = (char *)lunet_alloc(len);
   if (send_ctx->data == NULL) {
-    free(send_ctx);
+    lunet_free(send_ctx);
     lua_pushnil(co);
     lua_pushstring(co, "out of memory");
     return 2;
@@ -361,8 +383,8 @@ int lunet_udp_send(lua_State *co) {
   ret = uv_udp_send(&send_ctx->req, &ctx->handle, &send_ctx->buf, 1,
                     (const struct sockaddr *)&addr, udp_send_cb);
   if (ret < 0) {
-    free(send_ctx->data);
-    free(send_ctx);
+    lunet_free_nonnull(send_ctx->data);
+    lunet_free(send_ctx);
     lua_pushnil(co);
     lua_pushfstring(co, "failed to send: %s", uv_strerror(ret));
     return 2;
@@ -413,8 +435,8 @@ int lunet_udp_recv(lua_State *co) {
   lua_pushlstring(co, msg->data, msg->len);
   lua_pushstring(co, msg->host);
   lua_pushinteger(co, msg->port);
-  free(msg->data);
-  free(msg);
+  lunet_free_nonnull(msg->data);
+  lunet_free(msg);
   return 3;
 }
 
@@ -433,8 +455,8 @@ int lunet_udp_close(lua_State *L) {
   while (!queue_is_empty(ctx->pending)) {
     udp_msg_t *msg = (udp_msg_t *)queue_dequeue(ctx->pending);
     if (msg) {
-      free(msg->data);
-      free(msg);
+      lunet_free_nonnull(msg->data);
+      lunet_free(msg);
     }
   }
   queue_destroy(ctx->pending);
@@ -450,7 +472,7 @@ int lunet_udp_close(lua_State *L) {
       lua_pushnil(waiting_co);
       lua_pushnil(waiting_co);
       lua_pushstring(waiting_co, "udp closed");
-      lua_resume(waiting_co, 3);
+      lunet_co_resume(waiting_co, 3);
     } else {
       lua_pop(ctx->co, 1);
     }

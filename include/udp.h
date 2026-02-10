@@ -10,6 +10,8 @@ int lunet_udp_close(lua_State *L);
 
 #ifdef LUNET_TRACE
 void lunet_udp_trace_summary(void);
+#else
+static inline void lunet_udp_trace_summary(void) {}
 #endif
 
 #endif  // UDP_H

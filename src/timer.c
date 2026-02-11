@@ -39,7 +39,7 @@ void lunet_timer_trace_summary(void) {
 #else /* !LUNET_TRACE */
 #define TIMER_TRACE_SLEEP(ctx, ms) ((void)0)
 #define TIMER_TRACE_WAKE(ctx) ((void)0)
-void lunet_timer_trace_summary(void) {}
+/* lunet_timer_trace_summary provided by timer.h as static inline */
 #endif
 
 typedef struct {

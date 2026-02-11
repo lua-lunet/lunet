@@ -49,7 +49,7 @@ void lunet_fs_trace_summary(void) {
 #define FS_TRACE_WRITE(fd, len) ((void)0)
 #define FS_TRACE_STAT(path) ((void)0)
 #define FS_TRACE_SCANDIR(path) ((void)0)
-void lunet_fs_trace_summary(void) {}
+/* lunet_fs_trace_summary provided by fs.h as static inline */
 #endif
 
 typedef struct {

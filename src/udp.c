@@ -137,7 +137,7 @@ void lunet_udp_trace_summary(void) {
 #define UDP_TRACE_RECV_RESUME(host, port, len) ((void)0)
 #define UDP_TRACE_RECV_DELIVER(host, port, len) ((void)0)
 #define UDP_TRACE_CLOSE(ctx) ((void)0)
-void lunet_udp_trace_summary(void) {}
+/* lunet_udp_trace_summary provided by udp.h as static inline */
 
 #endif /* LUNET_TRACE */
 

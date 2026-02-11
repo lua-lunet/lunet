@@ -40,7 +40,7 @@ void lunet_signal_trace_summary(void) {
 #else /* !LUNET_TRACE */
 #define SIGNAL_TRACE_WAIT(signo) ((void)0)
 #define SIGNAL_TRACE_FIRE(signo) ((void)0)
-void lunet_signal_trace_summary(void) {}
+/* lunet_signal_trace_summary provided by lunet_signal.h as static inline */
 #endif
 
 typedef struct {

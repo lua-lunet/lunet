@@ -212,7 +212,7 @@ void lunet_socket_trace_summary(void) {
 #define SOCKET_TRACE_FREE(ctx) ((void)0)
 #define SOCKET_TRACE_REF(ctx, op) ((void)0)
 
-void lunet_socket_trace_summary(void) {}
+/* lunet_socket_trace_summary provided by socket.h as static inline */
 
 #endif /* LUNET_TRACE */
 

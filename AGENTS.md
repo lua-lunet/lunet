@@ -13,6 +13,22 @@ You MUST NOT do any git reset or stash or an git rm or rm or anything that might
 3.  **LOGGING:** All test runs must log stdout/stderr to `.tmp/logs/YYYYMMDD_HHMMSS/`.
 4.  **SECURE BINDING:** Never bind to `0.0.0.0` or public interfaces. Use Unix sockets (preferred) or `127.0.0.1` (development). Only bypass this rule if the user explicitly requests it via CLI flag `--dangerously-skip-loopback-restriction`.
 
+## Release Quality Gate (STRICT)
+
+Before creating or announcing a release:
+
+1. **Tag-triggered CI only:** Release tags (`v*`) must go through GitHub Actions builds (Linux/macOS/Windows). Do not handcraft a release from local output.
+2. **Assets required:** The release must include all three archives:
+   - `lunet-linux-amd64.tar.gz`
+   - `lunet-macos.tar.gz`
+   - `lunet-windows-amd64.zip`
+3. **Readable release notes:** Notes must include at minimum:
+   - `## Highlights`
+   - `## Binaries`
+   - `## Quick Start`
+4. **Verify before sign-off:** Check the published release page and confirm notes formatting plus all assets are present.
+5. **If anything is missing:** Fix workflow/release and republish before telling downstream users to consume the tag.
+
 ## Example Application
 
 The RealWorld Conduit demo app lives in a separate repository:
@@ -335,4 +351,3 @@ When adding new UDP operations:
 [UDP_TRACE] TX #1 -> 127.0.0.1:20002 (72 bytes)
 [UDP_TRACE] CLOSE (tx=1 rx=1)
 ```
-

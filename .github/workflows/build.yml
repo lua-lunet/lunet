@@ -3,6 +3,8 @@ name: Build
 on:
   push:
     branches: [ main, xmake ]
+    tags:
+      - 'v*'
   pull_request:
     branches: [ main ]
   workflow_dispatch:
@@ -11,6 +13,9 @@ on:
         description: 'Branch or tag to build'
         required: false
         default: ''
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -22,7 +27,10 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
 
     - name: Cache vcpkg
       uses: actions/cache@v4
@@ -83,6 +91,46 @@ jobs:
       run: |
         xmake build
 
+    - name: Package release archive (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        set -euo pipefail
+        DIST_DIR="$(mktemp -d)"
+        mkdir -p "$DIST_DIR/lunet"
+        cp "$(find build -type f -name 'lunet-run' | head -n 1)" "$DIST_DIR/lunet-run"
+        cp "$(find build -type f -name 'lunet.so' | head -n 1)" "$DIST_DIR/lunet.so"
+        while IFS= read -r mod; do
+          cp "$mod" "$DIST_DIR/lunet/"
+        done < <(find build -type f -path '*/lunet/*.so')
+        tar -C "$DIST_DIR" -czf lunet-linux-amd64.tar.gz .
+
+    - name: Package release archive (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        set -euo pipefail
+        DIST_DIR="$(mktemp -d)"
+        mkdir -p "$DIST_DIR/lunet"
+        cp "$(find build -type f -name 'lunet-run' | head -n 1)" "$DIST_DIR/lunet-run"
+        cp "$(find build -type f -name 'lunet.so' | head -n 1)" "$DIST_DIR/lunet.so"
+        while IFS= read -r mod; do
+          cp "$mod" "$DIST_DIR/lunet/"
+        done < <(find build -type f -path '*/lunet/*.so')
+        tar -C "$DIST_DIR" -czf lunet-macos.tar.gz .
+
+    - name: Package release archive (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $dist = Join-Path $env:RUNNER_TEMP ("lunet-dist-" + $env:GITHUB_RUN_ID + "-" + $env:GITHUB_RUN_ATTEMPT)
+        New-Item -ItemType Directory -Path (Join-Path $dist "lunet") -Force | Out-Null
+        Copy-Item (Get-ChildItem -Path build -Recurse -Filter lunet-run.exe | Select-Object -First 1).FullName (Join-Path $dist "lunet-run.exe")
+        Copy-Item (Get-ChildItem -Path build -Recurse -Filter lunet.dll | Select-Object -First 1).FullName (Join-Path $dist "lunet.dll")
+        Get-ChildItem -Path build -Recurse -Filter *.dll | Where-Object { $_.FullName -match '\\lunet\\' } | ForEach-Object {
+          Copy-Item $_.FullName (Join-Path $dist "lunet")
+        }
+        Compress-Archive -Path (Join-Path $dist "*") -DestinationPath lunet-windows-amd64.zip -Force
+
     - name: Upload artifact (Linux)
       if: runner.os == 'Linux'
       uses: actions/upload-artifact@v4
@@ -112,3 +160,53 @@ jobs:
           build/**/lunet-run.exe
           build/**/lunet.dll
           build/**/lunet/*.dll
+
+    - name: Upload release archive (Linux)
+      if: runner.os == 'Linux'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-linux
+        path: lunet-linux-amd64.tar.gz
+
+    - name: Upload release archive (macOS)
+      if: runner.os == 'macOS'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-macos
+        path: lunet-macos.tar.gz
+
+    - name: Upload release archive (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-windows
+        path: lunet-windows-amd64.zip
+
+  publish-release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
+
+    - name: Download release archives
+      uses: actions/download-artifact@v4
+      with:
+        pattern: release-*
+        merge-multiple: true
+        path: release-assets
+
+    - name: Create or update GitHub release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}
+        body_path: .github/release-template.md
+        generate_release_notes: true
+        files: |
+          release-assets/lunet-linux-amd64.tar.gz
+          release-assets/lunet-macos.tar.gz
+          release-assets/lunet-windows-amd64.zip

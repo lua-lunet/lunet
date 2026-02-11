@@ -11,9 +11,11 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 #include <uv.h>
 
 #include "co.h"
+#include "rt.h"
 #include "stl.h"
 #include "trace.h"
 #include "lunet_mem.h"
@@ -30,6 +32,10 @@ typedef struct {
 #ifdef LUNET_TRACE
   int trace_tx;
   int trace_rx;
+  int bk_recv_wait_seq;
+  int bk_recv_resume_seq;
+  int bk_recv_inflight;
+  int bk_event_seq;
 #endif
 } udp_ctx_t;
 
@@ -43,6 +49,38 @@ typedef struct {
 static int udp_trace_tx_count = 0;
 static int udp_trace_rx_count = 0;
 static int udp_trace_bind_count = 0;
+
+static void udp_bk_wait(udp_ctx_t *ctx) {
+    ctx->bk_event_seq++;
+    if (ctx->bk_recv_inflight) {
+        fprintf(stderr, "[UDP_TRACE] BK_FAIL duplicate recv wait ctx=%p event=%d\n",
+                (void *)ctx, ctx->bk_event_seq);
+        assert(!ctx->bk_recv_inflight);
+    }
+    ctx->bk_recv_inflight = 1;
+    ctx->bk_recv_wait_seq++;
+}
+
+static void udp_bk_resume(udp_ctx_t *ctx) {
+    ctx->bk_event_seq++;
+    if (!ctx->bk_recv_inflight) {
+        fprintf(stderr, "[UDP_TRACE] BK_FAIL recv resume without wait ctx=%p event=%d\n",
+                (void *)ctx, ctx->bk_event_seq);
+        assert(ctx->bk_recv_inflight);
+    }
+    ctx->bk_recv_inflight = 0;
+    ctx->bk_recv_resume_seq++;
+    if (ctx->bk_recv_resume_seq > ctx->bk_recv_wait_seq) {
+        fprintf(stderr, "[UDP_TRACE] BK_FAIL recv resume_seq=%d > wait_seq=%d ctx=%p\n",
+                ctx->bk_recv_resume_seq, ctx->bk_recv_wait_seq, (void *)ctx);
+        assert(ctx->bk_recv_resume_seq <= ctx->bk_recv_wait_seq);
+    }
+}
+
+static void udp_bk_cancel(udp_ctx_t *ctx) {
+    ctx->bk_event_seq++;
+    ctx->bk_recv_inflight = 0;
+}
 
 #ifdef LUNET_TRACE_VERBOSE
 
@@ -137,6 +175,9 @@ void lunet_udp_trace_summary(void) {
 #define UDP_TRACE_RECV_RESUME(host, port, len) ((void)0)
 #define UDP_TRACE_RECV_DELIVER(host, port, len) ((void)0)
 #define UDP_TRACE_CLOSE(ctx) ((void)0)
+#define udp_bk_wait(ctx) ((void)0)
+#define udp_bk_resume(ctx) ((void)0)
+#define udp_bk_cancel(ctx) ((void)0)
 /* lunet_udp_trace_summary provided by udp.h as static inline */
 
 #endif /* LUNET_TRACE */
@@ -173,6 +214,15 @@ static void udp_recv_cb(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
     return;
   }
 
+#ifdef LUNET_TRACE
+  lua_State *expected = default_luaL();
+  if (expected && ctx && ctx->co != expected) {
+    fprintf(stderr,
+            "[UDP_TRACE] BAD_LUA_STATE ctx=%p (ctx->co=%p expected=%p)\n",
+            (void *)ctx, (void *)ctx->co, (void *)expected);
+  }
+#endif
+
   udp_msg_t *msg = (udp_msg_t *)lunet_alloc(sizeof(udp_msg_t));
   if (msg == NULL) {
     lunet_free_nonnull(buf->base);
@@ -206,9 +256,11 @@ static void udp_recv_cb(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
     lua_rawgeti(ctx->co, LUA_REGISTRYINDEX, ctx->recv_ref);
     lunet_coref_release(ctx->co, ctx->recv_ref);
     ctx->recv_ref = LUA_NOREF;
+    udp_bk_resume(ctx);
 
     if (!lua_isthread(ctx->co, -1)) {
       lua_pop(ctx->co, 1);
+      udp_bk_cancel(ctx);
       return;
     }
 
@@ -272,8 +324,19 @@ int lunet_udp_bind(lua_State *co) {
     return 2;
   }
   ctx->handle.data = ctx;
-  ctx->co = co;
+  /* Use the main Lua state for registry operations; the bind coroutine may
+   * finish synchronously and be GC'ed while the UDP handle is still alive. */
+  lua_State *mainL = default_luaL();
+  ctx->co = mainL ? mainL : co;
   ctx->recv_ref = LUA_NOREF;
+#ifdef LUNET_TRACE
+  ctx->trace_tx = 0;
+  ctx->trace_rx = 0;
+  ctx->bk_recv_wait_seq = 0;
+  ctx->bk_recv_resume_seq = 0;
+  ctx->bk_recv_inflight = 0;
+  ctx->bk_event_seq = 0;
+#endif
 
   struct sockaddr_storage addr;
   memset(&addr, 0, sizeof(addr));
@@ -416,8 +479,8 @@ int lunet_udp_recv(lua_State *co) {
       return 3;
     }
 
-    ctx->co = co;
     lunet_coref_create(co, ctx->recv_ref);
+    udp_bk_wait(ctx);
     UDP_TRACE_RECV_WAIT();
     return lua_yield(co, 0);
   }
@@ -466,6 +529,7 @@ int lunet_udp_close(lua_State *L) {
     lua_rawgeti(ctx->co, LUA_REGISTRYINDEX, ctx->recv_ref);
     lunet_coref_release(ctx->co, ctx->recv_ref);
     ctx->recv_ref = LUA_NOREF;
+    udp_bk_resume(ctx);
     if (lua_isthread(ctx->co, -1)) {
       lua_State *waiting_co = lua_tothread(ctx->co, -1);
       lua_pop(ctx->co, 1);
@@ -475,6 +539,7 @@ int lunet_udp_close(lua_State *L) {
       lunet_co_resume(waiting_co, 3);
     } else {
       lua_pop(ctx->co, 1);
+      udp_bk_cancel(ctx);
     }
   }
 

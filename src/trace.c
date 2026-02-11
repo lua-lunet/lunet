@@ -80,14 +80,7 @@ void lunet_trace_coref_remove(const char *file, int line, int ref) {
   /* Track location via mapping from add */
   if (ref >= 0 && ref < LUNET_TRACE_MAX_REFS) {
     int loc = lunet_trace_state.ref_to_loc[ref];
-    /* Check if we have a valid mapping (0 is a valid loc index, but uninitialized is 0... 
-       Wait, memset 0 initializes to 0. So loc 0 is ambiguous if uninitialized.
-       However, find_or_create_location returns sequential indices starting at 0.
-       We should probably initialize ref_to_loc to -1.
-       Let's assume memset 0 means index 0. If location 0 hasn't been created, 
-       then location_count is 0, so checking loc < location_count is safe.
-    */
-    if (loc < lunet_trace_state.location_count) {
+    if (loc >= 0 && loc < lunet_trace_state.location_count) {
        lunet_trace_state.locations[loc].count--;
     } else {
        /* Fallback if tracking lost or ref reused weirdly? */
@@ -95,8 +88,9 @@ void lunet_trace_coref_remove(const char *file, int line, int ref) {
           If we can't match it, we just don't decrement any location count.
           This will show as a leak in summary, which is better than negative counts.
        */
-       fprintf(stderr, "[TRACE] WARNING: Release of ref %d at %s:%d has no matching creation location.\n",
-               ref, file, line);
+       fprintf(stderr,
+               "[TRACE] WARNING: Release of ref %d at %s:%d has no matching creation location (loc=%d, locations=%d).\n",
+               ref, file, line, loc, lunet_trace_state.location_count);
     }
     
     /* Clear mapping */

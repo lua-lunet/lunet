@@ -163,6 +163,92 @@ After fixing the stack issue, discovered a crash in `db.close()`:
 
 **TODO:** Write up this debugging session in more detail - good example of Lua-C stack debugging methodology.
 
+## Debugging Methodology: Memory Corruption & Segfaults
+
+This section documents the tools and techniques used to debug runtime crashes in lunet. The codebase has a layered debugging strategy — use them in order of increasing cost.
+
+### Level 1: Domain Tracing (fprintf bisection)
+
+Every module has `*_TRACE_*` macros guarded by `#ifdef LUNET_TRACE_VERBOSE`. These print to stderr with zero cost in release builds.
+
+**How to use:**
+```bash
+xmake f -c -y --lunet_trace=y --lunet_verbose_trace=y
+xmake build lunet-bin
+```
+
+Then run your repro and inspect stderr. The trace shows every socket/timer/fs/udp/signal operation with pointer values. When the log cuts off abruptly, the crash is between the last printed line and the next operation.
+
+**Bisection technique:** If you know the crash is between line A and line B, add `fprintf(stderr, ...)` prints at the midpoint, rebuild, and re-run. Repeat until you identify the exact C line. Example from Issue #50:
+1. `SOCKET_TRACE_READ` printed → crash is after the READ macro
+2. Added `READ_CB_RESOLVE` (before `lua_rawgeti`) and `READ_CB_GOT_REF` (after) → `READ_CB_RESOLVE` printed but `READ_CB_GOT_REF` did not → crash is inside `lua_rawgeti`
+
+### Level 2: Coroutine Resume Tracing
+
+The `lunet_co_resume()` wrapper in `src/co.c` has `[CO_TRACE] RESUME` / `[CO_TRACE] RESUMED` prints (guarded by `LUNET_TRACE_VERBOSE`). These prove whether a crash is inside `lua_resume` itself or in the setup code before it.
+
+### Level 3: Address Sanitizer (ASan)
+
+ASan instruments every memory read/write. It catches use-after-free, buffer overflow, stack overflow, and gives exact stack traces with source lines.
+
+**How to use:**
+```bash
+xmake f -c -y -m debug --lunet_trace=y --asan=y
+xmake build lunet-bin
+```
+
+The `--asan` option adds `-fsanitize=address -fno-omit-frame-pointer` to the lunet-bin target. When a memory error is detected, ASan prints a detailed report to stderr including:
+- The type of error (SEGV, heap-use-after-free, heap-buffer-overflow, etc.)
+- The exact address and register values
+- A full backtrace with source file/line numbers
+- For UAF: both the access stack trace AND the deallocation stack trace
+
+**Important:** ASan's output goes to stderr, so check your log files. The process exits with `Abort trap: 6` (SIGABRT) instead of `Segmentation fault: 11`.
+
+**Limitations:** ASan links against the system LuaJIT dylib, so LuaJIT-internal frames may show as `lua_rawgeti+0x14` without source info. Our C functions may be inlined and missing from the trace. Register values (`x[0]` through `x[28]` on arm64) are still useful — `x[0]` is usually the first function argument.
+
+### Level 4: Memory Tracing (lunet_mem)
+
+The `lunet_mem.h` / `lunet_mem.c` layer wraps `malloc`/`free` with:
+- **Canary headers**: Magic bytes before each allocation to detect overflows
+- **Poison-on-free**: Freed memory is filled with `0xDE` bytes to make UAF crashes more obvious
+- **Global counters**: `alloc_count` / `free_count` checked at shutdown for leaks
+
+Enabled by `LUNET_TRACE`. Use `lunet_alloc()` / `lunet_free()` instead of raw `malloc` / `free`.
+
+### Level 5: lldb / Core Dumps
+
+For interactive debugging:
+```bash
+lldb -b -o "run app/your_script.lua" -o "bt" -o "bt all" -o "quit" -- ./build/macosx/arm64/debug/lunet-run
+```
+
+For core dumps on macOS (SIP may interfere):
+```bash
+ulimit -c unlimited
+# run crash, then:
+lldb ./build/macosx/arm64/debug/lunet-run -c /cores/core.XXXXX
+```
+
+### Repro Harness
+
+The socket stress test lives in `.tmp/repro-payload/`:
+```bash
+LUNET_BIN="$(pwd)/build/macosx/arm64/debug/lunet-run" \
+  ITERATIONS=5 REQUESTS=20 CONCURRENCY=2 WORKERS=2 \
+  timeout 30 .tmp/repro-payload/scripts/repro.sh
+```
+
+Logs go to `.tmp/repro-payload/.tmp-repro-logs/{dmz,echo,load}.log`.
+
+### Known Pitfalls
+
+- **Dangling `lua_State*` in long-lived handles**: Never store the *calling coroutine* `lua_State*` in a socket/udp handle and later use it for registry ops. The setup coroutine can finish synchronously and be GC'ed, leaving a dangling pointer that crashes in callbacks (often inside `lua_rawgeti`). Store the owning main state (`default_luaL()` at creation time) and use corefs to track the waiting coroutine.
+- **libuv handle adjacency**: Keep libuv handle memory away from critical metadata like `lua_State*`. If anything writes past the handle boundary (ABI mismatch, out-of-bounds, or teardown edge cases), it should not corrupt control pointers. Prefer placing the handle at the end of the struct and/or add a tail canary in trace builds.
+- **Coroutine GC**: Spawned coroutines must be anchored in the Lua registry (via `lunet_co_anchor()`) or they can be garbage collected between async operations.
+- **`ctx->co` is shared**: All accepted client sockets inherit `ctx->co` from the listener. This should be the owning **main** Lua state pointer (not the listener coroutine). If it becomes invalid, every socket callback that touches the registry will crash.
+- **Release vs debug divergence**: Some bugs only appear in release builds (e.g., duplicate `trace_summary` definitions caused by `static inline` in headers conflicting with definitions in `.c` files). Always test both `xmake f -m release` and `xmake f -m debug`.
+
 ## Scripting Guidelines
 
 **AVOID SHELL SCRIPTS FOR NON-TRIVIAL WORK.**
@@ -249,5 +335,4 @@ When adding new UDP operations:
 [UDP_TRACE] TX #1 -> 127.0.0.1:20002 (72 bytes)
 [UDP_TRACE] CLOSE (tx=1 rx=1)
 ```
-
 

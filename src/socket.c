@@ -12,9 +12,11 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 #include <uv.h>
 
 #include "co.h"
+#include "rt.h"
 #include "stl.h"
 #include "trace.h"
 #include "lunet_mem.h"
@@ -40,16 +42,11 @@ typedef enum {
 
 /* Canary value for socket contexts - ASCII "SOCK" */
 #define SOCKET_CTX_CANARY 0x534F434BU
+/* Tail canary to detect writes past libuv handle memory - ASCII "UVTL" */
+#define SOCKET_UV_TAIL_CANARY 0x5556544CU
 
 typedef struct {
-  union {
-    uv_tcp_t tcp;
-    uv_pipe_t pipe;
-    uv_handle_t handle;
-    uv_stream_t stream;
-  } u;
   socket_domain_t domain;
-
   lua_State *co;
   socket_type_t type;
   int closing;
@@ -58,6 +55,16 @@ typedef struct {
 #ifdef LUNET_TRACE
   uint32_t canary;
   int pending_writes;
+  int bk_read_wait_seq;
+  int bk_read_resume_seq;
+  int bk_write_wait_seq;
+  int bk_write_resume_seq;
+  int bk_accept_wait_seq;
+  int bk_accept_resume_seq;
+  int bk_read_inflight;
+  int bk_write_inflight;
+  int bk_accept_inflight;
+  int bk_event_seq;
 #endif
   union {
     struct {
@@ -69,6 +76,22 @@ typedef struct {
       int write_ref;
     } client;
   };
+
+  /*
+   * IMPORTANT: Keep libuv handle memory at the end of the struct.
+   * Some teardown paths may still touch handle fields after uv_close().
+   * If anything writes past the handle, it must NOT corrupt metadata like ctx->co.
+   */
+  union {
+    uv_tcp_t tcp;
+    uv_pipe_t pipe;
+    uv_handle_t handle;
+    uv_stream_t stream;
+  } u;
+
+#ifdef LUNET_TRACE
+  uint32_t uv_tail_canary;
+#endif
 
 } socket_ctx_t;
 
@@ -96,6 +119,17 @@ static int socket_trace_close_count = 0;
 static void socket_ctx_init_canary(socket_ctx_t *ctx) {
     ctx->canary = SOCKET_CTX_CANARY;
     ctx->pending_writes = 0;
+    ctx->bk_read_wait_seq = 0;
+    ctx->bk_read_resume_seq = 0;
+    ctx->bk_write_wait_seq = 0;
+    ctx->bk_write_resume_seq = 0;
+    ctx->bk_accept_wait_seq = 0;
+    ctx->bk_accept_resume_seq = 0;
+    ctx->bk_read_inflight = 0;
+    ctx->bk_write_inflight = 0;
+    ctx->bk_accept_inflight = 0;
+    ctx->bk_event_seq = 0;
+    ctx->uv_tail_canary = SOCKET_UV_TAIL_CANARY;
 }
 
 /* Returns 0 if canary is valid, -1 if corrupted (use-after-free detected) */
@@ -107,7 +141,104 @@ static int socket_ctx_check_canary(socket_ctx_t *ctx, const char *where) {
                 (void *)ctx, where, SOCKET_CTX_CANARY, ctx->canary);
         return -1;
     }
+    if (ctx->uv_tail_canary != SOCKET_UV_TAIL_CANARY) {
+        fprintf(stderr, "[SOCKET_TRACE] UV_TAIL_CANARY_FAIL ctx=%p in %s "
+                "(expected 0x%08X got 0x%08X) -- HANDLE OVERFLOW / ABI MISMATCH?\n",
+                (void *)ctx, where, SOCKET_UV_TAIL_CANARY, ctx->uv_tail_canary);
+        return -1;
+    }
+    lua_State *expected = default_luaL();
+    if (expected && ctx->co != expected) {
+        fprintf(stderr,
+                "[SOCKET_TRACE] BAD_LUA_STATE ctx=%p in %s (ctx->co=%p expected=%p)\n",
+                (void *)ctx, where, (void *)ctx->co, (void *)expected);
+        return -1;
+    }
     return 0;
+}
+
+static void socket_bk_wait(socket_ctx_t *ctx, const char *op) {
+    ctx->bk_event_seq++;
+    if (strcmp(op, "read") == 0) {
+        if (ctx->bk_read_inflight) {
+            fprintf(stderr, "[SOCKET_TRACE] BK_FAIL duplicate read wait ctx=%p event=%d\n",
+                    (void *)ctx, ctx->bk_event_seq);
+            assert(!ctx->bk_read_inflight);
+        }
+        ctx->bk_read_inflight = 1;
+        ctx->bk_read_wait_seq++;
+    } else if (strcmp(op, "write") == 0) {
+        if (ctx->bk_write_inflight) {
+            fprintf(stderr, "[SOCKET_TRACE] BK_FAIL duplicate write wait ctx=%p event=%d\n",
+                    (void *)ctx, ctx->bk_event_seq);
+            assert(!ctx->bk_write_inflight);
+        }
+        ctx->bk_write_inflight = 1;
+        ctx->bk_write_wait_seq++;
+    } else if (strcmp(op, "accept") == 0) {
+        if (ctx->bk_accept_inflight) {
+            fprintf(stderr, "[SOCKET_TRACE] BK_FAIL duplicate accept wait ctx=%p event=%d\n",
+                    (void *)ctx, ctx->bk_event_seq);
+            assert(!ctx->bk_accept_inflight);
+        }
+        ctx->bk_accept_inflight = 1;
+        ctx->bk_accept_wait_seq++;
+    }
+}
+
+static void socket_bk_resume(socket_ctx_t *ctx, const char *op) {
+    ctx->bk_event_seq++;
+    if (strcmp(op, "read") == 0) {
+        if (!ctx->bk_read_inflight) {
+            fprintf(stderr, "[SOCKET_TRACE] BK_FAIL read resume without wait ctx=%p event=%d\n",
+                    (void *)ctx, ctx->bk_event_seq);
+            assert(ctx->bk_read_inflight);
+        }
+        ctx->bk_read_inflight = 0;
+        ctx->bk_read_resume_seq++;
+        if (ctx->bk_read_resume_seq > ctx->bk_read_wait_seq) {
+            fprintf(stderr, "[SOCKET_TRACE] BK_FAIL read resume_seq=%d > wait_seq=%d ctx=%p\n",
+                    ctx->bk_read_resume_seq, ctx->bk_read_wait_seq, (void *)ctx);
+            assert(ctx->bk_read_resume_seq <= ctx->bk_read_wait_seq);
+        }
+    } else if (strcmp(op, "write") == 0) {
+        if (!ctx->bk_write_inflight) {
+            fprintf(stderr, "[SOCKET_TRACE] BK_FAIL write resume without wait ctx=%p event=%d\n",
+                    (void *)ctx, ctx->bk_event_seq);
+            assert(ctx->bk_write_inflight);
+        }
+        ctx->bk_write_inflight = 0;
+        ctx->bk_write_resume_seq++;
+        if (ctx->bk_write_resume_seq > ctx->bk_write_wait_seq) {
+            fprintf(stderr, "[SOCKET_TRACE] BK_FAIL write resume_seq=%d > wait_seq=%d ctx=%p\n",
+                    ctx->bk_write_resume_seq, ctx->bk_write_wait_seq, (void *)ctx);
+            assert(ctx->bk_write_resume_seq <= ctx->bk_write_wait_seq);
+        }
+    } else if (strcmp(op, "accept") == 0) {
+        if (!ctx->bk_accept_inflight) {
+            fprintf(stderr, "[SOCKET_TRACE] BK_FAIL accept resume without wait ctx=%p event=%d\n",
+                    (void *)ctx, ctx->bk_event_seq);
+            assert(ctx->bk_accept_inflight);
+        }
+        ctx->bk_accept_inflight = 0;
+        ctx->bk_accept_resume_seq++;
+        if (ctx->bk_accept_resume_seq > ctx->bk_accept_wait_seq) {
+            fprintf(stderr, "[SOCKET_TRACE] BK_FAIL accept resume_seq=%d > wait_seq=%d ctx=%p\n",
+                    ctx->bk_accept_resume_seq, ctx->bk_accept_wait_seq, (void *)ctx);
+            assert(ctx->bk_accept_resume_seq <= ctx->bk_accept_wait_seq);
+        }
+    }
+}
+
+static void socket_bk_cancel(socket_ctx_t *ctx, const char *op) {
+    ctx->bk_event_seq++;
+    if (strcmp(op, "read") == 0) {
+        ctx->bk_read_inflight = 0;
+    } else if (strcmp(op, "write") == 0) {
+        ctx->bk_write_inflight = 0;
+    } else if (strcmp(op, "accept") == 0) {
+        ctx->bk_accept_inflight = 0;
+    }
 }
 
 #ifdef LUNET_TRACE_VERBOSE
@@ -161,6 +292,9 @@ static int socket_ctx_check_canary(socket_ctx_t *ctx, const char *where) {
     fprintf(stderr, "[SOCKET_TRACE] FREE ctx=%p\n", (void*)(ctx))
 
 #define SOCKET_TRACE_REF(ctx, op) ((void)0)
+#define SOCKET_BK_WAIT(ctx, op) socket_bk_wait((ctx), (op))
+#define SOCKET_BK_RESUME(ctx, op) socket_bk_resume((ctx), (op))
+#define SOCKET_BK_CANCEL(ctx, op) socket_bk_cancel((ctx), (op))
 
 #else /* LUNET_TRACE but not VERBOSE */
 
@@ -187,6 +321,9 @@ static int socket_ctx_check_canary(socket_ctx_t *ctx, const char *where) {
 
 #define SOCKET_TRACE_FREE(ctx) ((void)0)
 #define SOCKET_TRACE_REF(ctx, op) ((void)0)
+#define SOCKET_BK_WAIT(ctx, op) socket_bk_wait((ctx), (op))
+#define SOCKET_BK_RESUME(ctx, op) socket_bk_resume((ctx), (op))
+#define SOCKET_BK_CANCEL(ctx, op) socket_bk_cancel((ctx), (op))
 
 #endif /* LUNET_TRACE_VERBOSE */
 
@@ -211,6 +348,9 @@ void lunet_socket_trace_summary(void) {
 #define SOCKET_TRACE_CLOSE(ctx) ((void)0)
 #define SOCKET_TRACE_FREE(ctx) ((void)0)
 #define SOCKET_TRACE_REF(ctx, op) ((void)0)
+#define SOCKET_BK_WAIT(ctx, op) ((void)0)
+#define SOCKET_BK_RESUME(ctx, op) ((void)0)
+#define SOCKET_BK_CANCEL(ctx, op) ((void)0)
 
 /* lunet_socket_trace_summary provided by socket.h as static inline */
 
@@ -281,6 +421,7 @@ static void lunet_write_cb(uv_write_t *req, int status) {
     if (ctx->client.write_ref != LUA_NOREF) {
       lunet_coref_release(ctx->co, ctx->client.write_ref);
       ctx->client.write_ref = LUA_NOREF;
+      SOCKET_BK_CANCEL(ctx, "write");
     }
     if (write_req->data) {
       lunet_free(write_req->data);
@@ -297,6 +438,7 @@ static void lunet_write_cb(uv_write_t *req, int status) {
 
     lua_rawgeti(co, LUA_REGISTRYINDEX, write_ref);
     lunet_coref_release(co, write_ref);
+    SOCKET_BK_RESUME(ctx, "write");
 
     if (lua_isthread(co, -1)) {
       lua_State *waiting_co = lua_tothread(co, -1);
@@ -376,6 +518,7 @@ static void lunet_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
     if (ctx->type == SOCKET_CLIENT && ctx->client.read_ref != LUA_NOREF) {
       lunet_coref_release(ctx->co, ctx->client.read_ref);
       ctx->client.read_ref = LUA_NOREF;
+      SOCKET_BK_CANCEL(ctx, "read");
     }
     socket_ctx_release(ctx);
     return;
@@ -388,12 +531,28 @@ static void lunet_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
     int read_ref = ctx->client.read_ref;
     ctx->client.read_ref = LUA_NOREF;
 
+#ifdef LUNET_TRACE_VERBOSE
+    fprintf(stderr, "[SOCKET_TRACE] READ_CB_RESOLVE ctx=%p co=%p read_ref=%d\n",
+            (void *)ctx, (void *)co, read_ref);
+#endif
+
     lua_rawgeti(co, LUA_REGISTRYINDEX, read_ref);
     lunet_coref_release(co, read_ref);
+    SOCKET_BK_RESUME(ctx, "read");
+
+#ifdef LUNET_TRACE_VERBOSE
+    fprintf(stderr, "[SOCKET_TRACE] READ_CB_GOT_REF type=%s\n",
+            lua_typename(co, lua_type(co, -1)));
+#endif
 
     if (lua_isthread(co, -1)) {
       lua_State *waiting_co = lua_tothread(co, -1);
       lua_pop(co, 1);
+
+#ifdef LUNET_TRACE_VERBOSE
+      fprintf(stderr, "[SOCKET_TRACE] READ_CB_PUSHING waiting_co=%p nread=%zd\n",
+              (void *)waiting_co, (ssize_t)nread);
+#endif
 
       if (nread > 0) {
         lua_pushlstring(waiting_co, buf->base, nread);
@@ -405,6 +564,11 @@ static void lunet_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
         lua_pushnil(waiting_co);
         lua_pushstring(waiting_co, uv_strerror(nread));
       }
+
+#ifdef LUNET_TRACE_VERBOSE
+      fprintf(stderr, "[SOCKET_TRACE] READ_CB_RESUMING waiting_co=%p\n",
+              (void *)waiting_co);
+#endif
 
       int resume_status = lunet_co_resume(waiting_co, 2);
       if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
@@ -436,6 +600,7 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
       lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->server.accept_ref);
       lunet_coref_release(co, ctx->server.accept_ref);
       ctx->server.accept_ref = LUA_NOREF;
+      SOCKET_BK_RESUME(ctx, "accept");
 
       if (lua_isthread(co, -1)) {
         lua_State *waiting_co = lua_tothread(co, -1);
@@ -498,6 +663,7 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
     lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->server.accept_ref);
     lunet_coref_release(co, ctx->server.accept_ref);
     ctx->server.accept_ref = LUA_NOREF;
+    SOCKET_BK_RESUME(ctx, "accept");
 
     if (lua_isthread(co, -1)) {
       lua_State *waiting_co = lua_tothread(co, -1);
@@ -559,7 +725,10 @@ int lunet_socket_listen(lua_State *co) {
     lua_pushstring(co, "out of memory");
     return 2;
   }
-  ctx->co = co;
+  /* Use the main Lua state for registry operations; the calling coroutine may
+   * finish synchronously and be GC'ed while sockets are still alive. */
+  lua_State *mainL = default_luaL();
+  ctx->co = mainL ? mainL : co;
   ctx->type = SOCKET_SERVER;
   ctx->domain = domain;
   ctx->closing = 0;
@@ -674,6 +843,7 @@ int lunet_socket_accept(lua_State *co) {
   // there is no connection in the queue, wait for new connection
   // save the current coroutine reference
   lunet_coref_create(co, listener_ctx->server.accept_ref);
+  SOCKET_BK_WAIT(listener_ctx, "accept");
 
   // yield to wait for new connection
   return lua_yield(co, 0);
@@ -782,6 +952,7 @@ int lunet_socket_read(lua_State *co) {
 
   // save the coroutine reference
   lunet_coref_create(co, ctx->client.read_ref);
+  SOCKET_BK_WAIT(ctx, "read");
 
   // start reading
   socket_ctx_retain(ctx);
@@ -791,6 +962,7 @@ int lunet_socket_read(lua_State *co) {
     // failed to start reading, clean up the reference
     lunet_coref_release(co, ctx->client.read_ref);
     ctx->client.read_ref = LUA_NOREF;
+    SOCKET_BK_CANCEL(ctx, "read");
 
     lua_pushnil(co);
     lua_pushfstring(co, "failed to start reading: %s", uv_strerror(ret));
@@ -854,6 +1026,7 @@ int lunet_socket_write(lua_State *co) {
 
   // save the coroutine reference
   lunet_coref_create(co, ctx->client.write_ref);
+  SOCKET_BK_WAIT(ctx, "write");
 
   SOCKET_TRACE_WRITE_START(ctx, data_len);
 
@@ -867,6 +1040,7 @@ int lunet_socket_write(lua_State *co) {
     // failed to start writing, clean up the resource
     lunet_coref_release(co, ctx->client.write_ref);
     ctx->client.write_ref = LUA_NOREF;
+    SOCKET_BK_CANCEL(ctx, "write");
     lunet_free(write_req->data);
     lunet_free(write_req);
 
@@ -940,7 +1114,10 @@ int lunet_socket_connect(lua_State *L) {
     return 2;
   }
 
-  ctx->co = L;
+  /* Use the main Lua state for registry operations; the connect coroutine is
+   * tracked via connect_ctx->co_ref and resumed via connect_ctx->co. */
+  lua_State *mainL = default_luaL();
+  ctx->co = mainL ? mainL : L;
   ctx->type = SOCKET_CLIENT;
   ctx->domain = domain;
   ctx->closing = 0;

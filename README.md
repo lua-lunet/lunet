@@ -229,12 +229,141 @@ db.close(conn)
 
 Build with `make build-debug` to enable coroutine reference tracking and stack integrity checks. The runtime will assert and crash on leaks or stack pollution.
 
+## Debugging
+
+Lunet has a layered debugging strategy for runtime crashes. Use them in order — each level is more expensive but gives more detail.
+
+### Quick Reference
+
+| Level | Tool | What it catches | Build command |
+|-------|------|----------------|---------------|
+| 1 | Domain tracing | Logic errors, sequence of operations | `xmake f --lunet_trace=y --lunet_verbose_trace=y` |
+| 2 | Memory tracing | UAF, double-free, leaks, buffer overflows | `xmake f --lunet_trace=y` (automatic) |
+| 3 | Address Sanitizer | All memory errors with exact stack traces | `xmake f -m debug --asan=y` |
+| 4 | lldb / core dumps | Register-level inspection, full backtraces | `lldb -- ./build/.../lunet-run app.lua` |
+
+### Domain Tracing (Level 1)
+
+Every module (socket, timer, fs, udp, signal) has `*_TRACE_*` macros that log to stderr. Build with verbose tracing enabled:
+
+```bash
+xmake f -c -y --lunet_trace=y --lunet_verbose_trace=y
+xmake build lunet-bin
+./build/.../lunet-run app.lua 2> trace.log
+```
+
+When the trace log cuts off abruptly, the crash is between the last printed line and the next operation. Use this to narrow down which callback and which line.
+
+### Address Sanitizer (Level 3)
+
+ASan is the most effective tool for memory corruption bugs. It instruments every memory access and catches use-after-free, buffer overflows, and stack corruption with exact source locations:
+
+```bash
+xmake f -c -y -m debug --lunet_trace=y --asan=y
+xmake build lunet-bin
+./build/.../lunet-run app.lua 2> asan.log
+```
+
+ASan output goes to stderr. The process exits with `Abort trap: 6` instead of `Segmentation fault: 11`. Look for `ERROR: AddressSanitizer:` in the log.
+
+#### Full LuaJIT + Lunet ASan (Debian Trixie source)
+
+To instrument both Lunet and LuaJIT (not just Lunet C code), build the OpenResty LuaJIT source package used by Debian Trixie and link Lunet against it:
+
+```bash
+make luajit-asan
+make build-debug-asan-luajit
+make repro-50-asan-luajit
+```
+
+This uses Debian source package `luajit_2.1.0+openresty20250117-2` and installs a local ASan LuaJIT into `.tmp/luajit-asan/install/2.1.0+openresty20250117/`.
+
+The version pins are configured in `xmake.lua` options (`luajit_snapshot`, `luajit_debian_version`).
+Override them with:
+
+```bash
+xmake f --luajit_snapshot=2.1.0+openresty20250117 --luajit_debian_version=2.1.0+openresty20250117-2 -y
+```
+
+#### macOS / Xcode setup for symbolized ASan output
+
+On macOS, ensure the Xcode toolchain is active so ASan reports include file/line symbols:
+
+```bash
+xcode-select -p
+xcrun --find clang
+xcrun --find llvm-symbolizer
+export ASAN_SYMBOLIZER_PATH="$(xcrun --find llvm-symbolizer)"
+export ASAN_OPTIONS="abort_on_error=1,halt_on_error=1,fast_unwind_on_malloc=0,detect_leaks=0"
+```
+
+If `make luajit-asan` fails with `missing: export MACOSX_DEPLOYMENT_TARGET=XX.YY`, set:
+
+```bash
+export MACOSX_DEPLOYMENT_TARGET="$(sw_vers -productVersion | awk -F. '{print $1 "." $2}')"
+```
+
+#### ASan-first crash hunting (force fast bailout)
+
+Do not rely only on edge tracing to infer the fault location. First try to make LuaJIT/Lunet crash immediately under ASan:
+
+```bash
+make build-debug-asan-luajit
+make repro-50-asan-luajit
+```
+
+If the bug is timing-sensitive, run more iterations:
+
+```bash
+ITERATIONS=100 REQUESTS=100 CONCURRENCY=8 WORKERS=8 make repro-50-asan-luajit
+```
+
+To reduce JIT-side nondeterminism while isolating yield/resume bookkeeping bugs, disable JIT in the repro Lua entrypoint:
+
+```lua
+local ok, jit = pcall(require, "jit")
+if ok and jit then jit.off() end
+```
+
+This keeps execution in interpreter mode and often makes coroutine/state-machine faults reproducible faster under ASan.
+
+### Coroutine Resume Tracing
+
+The `lunet_co_resume()` wrapper logs `[CO_TRACE] RESUME` / `[CO_TRACE] RESUMED` around every `lua_resume` call (when verbose trace is enabled). This proves whether a crash is inside the Lua VM or in the C setup code around it.
+
+### Wait/Resume Bookkeeping Assertions (Debug-only)
+
+With `LUNET_TRACE=ON`, socket and UDP paths now track wait/resume sequence numbers and in-flight state for:
+
+- socket: `accept`, `read`, `write`
+- udp: `recv`
+
+Any illegal transition (duplicate wait, resume without wait, or resume sequence ahead of wait sequence) prints `BK_FAIL` and triggers an assertion immediately. This is designed to catch coroutine pump/state-machine bookkeeping bugs at first violation instead of requiring edge-trace inference.
+
+### Zero-Cost Release Guarantee
+
+All bookkeeping, trace counters, canaries, and assertions are compiled only under `LUNET_TRACE`. Release builds (`--lunet_trace=n`) compile these checks out completely, so there is no runtime tax from debug instrumentation.
+
+### Common Crash Signature: `lua_rawgeti` in Callbacks
+
+If a crash happens inside `lua_rawgeti` from a libuv callback, it often means the `lua_State*` used for registry operations is invalid (dangling or corrupted). Avoid storing ephemeral coroutine `lua_State*` pointers in long-lived handles; use the owning main state for registry access and use corefs to track the waiting coroutine.
+
+### Memory Tracing
+
+When `LUNET_TRACE` is enabled, all allocations through `lunet_alloc()` / `lunet_free()` are tracked with canary headers and poison-on-free. At shutdown, `lunet_mem_assert_balanced()` checks for leaks. Use `lunet_alloc` / `lunet_free` instead of raw `malloc` / `free` in all lunet C code.
+
 ## Testing
 
 ```bash
 make test    # Unit tests
 make stress  # Concurrent load test with tracing
 ```
+
+## Downstream Integration
+
+For canonical downstream `xmake` integration (release/debug/trace/ASan profiles), see:
+
+- [`docs/XMAKE_INTEGRATION.md`](docs/XMAKE_INTEGRATION.md)
 
 ## License
 

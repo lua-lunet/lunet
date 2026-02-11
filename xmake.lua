@@ -26,6 +26,20 @@ option("lunet_verbose_trace")
     add_deps("lunet_trace") -- verbose trace implies trace
 option_end()
 
+-- LuaJIT source package pins for the ASan builder script.
+-- These are consumed by Makefile luajit-asan targets via xmake config.
+option("luajit_snapshot")
+    set_default("2.1.0+openresty20250117")
+    set_showmenu(true)
+    set_description("Debian/OpenResty LuaJIT snapshot identifier (for luajit_*.orig.tar.xz)")
+option_end()
+
+option("luajit_debian_version")
+    set_default("2.1.0+openresty20250117-2")
+    set_showmenu(true)
+    set_description("Debian source package version (for luajit_*.dsc and *.debian.tar.xz)")
+option_end()
+
 -- Common source files for core lunet
 local core_sources = {
     "src/main.c",
@@ -119,6 +133,13 @@ target("lunet")
     end
 target_end()
 
+-- Address Sanitizer option for debugging memory bugs
+option("asan")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Enable Address Sanitizer (-fsanitize=address)")
+option_end()
+
 -- Standalone executable target for ./lunet-run script.lua
 target("lunet-bin")
     set_kind("binary")
@@ -127,6 +148,12 @@ target("lunet-bin")
     add_files(core_sources)
     add_includedirs("include", {public = true})
     add_packages("luajit", "libuv")
+    
+    -- Address Sanitizer support
+    if has_config("asan") then
+        add_cflags("-fsanitize=address", "-fno-omit-frame-pointer", {force = true})
+        add_ldflags("-fsanitize=address", {force = true})
+    end
     
     -- Linux: system libs
     if is_plat("linux") then

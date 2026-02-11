@@ -1,6 +1,7 @@
 #include "co.h"
 
 #include <stdio.h>
+#include <assert.h>
 
 /*
  * Coroutine Anchor Table
@@ -22,6 +23,13 @@
 
 /* Registry key for the anchor table (address used as light userdata key) */
 static char lunet_co_anchor_key;
+
+#ifdef LUNET_TRACE
+static int co_trace_resume_seq = 0;
+static int co_trace_resume_yield = 0;
+static int co_trace_resume_ok = 0;
+static int co_trace_resume_err = 0;
+#endif
 
 /* Ensure the anchor table exists in the registry, push it onto the stack */
 static void lunet_co_get_anchor_table(lua_State *L) {
@@ -81,7 +89,33 @@ int lunet_spawn(lua_State *L) {
 }
 
 int lunet_co_resume(lua_State *co, int nargs) {
+#ifdef LUNET_TRACE
+  co_trace_resume_seq++;
+#endif
+#ifdef LUNET_TRACE_VERBOSE
+  fprintf(stderr, "[CO_TRACE] RESUME #%d co=%p nargs=%d top=%d\n",
+          co_trace_resume_seq, (void *)co, nargs, lua_gettop(co));
+#endif
   int status = lua_resume(co, nargs);
+#ifdef LUNET_TRACE
+  if (status == LUA_YIELD) {
+    co_trace_resume_yield++;
+  } else if (status == LUA_OK) {
+    co_trace_resume_ok++;
+  } else {
+    co_trace_resume_err++;
+  }
+  if (!(status == LUA_YIELD || status == LUA_OK || status > LUA_YIELD)) {
+    fprintf(stderr, "[CO_TRACE] INVALID_STATUS seq=%d status=%d co=%p\n",
+            co_trace_resume_seq, status, (void *)co);
+    assert(status == LUA_YIELD || status == LUA_OK || status > LUA_YIELD);
+  }
+#endif
+#ifdef LUNET_TRACE_VERBOSE
+  fprintf(stderr, "[CO_TRACE] RESUMED #%d co=%p status=%d top=%d (yield=%d ok=%d err=%d)\n",
+          co_trace_resume_seq, (void *)co, status, lua_gettop(co),
+          co_trace_resume_yield, co_trace_resume_ok, co_trace_resume_err);
+#endif
   if (status != LUA_YIELD) {
     /* Coroutine finished (LUA_OK) or errored — unanchor so GC can collect it */
     lunet_co_unanchor(co);

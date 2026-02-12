@@ -96,3 +96,6 @@ Recommended CI profiles for downstream projects:
 
 This catches most lifecycle and coroutine bookkeeping failures early, while keeping production builds lean.
 
+Observed overhead (example data point): in a downstream stress test that brokered HTTP ingress over a unix socket to a DMZ broker and tunneled requests over an
+outbound TCP worker connection (request: `GET /api/tags`), a trace-enabled debug build ran at ~7.7% lower throughput than a non-instrumented release build
+under the same load. Treat this as an order-of-magnitude reference, not a guarantee; measure on your workload and deployment topology.

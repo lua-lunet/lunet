@@ -96,3 +96,14 @@ Recommended CI profiles for downstream projects:
 
 This catches most lifecycle and coroutine bookkeeping failures early, while keeping production builds lean.
 
+## 7) Observed instrumentation overhead (real downstream E2E)
+
+One downstream stress comparison on `lunet-backproxy` measured about **7.7%** throughput overhead with instrumentation enabled.
+
+- App path: DMZ HTTP ingress + worker backflow tunnel (TCP), endpoint `/api/tags`
+- Profile: `1500` requests x `6` rounds, `CONCURRENCY=24`
+- Baseline (release, no trace): `750.00 rps`
+- Instrumented (debug trace runtime): `692.31 rps`
+- Overhead: `7.69%`
+
+Treat this as an indicative reference point for this workload shape, not a universal constant.

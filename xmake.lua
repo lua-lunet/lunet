@@ -75,10 +75,12 @@ if is_plat("windows") then
     add_requires("vcpkg::sqlite3", {alias = "sqlite3", optional = true})
     add_requires("vcpkg::libmysql", {alias = "mysql", optional = true})
     add_requires("vcpkg::libpq", {alias = "pq", optional = true})
+    add_requires("vcpkg::libsodium", {alias = "sodium", optional = true})
 else
     add_requires("pkgconfig::sqlite3", {alias = "sqlite3", optional = true})
     add_requires("pkgconfig::mysqlclient", {alias = "mysql", optional = true})
     add_requires("pkgconfig::libpq", {alias = "pq", optional = true})
+    add_requires("pkgconfig::libsodium", {alias = "sodium", optional = true})
 end
 
 -- Shared library target for require("lunet")
@@ -285,7 +287,56 @@ target("lunet-postgres")
     add_includedirs("include", "ext/postgres", {public = true})
     add_packages("luajit", "libuv", "pq")
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_POSTGRES")
-    
+
+    if is_plat("macosx") then
+        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+    end
+    if is_plat("linux") then
+        add_defines("_GNU_SOURCE")
+        add_cflags("-pthread")
+        add_ldflags("-pthread")
+        add_syslinks("pthread", "dl", "m")
+    end
+    if is_plat("windows") then
+        add_cflags("/TC")
+        add_defines("LUNET_BUILDING_DLL")
+        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
+    end
+    if has_config("lunet_trace") then
+        add_defines("LUNET_TRACE")
+    end
+    if has_config("lunet_verbose_trace") then
+        add_defines("LUNET_TRACE_VERBOSE")
+    end
+target_end()
+
+-- PAXE Packet Encryption: require("lunet.paxe")
+-- NOTE: PAXE requires libsodium and is only for secure peer-to-peer protocols
+-- where the application can handle encryption/decryption details.
+-- Depends on: libsodium (libsodium.so/libsodium.dylib/libsodium.dll)
+-- Optional via: xmake build lunet-paxe
+target("lunet-paxe")
+    set_default(false)  -- Only build when explicitly requested
+    set_kind("shared")
+    set_prefixname("")
+    set_basename("paxe")  -- Output: lunet/paxe.so
+    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
+    if is_plat("windows") then
+        set_extension(".dll")
+    else
+        set_extension(".so")
+    end
+
+    add_files(core_sources)
+    add_files("src/paxe.c")
+    add_includedirs("include", {public = true})
+
+    -- CRITICAL: Fail fast if libsodium is not available
+    add_packages("luajit", "libuv", {public = true})
+    add_packages("sodium")  -- Will fail at config time if not found (no optional = true)
+
+    add_defines("LUNET_NO_MAIN", "LUNET_PAXE")
+
     if is_plat("macosx") then
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
     end

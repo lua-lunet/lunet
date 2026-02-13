@@ -1,8 +1,25 @@
-# Canonical xmake Integration Guide (Downstream Apps)
+# Integrating Lunet into Your Project
 
-This guide is for downstream applications embedding or consuming Lunet with `xmake`.
+This guide helps you build and use Lunet in your own application. No prior xmake experience required.
 
-## 1) Clone and build Lunet once
+## What is xmake?
+
+Lunet uses **xmake** as its build system. xmake is a lightweight, cross-platform build tool (similar to CMake or Make). You don't need to learn xmake in depth—just follow the commands below.
+
+**Install xmake:**
+
+```bash
+# Linux / macOS (curl)
+curl -fsSL https://xmake.io/install.sh | bash
+
+# Or via package manager
+# macOS: brew install xmake
+# Ubuntu: add-apt-repository ppa:xmake-io/xmake && apt install xmake
+```
+
+## Quick Start: Build Lunet
+
+### 1. Clone and build
 
 ```bash
 git clone https://github.com/lua-lunet/lunet.git
@@ -11,62 +28,63 @@ xmake f -m release --lunet_trace=n --lunet_verbose_trace=n -y
 xmake build
 ```
 
-Build outputs:
+**What this does:**
+- `xmake f` = configure
+- `-m release` = optimized build (fast, smaller binary)
+- `--lunet_trace=n` = no debug tracing (recommended for production)
+- `-y` = accept defaults without prompting
 
-- `build/<plat>/<arch>/release/lunet.so`
-- `build/<plat>/<arch>/release/lunet-run`
+**Output files:**
+- `build/<platform>/<arch>/release/lunet.so` — the Lua module
+- `build/<platform>/<arch>/release/lunet-run` — standalone runner
 
-## 2) Run an app with `lunet-run`
+### 2. Run your app with lunet-run
 
 ```bash
 LUNET_BIN=$(find build -path '*/release/lunet-run' -type f | head -1)
-"$LUNET_BIN" path/to/app.lua
+"$LUNET_BIN" path/to/your_app.lua
 ```
 
-## 3) Load `lunet.so` from plain LuaJIT
+### 3. Or load lunet.so from plain LuaJIT
 
-Set `LUA_CPATH` to the built module directory:
+If you prefer to use `luajit` directly:
 
 ```bash
 export LUA_CPATH="$(pwd)/build/$(xmake l print(os.host()))/$(xmake l print(os.arch()))/release/?.so;;"
 luajit -e 'local lunet=require("lunet"); print(type(lunet))'
 ```
 
-If your app has its own loader logic, add Lunet's build directory to that loader path.
+---
 
-## 4) Canonical build profiles
+## Build Profiles (When to Use Each)
 
-### Release (zero debug tax)
+| Profile | Use case | Command |
+|---------|----------|---------|
+| **Release** | Production, best performance | `xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n -y` |
+| **Debug + trace** | Development, catches bugs | `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n -y` |
+| **Verbose trace** | Detailed debugging, logs every event | `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=y -y` |
+| **ASan** | Memory bugs (use-after-free, leaks) | `xmake f -c -m debug --lunet_trace=y --asan=y -y` |
 
-```bash
-xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n -y
-xmake build
-```
+**Tip:** Use `-c` to force a clean reconfigure when switching profiles.
 
-### Debug tracing (bookkeeping + assertions)
+---
 
-```bash
-xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n -y
-xmake build
-```
+## CI Setup for Your Project
 
-### Verbose tracing (per-event logs)
+If your app uses Lunet and you run CI (e.g. GitHub Actions), test with these profiles:
 
-```bash
-xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=y -y
-xmake build
-```
+1. **Release** — `--lunet_trace=n --lunet_verbose_trace=n`
+2. **Debug trace** — `--lunet_trace=y --lunet_verbose_trace=n`
+3. **Verbose trace** — `--lunet_trace=y --lunet_verbose_trace=y`
+4. **ASan** — `--asan=y --lunet_trace=y`
 
-### ASan (Lunet C code)
+This catches most lifecycle and coroutine issues early.
 
-```bash
-xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=y --asan=y -y
-xmake build lunet-bin
-```
+---
 
-## 5) LuaJIT + Lunet ASan (macOS only)
+## Optional: LuaJIT + Lunet ASan (macOS)
 
-The helper targets are macOS-only and fail fast on non-Darwin hosts.
+For deep memory debugging (LuaJIT + Lunet both instrumented), use the macOS-only helpers:
 
 ```bash
 make luajit-asan
@@ -74,36 +92,26 @@ make build-debug-asan-luajit
 make repro-50-asan-luajit
 ```
 
-LuaJIT source package pins are configured in `xmake.lua` options:
-
-- `luajit_snapshot`
-- `luajit_debian_version`
-
-Override pins:
+LuaJIT version pins are in `xmake.lua`. Override if needed:
 
 ```bash
 xmake f --luajit_snapshot=2.1.0+openresty20250117 --luajit_debian_version=2.1.0+openresty20250117-2 -y
 ```
 
-## 6) Minimal downstream CI matrix
+---
 
-Recommended CI profiles for downstream projects:
+## Troubleshooting
 
-1. Release (`--lunet_trace=n --lunet_verbose_trace=n`)
-2. Debug trace (`--lunet_trace=y --lunet_verbose_trace=n`)
-3. Debug verbose trace (`--lunet_trace=y --lunet_verbose_trace=y`)
-4. ASan debug (`--asan=y --lunet_trace=y`)
+| Problem | Solution |
+|---------|----------|
+| `xmake: command not found` | Install xmake (see "What is xmake?" above) |
+| `libuv not found` | Install: `apt install libuv1-dev` (Linux), `brew install libuv` (macOS) |
+| `luajit not found` | Install: `apt install libluajit-5.1-dev` (Linux), `brew install luajit` (macOS) |
+| Build fails after changing options | Run `xmake f -c -y` then reconfigure |
+| Wrong architecture | Use `xmake f -a arm64` (or `x64`) to target a specific arch |
 
-This catches most lifecycle and coroutine bookkeeping failures early, while keeping production builds lean.
+---
 
-## 7) Observed instrumentation overhead (real downstream E2E)
+## Performance Note
 
-One downstream stress comparison on `lunet-backproxy` measured about **7.7%** throughput overhead with instrumentation enabled.
-
-- App path: DMZ HTTP ingress + worker backflow tunnel (TCP), endpoint `/api/tags`
-- Profile: `1500` requests x `6` rounds, `CONCURRENCY=24`
-- Baseline (release, no trace): `750.00 rps`
-- Instrumented (debug trace runtime): `692.31 rps`
-- Overhead: `7.69%`
-
-Treat this as an indicative reference point for this workload shape, not a universal constant.
+Debug tracing adds roughly **7–8%** overhead in typical workloads. Use release builds (`--lunet_trace=n`) for production.

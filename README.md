@@ -361,9 +361,8 @@ make stress  # Concurrent load test with tracing
 
 ## Downstream Integration
 
-For canonical downstream `xmake` integration (release/debug/trace/ASan profiles), see:
-
-- [`docs/XMAKE_INTEGRATION.md`](docs/XMAKE_INTEGRATION.md)
+- **[Integration guide](docs/XMAKE_INTEGRATION.md)** — Build Lunet and integrate it into your project (beginner-friendly)
+- **[Badge guide](docs/BADGES.md)** — Add badges (build status, Lunet version) to your project README
 
 ## License
 

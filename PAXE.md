@@ -135,19 +135,29 @@ if (paxe_is_enabled()) {
 // Continue with plaintext packet
 ```
 
+## Examples
+
+See the `examples/` directory for API previews and simulations:
+
+- **`examples/06_paxe_encryption.lua`** - API walkthrough showing initialization, key management, policies, and statistics (simulation until Lua bindings added)
+- **`examples/07_paxe_stress.lua`** - Stress test simulation for load testing packet processing loops
+
 ## Testing
 
-### Unit Tests
+### Run Examples
 ```bash
-# Run basic sanity test (built-in to demo)
-./build/macosx/arm64/debug/lunet-run .tmp/paxe_demo.lua
+# Run the encryption demo (shows full API usage)
+./build/macosx/arm64/release/lunet-run examples/06_paxe_encryption.lua
+
+# Run stress test with default settings (100 packets)
+./build/macosx/arm64/release/lunet-run examples/07_paxe_stress.lua
 ```
 
 ### Stress Testing
 ```bash
 # Simulate high-volume packet flow
 ITERATIONS=10000 PACKET_SIZE=1500 NUM_KEYS=256 \
-  ./build/macosx/arm64/debug/lunet-run .tmp/paxe_stress_test.lua
+  ./build/macosx/arm64/release/lunet-run examples/07_paxe_stress.lua
 ```
 
 ### With Tracing
@@ -156,8 +166,8 @@ ITERATIONS=10000 PACKET_SIZE=1500 NUM_KEYS=256 \
 xmake f -c -y --lunet_trace=y --lunet_verbose_trace=y
 xmake build lunet-paxe
 
-# Run tests with stderr logging
-./build/macosx/arm64/debug/lunet-run .tmp/paxe_demo.lua 2>&1 | grep PAXE_TRACE
+# Run examples with stderr logging
+./build/macosx/arm64/debug/lunet-run examples/06_paxe_encryption.lua 2>&1 | grep PAXE_TRACE
 ```
 
 ## Performance
@@ -185,7 +195,7 @@ Benchmarks (macOS arm64, debug build with tracing):
 
 ## Limitations
 
-- **No Lua Bindings Yet**: PAXE is C-only. Application must call from Lua via FFI or C extensions.
+- **No Lua Bindings Yet**: PAXE is C-only. Use LuaJIT FFI to call the C API directly. See `examples/06_paxe_encryption.lua` for planned API design.
 - **No Compression**: PAXE is encryption-only. Combine with other modules for compression.
 - **Single-Threaded**: Keystore is not thread-safe. Protect with locks if needed.
 - **No Key Rotation API**: Clear and re-add keys for rotation (planned enhancement).

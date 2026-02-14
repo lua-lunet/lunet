@@ -819,6 +819,49 @@ task("repro-50-asan-luajit")
     end)
 task_end()
 
+task("examples-compile")
+    set_menu {
+        usage = "xmake examples-compile",
+        description = "Run examples compile/syntax check"
+    }
+    on_run(function ()
+        os.exec("xmake build-release")
+        local runner = lunet_runner_path("release")
+        os.execv(runner, {"test/ci_examples_compile.lua"})
+    end)
+task_end()
+
+task("sqlite3-smoke")
+    set_menu {
+        usage = "xmake sqlite3-smoke",
+        description = "Build and run SQLite3 example smoke test"
+    }
+    on_run(function ()
+        os.exec("xmake build-release")
+        os.exec("xmake build lunet-sqlite3")
+        local runner = lunet_runner_path("release")
+        os.execv(runner, {"examples/03_db_sqlite3.lua"})
+    end)
+task_end()
+
+task("ci")
+    set_menu {
+        usage = "xmake ci",
+        description = "Run local CI parity sequence (lint, build, examples, sqlite3 smoke)"
+    }
+    on_run(function ()
+        os.exec("xmake lint")
+        os.exec("xmake build-release")
+        os.exec("xmake build lunet-sqlite3")
+
+        local runner = lunet_runner_path("release")
+        print("--- examples compile check ---")
+        os.execv(runner, {"test/ci_examples_compile.lua"})
+        print("--- sqlite3 example smoke ---")
+        os.execv(runner, {"examples/03_db_sqlite3.lua"})
+    end)
+task_end()
+
 task("release")
     set_menu {
         usage = "xmake release",

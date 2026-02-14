@@ -166,4 +166,5 @@ jobs:
         shell: pwsh
         run: |
           $env:LIGHT_DB_STRESS_OPS = "20"
-          xmake run lunet-bin test/ci_easy_memory_db_stress.lua
+          $script = Join-Path $env:GITHUB_WORKSPACE "test/ci_easy_memory_db_stress.lua"
+          xmake run lunet-bin $script

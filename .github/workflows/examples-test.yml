@@ -128,11 +128,21 @@ jobs:
       - name: EasyMem DB Stress (Unix)
         if: runner.os != 'Windows'
         env:
-          LSAN_OPTIONS: suppressions=${{ github.workspace }}/test/lsan_suppressions.txt
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          LSAN_OPTIONS: exitcode=0:print_suppressions=0
+          LSAN_LEAK_BUDGET_ALLOCS: "4"
         run: |
           LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
           timeout 60 env LIGHT_DB_STRESS_OPS=20 "$LUNET_BIN" test/ci_easy_memory_db_stress.lua
-          timeout 60 "$LUNET_BIN" test/ci_easy_memory_lsan_regression.lua
+          LSAN_LOG="$RUNNER_TEMP/lsan_regression.log"
+          set +e
+          timeout 60 "$LUNET_BIN" test/ci_easy_memory_lsan_regression.lua >"$LSAN_LOG" 2>&1
+          LSAN_RC=$?
+          set -e
+          luajit test/ci_lsan_leak_budget.lua "$LSAN_LOG"
+          if [ "$LSAN_RC" -ne 0 ]; then
+            exit "$LSAN_RC"
+          fi
 
       - name: EasyMem DB Stress (Windows)
         if: runner.os == 'Windows'

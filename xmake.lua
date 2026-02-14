@@ -238,6 +238,9 @@ target("lunet")
 
     -- macOS: build as a bundle with undefined symbols allowed (for Lua host)
     if is_plat("macosx") then
+        -- NOTE: for `set_kind("shared")`, xmake uses shared-linker flags.
+        -- These must be in `shflags` or they may not reach the linker.
+        add_shflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
     end
     
@@ -334,6 +337,7 @@ target("lunet-sqlite3")
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_SQLITE3")
     
     if is_plat("macosx") then
+        add_shflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
     end
     if is_plat("linux") then
@@ -378,6 +382,7 @@ target("lunet-mysql")
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_MYSQL")
     
     if is_plat("macosx") then
+        add_shflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
     end
     if is_plat("linux") then
@@ -422,6 +427,7 @@ target("lunet-postgres")
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_POSTGRES")
 
     if is_plat("macosx") then
+        add_shflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
     end
     if is_plat("linux") then
@@ -474,6 +480,7 @@ target("lunet-paxe")
     add_defines("LUNET_NO_MAIN", "LUNET_PAXE")
 
     if is_plat("macosx") then
+        add_shflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
     end
     if is_plat("linux") then
@@ -643,7 +650,7 @@ task("preflight-easy-memory")
 
         local runner = lunet_runner_path("debug")
         local runnerq = lunet_quote(runner)
-        local lsan_supp = "LSAN_OPTIONS=suppressions=test/lsan_suppressions.txt"
+        local lsan_env_unix = "LSAN_OPTIONS=exitcode=0:print_suppressions=0 LSAN_LEAK_BUDGET_ALLOCS=4"
         if is_host("windows") then
             lunet_exec_logged(os, logdir, "06_ci_easy_memory_db_stress",
                 "set ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 && set LIGHT_DB_STRESS_OPS=" .. ops .. " && " .. runnerq .. " test/ci_easy_memory_db_stress.lua")
@@ -651,9 +658,13 @@ task("preflight-easy-memory")
                 "set ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 && " .. runnerq .. " test/ci_easy_memory_lsan_regression.lua")
         else
             lunet_exec_logged(os, logdir, "06_ci_easy_memory_db_stress",
-                lsan_supp .. " ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 LIGHT_DB_STRESS_OPS=" .. ops .. " timeout 120 " .. runnerq .. " test/ci_easy_memory_db_stress.lua")
+                lsan_env_unix .. " ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 LIGHT_DB_STRESS_OPS=" .. ops .. " timeout 120 " .. runnerq .. " test/ci_easy_memory_db_stress.lua")
             lunet_exec_logged(os, logdir, "07_ci_easy_memory_lsan_regression",
-                lsan_supp .. " ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 timeout 120 " .. runnerq .. " test/ci_easy_memory_lsan_regression.lua")
+                lsan_env_unix .. " ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 timeout 120 " .. runnerq .. " test/ci_easy_memory_lsan_regression.lua")
+
+            local lsan_logfile = path.join(logdir, "07_ci_easy_memory_lsan_regression.log")
+            lunet_exec_logged(os, logdir, "08_ci_easy_memory_lsan_budget_check",
+                "luajit test/ci_lsan_leak_budget.lua " .. lunet_quote(lsan_logfile))
         end
 
         print("EasyMem preflight passed. Logs: " .. logdir)

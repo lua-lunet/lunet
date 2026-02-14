@@ -1,7 +1,3 @@
-#!/usr/bin/env lua
-
-local lfs = require("lfs")
-
 -- ANSI Colors
 local RED = "\27[31m"
 local GREEN = "\27[32m"
@@ -13,19 +9,54 @@ local files_with_violations = 0
 -- Helper to recursively find files
 local function find_files(dir, extension, files)
     files = files or {}
-    local mode = lfs.attributes(dir, "mode")
-    if mode ~= "directory" then return files end
+    -- Fast path when run under xmake lua: use xmake's own file globbing.
+    if type(os) == "table" and type(os.files) == "function" then
+        for _, p in ipairs(os.files(dir .. "/**." .. extension)) do
+            table.insert(files, p)
+        end
+        return files
+    end
 
-    for entry in lfs.dir(dir) do
-        if entry ~= "." and entry ~= ".." then
-            local path = dir .. "/" .. entry
-            local attr = lfs.attributes(path)
-            if attr.mode == "directory" then
-                find_files(path, extension, files)
-            elseif attr.mode == "file" and path:match("%." .. extension .. "$") then
-                table.insert(files, path)
+    local ok, lfs = pcall(require, "lfs")
+    if ok and lfs then
+        local mode = lfs.attributes(dir, "mode")
+        if mode ~= "directory" then return files end
+
+        for entry in lfs.dir(dir) do
+            if entry ~= "." and entry ~= ".." then
+                local path = dir .. "/" .. entry
+                local attr = lfs.attributes(path)
+                if attr.mode == "directory" then
+                    find_files(path, extension, files)
+                elseif attr.mode == "file" and path:match("%." .. extension .. "$") then
+                    table.insert(files, path)
+                end
             end
         end
+        return files
+    end
+
+    if package.config:sub(1, 1) == "\\" then
+        -- Windows fallback without lfs.
+        local cmd = string.format('dir /b /s "%s\\*.%s"', dir:gsub("/", "\\"), extension)
+        local h = io.popen(cmd)
+        if h then
+            for line in h:lines() do
+                table.insert(files, line:gsub("\\", "/"))
+            end
+            h:close()
+        end
+        return files
+    end
+
+    -- POSIX fallback without lfs.
+    local cmd = string.format('find "%s" -type f -name "*.%s" 2>/dev/null', dir, extension)
+    local h = io.popen(cmd)
+    if h then
+        for line in h:lines() do
+            table.insert(files, line)
+        end
+        h:close()
     end
     return files
 end

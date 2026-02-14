@@ -10,11 +10,22 @@ set_languages("c99")
 
 add_rules("mode.debug", "mode.release")
 
-local xio = import("core.base.io")
-
 -- Run C safety lint automatically before any target build.
 -- This keeps lint enforcement on the standard xmake path (xmake build, xmake run, etc).
 local c_safety_lint_ran = false
+
+local function read_text_file(filepath)
+    local ok, content
+    if is_plat("windows") then
+        ok, content = pcall(os.iorunv, "cmd", {"/c", "type", path.translate(filepath)})
+    else
+        ok, content = pcall(os.iorunv, "cat", {filepath})
+    end
+    if ok then
+        return content
+    end
+    return nil
+end
 
 local function lint_check_file(filepath)
     local filename = path.filename(filepath)
@@ -28,7 +39,7 @@ local function lint_check_file(filepath)
         return true, 0
     end
 
-    local content = xio.readfile(filepath)
+    local content = read_text_file(filepath)
     if not content then
         return true, 0
     end

@@ -13,28 +13,28 @@
 #define LUNET_MYSQL_CONN_MT "lunet.mysql.conn"
 
 static int g_mysql_library_initialized = 0;
-static int g_mysql_library_shutdown_registered = 0;
+static int g_mysql_library_refcount = 0;
 
-static void lunet_mysql_library_shutdown(void) {
-  if (!g_mysql_library_initialized) {
-    return;
+static int lunet_mysql_library_acquire(void) {
+  if (g_mysql_library_refcount == 0) {
+    if (mysql_library_init(0, NULL, NULL) != 0) {
+      return -1;
+    }
+    g_mysql_library_initialized = 1;
   }
-  mysql_library_end();
-  g_mysql_library_initialized = 0;
+  g_mysql_library_refcount++;
+  return 0;
 }
 
-static int lunet_mysql_library_ensure(void) {
-  if (g_mysql_library_initialized) {
-    return 0;
+static void lunet_mysql_library_release(void) {
+  if (g_mysql_library_refcount <= 0) {
+    return;
   }
-  if (mysql_library_init(0, NULL, NULL) != 0) {
-    return -1;
+  g_mysql_library_refcount--;
+  if (g_mysql_library_refcount == 0 && g_mysql_library_initialized) {
+    mysql_library_end();
+    g_mysql_library_initialized = 0;
   }
-  g_mysql_library_initialized = 1;
-  if (!g_mysql_library_shutdown_registered && atexit(lunet_mysql_library_shutdown) == 0) {
-    g_mysql_library_shutdown_registered = 1;
-  }
-  return 0;
 }
 
 static char* lunet_strdup_local(const char* s) {
@@ -50,6 +50,7 @@ typedef struct {
   MYSQL* conn;
   uv_mutex_t mutex;
   int closed;
+  int library_ref_held;
 } lunet_mysql_conn_t;
 
 // Close connection but keep mutex intact (for explicit db.close())
@@ -59,6 +60,10 @@ static void lunet_mysql_conn_close(lunet_mysql_conn_t* wrapper) {
   if (wrapper->conn) {
     mysql_close(wrapper->conn);
     wrapper->conn = NULL;
+  }
+  if (wrapper->library_ref_held) {
+    lunet_mysql_library_release();
+    wrapper->library_ref_held = 0;
   }
 }
 
@@ -117,6 +122,7 @@ static void db_open_after_cb(uv_work_t* req, int status) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.open\n");
     if (ctx->conn) mysql_close(ctx->conn);
+    lunet_mysql_library_release();
     lunet_free_nonnull(ctx);
     return;
   }
@@ -127,6 +133,7 @@ static void db_open_after_cb(uv_work_t* req, int status) {
     lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)lua_newuserdata(co, sizeof(lunet_mysql_conn_t));
     wrapper->conn = ctx->conn;
     wrapper->closed = 0;
+    wrapper->library_ref_held = 1;
     uv_mutex_init(&wrapper->mutex);
 
     luaL_getmetatable(co, LUNET_MYSQL_CONN_MT);
@@ -136,6 +143,7 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   } else {
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
+    lunet_mysql_library_release();
   }
   int rc = lua_resume(co, 2);
   if (rc != 0 && rc != LUA_YIELD) {
@@ -304,12 +312,12 @@ int lunet_db_open(lua_State* L) {
   if (lunet_ensure_coroutine(L, "db.open")) {
     return lua_error(L);
   }
-  if (lunet_mysql_library_ensure() != 0) {
-    lua_pushstring(L, "db.open: mysql_library_init failed");
-    return lua_error(L);
-  }
   if (lua_gettop(L) < 1 || !lua_istable(L, 1)) {
     lua_pushstring(L, "db.open requires params table");
+    return lua_error(L);
+  }
+  if (lunet_mysql_library_acquire() != 0) {
+    lua_pushstring(L, "db.open: mysql_library_init failed");
     return lua_error(L);
   }
 
@@ -317,6 +325,7 @@ int lunet_db_open(lua_State* L) {
 
   db_open_ctx_t* ctx = lunet_alloc(sizeof(db_open_ctx_t));
   if (!ctx) {
+    lunet_mysql_library_release();
     lua_pushnil(L);
     lua_pushstring(L, "db.open: out of memory");
     return lua_error(L);
@@ -346,6 +355,7 @@ int lunet_db_open(lua_State* L) {
   if (ret < 0) {
     lunet_coref_release(L, ctx->co_ref);
     lunet_free_nonnull(ctx);
+    lunet_mysql_library_release();
     lua_pushnil(L);
     lua_pushfstring(L, "db.open: uv_queue_work failed: %s", uv_strerror(ret));
     return lua_error(L);

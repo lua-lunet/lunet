@@ -152,7 +152,7 @@ xmake f --luajit_snapshot=2.1.0+openresty20250117 --luajit_debian_version=2.1.0+
 | `luajit not found` | Install: `apt install libluajit-5.1-dev` (Linux), `brew install luajit` (macOS) |
 | Build fails after changing options | Run `xmake f -c -y` then reconfigure |
 | Wrong architecture | Use `xmake f -a arm64` (or `x64`) to target a specific arch |
-| `--asan=y` on Windows does not add sanitizer flags | Expected: ASan compiler flags are skipped on Windows |
+| `--asan=y` fails on a specific Windows toolchain | Ensure your MSVC/clang-cl version supports `/fsanitize=address` |
 
 ---
 

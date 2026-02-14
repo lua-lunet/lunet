@@ -44,7 +44,7 @@ option_end()
 option("asan")
     set_default(false)
     set_showmenu(true)
-    set_description("Enable Address Sanitizer (-fsanitize=address). On Windows this option is skipped.")
+    set_description("Enable Address Sanitizer (-fsanitize=address or /fsanitize=address)")
     add_deps("lunet_trace")
 option_end()
 
@@ -116,7 +116,13 @@ local function lunet_apply_asan_flags()
         return
     end
     if is_plat("windows") then
-        cprint("${yellow}[lunet] --asan is currently skipped on Windows.${clear}")
+        if is_tool("cc", "cl") then
+            add_cflags("/fsanitize=address", {force = true})
+            add_ldflags("/fsanitize=address", {force = true})
+        else
+            add_cflags("-fsanitize=address", "-fno-omit-frame-pointer", {force = true})
+            add_ldflags("-fsanitize=address", {force = true})
+        end
         return
     end
     add_cflags("-fsanitize=address", "-fno-omit-frame-pointer", {force = true})

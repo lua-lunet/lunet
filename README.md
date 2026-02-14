@@ -275,7 +275,7 @@ xmake build lunet-bin
 ./build/.../lunet-run app.lua 2> asan.log
 ```
 
-With `--asan=y`, Lunet now also enables the EasyMem backend with diagnostic mode (`LUNET_EASY_MEMORY_DIAGNOSTICS`) so allocator-level integrity checks and profiling output run alongside ASan. On Windows, ASan compiler flags are skipped.
+With `--asan=y`, Lunet now also enables the EasyMem backend with diagnostic mode (`LUNET_EASY_MEMORY_DIAGNOSTICS`) so allocator-level integrity checks and profiling output run alongside ASan.
 
 ASan output goes to stderr. The process exits with `Abort trap: 6` instead of `Segmentation fault: 11`. Look for `ERROR: AddressSanitizer:` in the log.
 

@@ -17,7 +17,7 @@ Lunet now supports these EasyMem paths:
    - `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n -y`
 2. **Automatic in ASAN builds**
    - `xmake f -c -m debug --lunet_trace=y --asan=y -y`
-   - On Windows, ASAN compiler flags are skipped (expected behavior).
+   - Windows uses `/fsanitize=address` when supported by the toolchain.
 3. **Experimental release with EasyMem**
    - `xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y`
 4. **Manual opt-in**

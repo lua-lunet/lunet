@@ -16,6 +16,18 @@ You MUST NOT do any git reset or stash or an git rm or rm or anything that might
     - Minimum local gate for this repo: `xmake lint`, `xmake test` (or CI-equivalent Lua test step), `xmake preflight-easy-memory`, and `xmake build-release`.
     - If the change affects examples, packaging, or specialized jobs, run the corresponding local equivalents for the current OS as well.
 
+## Internationalisation Parity (STRICT)
+
+All user-facing documentation MUST be kept in sync between English and Chinese (简体中文).  When you create or modify any of the files below, you MUST create or update its counterpart:
+
+| English | Chinese |
+|---------|---------|
+| `README.md` | `README-CN.md` |
+| `PAXE.md` | `PAXE-CN.md` |
+| `docs/*.md` | `docs/*-CN.md` (same basename with `-CN` suffix) |
+
+This includes badges, links, examples, and section structure.  A missing or stale translation is a build-quality defect.
+
 ## Release Quality Gate (STRICT)
 
 Before creating or announcing a release:

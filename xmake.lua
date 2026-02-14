@@ -10,6 +10,22 @@ set_languages("c99")
 
 add_rules("mode.debug", "mode.release")
 
+-- Run C safety lint automatically before any target build.
+-- This keeps lint enforcement on the standard xmake path (xmake build, xmake run, etc).
+local c_safety_lint_ran = false
+
+rule("lunet.c_safety_lint")
+    before_build(function ()
+        if c_safety_lint_ran then
+            return
+        end
+        c_safety_lint_ran = true
+        local root = os.projectdir()
+        local lint_script = path.join(root, "bin", "lint_c_safety.lua")
+        os.execv("xmake", {"lua", lint_script}, {curdir = root})
+    end)
+rule_end()
+
 -- Debug tracing option (enables LUNET_TRACE for coroutine debugging)
 -- NOTE: Do not name this option "trace" because xmake reserves --trace.
 option("lunet_trace")
@@ -191,6 +207,7 @@ end
 -- Shared library target for require("lunet")
 target("lunet")
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     
     -- Platform-specific module naming
     set_prefixname("")
@@ -245,6 +262,7 @@ target_end()
 -- Standalone executable target for ./lunet-run script.lua
 target("lunet-bin")
     set_kind("binary")
+    add_rules("lunet.c_safety_lint")
     set_basename("lunet-run")  -- Avoid conflict with lunet/ driver directory
     
     add_files(core_sources)
@@ -287,6 +305,7 @@ target_end()
 target("lunet-sqlite3")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("sqlite3")  -- Output: lunet/sqlite3.so
     set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
@@ -330,6 +349,7 @@ target_end()
 target("lunet-mysql")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("mysql")  -- Output: lunet/mysql.so
     set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
@@ -373,6 +393,7 @@ target_end()
 target("lunet-postgres")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("postgres")  -- Output: lunet/postgres.so
     set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
@@ -420,6 +441,7 @@ target_end()
 target("lunet-paxe")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("paxe")  -- Output: lunet/paxe.so
     set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")

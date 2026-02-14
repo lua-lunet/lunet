@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <uv.h>
 
 #ifdef LUNET_EASY_MEMORY
 #ifdef LUNET_EASY_MEMORY_DIAGNOSTICS
@@ -32,14 +33,20 @@ static EM *g_lunet_em = NULL;
 static int g_lunet_em_initialized = 0;
 static int g_lunet_em_enabled = 0;
 static int g_lunet_em_shutdown_registered = 0;
+static uv_mutex_t g_lunet_em_mutex;
+static int g_lunet_em_mutex_initialized = 0;
 
 static void lunet_mem_atexit_shutdown(void) {
     lunet_mem_shutdown();
 }
 
 static void *lunet_backend_alloc(size_t size) {
-    if (g_lunet_em_enabled && g_lunet_em) {
-        return em_alloc(g_lunet_em, size);
+    if (g_lunet_em_enabled && g_lunet_em && g_lunet_em_mutex_initialized) {
+        void *ptr;
+        uv_mutex_lock(&g_lunet_em_mutex);
+        ptr = em_alloc(g_lunet_em, size);
+        uv_mutex_unlock(&g_lunet_em_mutex);
+        return ptr;
     }
     return malloc(size);
 }
@@ -48,8 +55,10 @@ static void lunet_backend_free(void *ptr) {
     if (!ptr) {
         return;
     }
-    if (g_lunet_em_enabled && g_lunet_em) {
+    if (g_lunet_em_enabled && g_lunet_em && g_lunet_em_mutex_initialized) {
+        uv_mutex_lock(&g_lunet_em_mutex);
         em_free(ptr);
+        uv_mutex_unlock(&g_lunet_em_mutex);
         return;
     }
     free(ptr);
@@ -63,14 +72,26 @@ void lunet_mem_init(void) {
         return;
     }
     g_lunet_em_initialized = 1;
+    if (!g_lunet_em_mutex_initialized) {
+        if (uv_mutex_init(&g_lunet_em_mutex) == 0) {
+            g_lunet_em_mutex_initialized = 1;
+        } else {
+            fprintf(stderr, "[MEM_TRACE] WARNING: failed to init EASY_MEMORY mutex, falling back to libc allocator\n");
+        }
+    }
+
     g_lunet_em = em_create((size_t)LUNET_EASY_MEMORY_ARENA_BYTES);
-    if (g_lunet_em) {
+    if (g_lunet_em && g_lunet_em_mutex_initialized) {
         g_lunet_em_enabled = 1;
 #ifdef LUNET_TRACE_VERBOSE
         fprintf(stderr, "[MEM_TRACE] EASY_MEMORY backend enabled (arena=%llu bytes)\n",
                 (unsigned long long)LUNET_EASY_MEMORY_ARENA_BYTES);
 #endif
     } else {
+        if (g_lunet_em) {
+            em_destroy(g_lunet_em);
+            g_lunet_em = NULL;
+        }
         g_lunet_em_enabled = 0;
         fprintf(stderr, "[MEM_TRACE] EASY_MEMORY backend unavailable, falling back to libc allocator\n");
     }
@@ -86,11 +107,24 @@ void lunet_mem_init(void) {
 
 void lunet_mem_shutdown(void) {
 #ifdef LUNET_EASY_MEMORY
-    if (g_lunet_em_enabled && g_lunet_em) {
-        em_destroy(g_lunet_em);
+    if (g_lunet_em_enabled && g_lunet_em && g_lunet_em_mutex_initialized) {
+        EM *to_destroy = NULL;
+        uv_mutex_lock(&g_lunet_em_mutex);
+        to_destroy = g_lunet_em;
         g_lunet_em = NULL;
+        g_lunet_em_enabled = 0;
+        uv_mutex_unlock(&g_lunet_em_mutex);
+        if (to_destroy) {
+            em_destroy(to_destroy);
+        }
+    } else {
+        g_lunet_em = NULL;
+        g_lunet_em_enabled = 0;
     }
-    g_lunet_em_enabled = 0;
+    if (g_lunet_em_mutex_initialized) {
+        uv_mutex_destroy(&g_lunet_em_mutex);
+        g_lunet_em_mutex_initialized = 0;
+    }
     g_lunet_em_initialized = 0;
 #endif
 }

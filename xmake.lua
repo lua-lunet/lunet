@@ -144,13 +144,10 @@ local function lunet_apply_asan_flags(target_kind)
         return
     end
     if is_plat("windows") then
-        if is_tool("cc", "cl") then
-            add_cflags("/fsanitize=address", {force = true})
-            add_ldflags("/fsanitize=address", {force = true})
-        else
-            add_cflags("-fsanitize=address", "-fno-omit-frame-pointer", {force = true})
-            add_ldflags("-fsanitize=address", {force = true})
-        end
+        -- CI uses MSVC on Windows.  is_tool() is not available at
+        -- description scope, so we use MSVC flags directly.
+        add_cflags("/fsanitize=address", {force = true})
+        add_ldflags("/fsanitize=address", {force = true})
         return
     end
     add_cflags("-fsanitize=address", "-fno-omit-frame-pointer", {force = true})

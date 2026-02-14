@@ -236,7 +236,7 @@ static void db_open_after_cb(uv_work_t* req, int status) {
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
   }
-  int rc = lua_resume(co, 2);
+  int rc = lunet_co_resume(co, 2);
   if (rc != 0 && rc != LUA_YIELD) {
     const char* err = lua_tostring(co, -1);
     if (err) fprintf(stderr, "lua_resume error in db.open: %s\n", err);
@@ -481,7 +481,7 @@ static void db_query_after_cb(uv_work_t* req, int status) {
   if (ctx->err[0] != '\0') {
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
-    int rc = lua_resume(co, 2);
+    int rc = lunet_co_resume(co, 2);
     if (rc != 0 && rc != LUA_YIELD) {
       const char* err = lua_tostring(co, -1);
       if (err) fprintf(stderr, "lua_resume error in db.query: %s\n", err);
@@ -520,7 +520,7 @@ static void db_query_after_cb(uv_work_t* req, int status) {
 
   lua_pushnil(co);
   {
-    int rc = lua_resume(co, 2);
+    int rc = lunet_co_resume(co, 2);
     if (rc != 0 && rc != LUA_YIELD) {
       const char* err = lua_tostring(co, -1);
       if (err) fprintf(stderr, "lua_resume error in db.query: %s\n", err);
@@ -687,7 +687,7 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
   if (ctx->err[0] != '\0') {
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
-    int rc = lua_resume(co, 2);
+    int rc = lunet_co_resume(co, 2);
     if (rc != 0 && rc != LUA_YIELD) {
       const char* err = lua_tostring(co, -1);
       if (err) fprintf(stderr, "lua_resume error in db.exec: %s\n", err);
@@ -702,7 +702,7 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
     lua_pushinteger(co, ctx->insert_id);
     lua_settable(co, -3);
     lua_pushnil(co);
-    int rc = lua_resume(co, 2);
+    int rc = lunet_co_resume(co, 2);
     if (rc != 0 && rc != LUA_YIELD) {
       const char* err = lua_tostring(co, -1);
       if (err) fprintf(stderr, "lua_resume error in db.exec: %s\n", err);

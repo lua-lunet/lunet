@@ -45,10 +45,10 @@ If you use raw FFI database bindings inside a lunet application, you lose all th
 
 ```bash
 # Default SQLite build
-make build
+xmake build-release
 
 # Build with tracing (debug mode)
-make build-debug
+xmake build-debug
 ```
 
 ### Experimental release with EasyMem
@@ -94,7 +94,7 @@ echo "TAVILY_API_KEY=your_key" > .env
 First build the runner:
 
 ```bash
-make build
+xmake build-release
 LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1)
 ```
 
@@ -238,7 +238,7 @@ db.close(conn)
 
 ## Safety: Zero-Cost Tracing
 
-Build with `make build-debug` to enable coroutine reference tracking and stack integrity checks. The runtime will assert and crash on leaks or stack pollution.
+Build with `xmake build-debug` to enable coroutine reference tracking and stack integrity checks. The runtime will assert and crash on leaks or stack pollution.
 
 ## Debugging
 
@@ -284,9 +284,9 @@ ASan output goes to stderr. The process exits with `Abort trap: 6` instead of `S
 To instrument both Lunet and LuaJIT (not just Lunet C code), build the OpenResty LuaJIT source package used by Debian Trixie and link Lunet against it:
 
 ```bash
-make luajit-asan
-make build-debug-asan-luajit
-make repro-50-asan-luajit
+xmake luajit-asan
+xmake build-debug-asan-luajit
+xmake repro-50-asan-luajit
 ```
 
 These helper targets now inherit EasyMem automatically because they configure `--asan=y --lunet_trace=y`.
@@ -312,7 +312,7 @@ export ASAN_SYMBOLIZER_PATH="$(xcrun --find llvm-symbolizer)"
 export ASAN_OPTIONS="abort_on_error=1,halt_on_error=1,fast_unwind_on_malloc=0,detect_leaks=0"
 ```
 
-If `make luajit-asan` fails with `missing: export MACOSX_DEPLOYMENT_TARGET=XX.YY`, set:
+If `xmake luajit-asan` fails with `missing: export MACOSX_DEPLOYMENT_TARGET=XX.YY`, set:
 
 ```bash
 export MACOSX_DEPLOYMENT_TARGET="$(sw_vers -productVersion | awk -F. '{print $1 "." $2}')"
@@ -323,14 +323,14 @@ export MACOSX_DEPLOYMENT_TARGET="$(sw_vers -productVersion | awk -F. '{print $1 
 Do not rely only on edge tracing to infer the fault location. First try to make LuaJIT/Lunet crash immediately under ASan:
 
 ```bash
-make build-debug-asan-luajit
-make repro-50-asan-luajit
+xmake build-debug-asan-luajit
+xmake repro-50-asan-luajit
 ```
 
 If the bug is timing-sensitive, run more iterations:
 
 ```bash
-ITERATIONS=100 REQUESTS=100 CONCURRENCY=8 WORKERS=8 make repro-50-asan-luajit
+ITERATIONS=100 REQUESTS=100 CONCURRENCY=8 WORKERS=8 xmake repro-50-asan-luajit
 ```
 
 To reduce JIT-side nondeterminism while isolating yield/resume bookkeeping bugs, disable JIT in the repro Lua entrypoint:
@@ -370,8 +370,8 @@ When `LUNET_TRACE` is enabled, all allocations through `lunet_alloc()` / `lunet_
 ## Testing
 
 ```bash
-make test    # Unit tests
-make stress  # Concurrent load test with tracing
+xmake test    # Unit tests
+xmake stress  # Concurrent load test with tracing
 ```
 
 ## Downstream Integration

@@ -43,7 +43,7 @@ option("lunet_verbose_trace")
 option_end()
 
 -- LuaJIT source package pins for the ASan builder script.
--- These are consumed by Makefile luajit-asan targets via xmake config.
+-- These are consumed by xmake luajit-asan tasks via project config.
 option("luajit_snapshot")
     set_default("2.1.0+openresty20250117")
     set_showmenu(true)
@@ -478,3 +478,205 @@ target("lunet-paxe")
         add_defines("LUNET_TRACE_VERBOSE")
     end
 target_end()
+
+-- =============================================================================
+-- Developer Tasks (xmake-only workflow)
+-- =============================================================================
+
+local function lunet_trim(s)
+    return (s or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function lunet_runner_path(mode)
+    local runner_name = is_host("windows") and "lunet-run.exe" or "lunet-run"
+    local matches = os.files("build/**/" .. mode .. "/" .. runner_name)
+    if #matches == 0 then
+        raise("lunet runner not found for mode: " .. mode)
+    end
+    return matches[1]
+end
+
+task("init")
+    set_menu {
+        usage = "xmake init",
+        description = "Install local Lua QA dependencies via luarocks"
+    }
+    on_run(function ()
+        os.exec("luarocks install luafilesystem --local")
+        os.exec("luarocks install busted --local")
+        os.exec("luarocks install luacheck --local")
+        cprint("${green}Init complete.${clear} Add local rocks bin to PATH if needed.")
+    end)
+task_end()
+
+task("lint")
+    set_menu {
+        usage = "xmake lint",
+        description = "Run C safety lint checks"
+    }
+    on_run(function ()
+        os.exec("lua bin/lint_c_safety.lua")
+    end)
+task_end()
+
+task("check")
+    set_menu {
+        usage = "xmake check",
+        description = "Run luacheck static analysis"
+    }
+    on_run(function ()
+        os.exec("luacheck test/ spec/")
+    end)
+task_end()
+
+task("test")
+    set_menu {
+        usage = "xmake test",
+        description = "Run Lua tests with busted"
+    }
+    on_run(function ()
+        os.exec("busted spec/")
+    end)
+task_end()
+
+task("build-release")
+    set_menu {
+        usage = "xmake build-release",
+        description = "Configure and build release profile"
+    }
+    on_run(function ()
+        os.exec("xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n -y")
+        os.exec("xmake build")
+    end)
+task_end()
+
+task("build-debug")
+    set_menu {
+        usage = "xmake build-debug",
+        description = "Configure and build debug trace profile"
+    }
+    on_run(function ()
+        os.exec("xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n -y")
+        os.exec("xmake build")
+    end)
+task_end()
+
+task("build-easy-memory-experimental")
+    set_menu {
+        usage = "xmake build-easy-memory-experimental",
+        description = "Configure and build EasyMem experimental release profile"
+    }
+    on_run(function ()
+        local arena_mb = os.getenv("EASY_MEMORY_ARENA_MB") or "128"
+        os.exec("xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=" .. arena_mb .. " -y")
+        os.exec("xmake build")
+    end)
+task_end()
+
+task("stress")
+    set_menu {
+        usage = "xmake stress",
+        description = "Run stress test with debug trace profile"
+    }
+    on_run(function ()
+        local workers = os.getenv("STRESS_WORKERS") or "50"
+        local ops = os.getenv("STRESS_OPS") or "100"
+        os.exec("xmake build-debug")
+        local runner = lunet_runner_path("debug")
+        os.execv(runner, {"test/stress_test.lua"}, {envs = {STRESS_WORKERS = workers, STRESS_OPS = ops}})
+    end)
+task_end()
+
+task("socket-gc")
+    set_menu {
+        usage = "xmake socket-gc",
+        description = "Run socket listener GC regression test"
+    }
+    on_run(function ()
+        os.exec("xmake build-debug")
+        local runner = lunet_runner_path("debug")
+        if is_host("windows") then
+            os.exec("\"" .. runner .. "\" test/socket_listener_gc.lua")
+        else
+            os.exec("timeout 10 \"" .. runner .. "\" test/socket_listener_gc.lua")
+        end
+    end)
+task_end()
+
+task("smoke")
+    set_menu {
+        usage = "xmake smoke",
+        description = "Run database smoke tests"
+    }
+    on_run(function ()
+        os.exec("xmake build-release")
+        local runner = lunet_runner_path("release")
+        os.execv(runner, {"test/smoke_sqlite3.lua"})
+        pcall(function () os.execv(runner, {"test/smoke_mysql.lua"}) end)
+        pcall(function () os.execv(runner, {"test/smoke_postgres.lua"}) end)
+    end)
+task_end()
+
+task("luajit-asan")
+    set_menu {
+        usage = "xmake luajit-asan",
+        description = "Build macOS LuaJIT ASan into .tmp"
+    }
+    on_run(function ()
+        if not is_host("macosx") then
+            raise("luajit-asan task is macOS-only")
+        end
+        os.exec("xmake f -y >/dev/null")
+        local snapshot = lunet_trim(os.iorun("xmake l -c 'import(\"core.project.config\"); config.load(); io.write(config.get(\"luajit_snapshot\") or \"\")'"))
+        local debver = lunet_trim(os.iorun("xmake l -c 'import(\"core.project.config\"); config.load(); io.write(config.get(\"luajit_debian_version\") or \"\")'"))
+        os.exec("LUAJIT_SNAPSHOT=\"" .. snapshot .. "\" LUAJIT_DEBIAN_VERSION=\"" .. debver .. "\" lua bin/build_luajit_asan.lua")
+    end)
+task_end()
+
+task("build-debug-asan-luajit")
+    set_menu {
+        usage = "xmake build-debug-asan-luajit",
+        description = "Build lunet-bin with ASan + custom LuaJIT ASan (macOS)"
+    }
+    on_run(function ()
+        if not is_host("macosx") then
+            raise("build-debug-asan-luajit task is macOS-only")
+        end
+        os.exec("xmake f -y >/dev/null")
+        local snapshot = lunet_trim(os.iorun("xmake l -c 'import(\"core.project.config\"); config.load(); io.write(config.get(\"luajit_snapshot\") or \"\")'"))
+        local debver = lunet_trim(os.iorun("xmake l -c 'import(\"core.project.config\"); config.load(); io.write(config.get(\"luajit_debian_version\") or \"\")'"))
+        local prefix = lunet_trim(os.iorun("LUAJIT_SNAPSHOT=\"" .. snapshot .. "\" LUAJIT_DEBIAN_VERSION=\"" .. debver .. "\" lua bin/build_luajit_asan.lua"))
+        os.exec("PKG_CONFIG_PATH=\"" .. prefix .. "/lib/pkgconfig:$PKG_CONFIG_PATH\" xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=y --asan=y -y")
+        os.exec("PKG_CONFIG_PATH=\"" .. prefix .. "/lib/pkgconfig:$PKG_CONFIG_PATH\" xmake build lunet-bin")
+    end)
+task_end()
+
+task("repro-50-asan-luajit")
+    set_menu {
+        usage = "xmake repro-50-asan-luajit",
+        description = "Run issue #50 repro with LuaJIT+Lunet ASan (macOS)"
+    }
+    on_run(function ()
+        if not is_host("macosx") then
+            raise("repro-50-asan-luajit task is macOS-only")
+        end
+        os.exec("xmake build-debug-asan-luajit")
+        local snapshot = lunet_trim(os.iorun("xmake l -c 'import(\"core.project.config\"); config.load(); io.write(config.get(\"luajit_snapshot\") or \"\")'"))
+        local debver = lunet_trim(os.iorun("xmake l -c 'import(\"core.project.config\"); config.load(); io.write(config.get(\"luajit_debian_version\") or \"\")'"))
+        local prefix = lunet_trim(os.iorun("LUAJIT_SNAPSHOT=\"" .. snapshot .. "\" LUAJIT_DEBIAN_VERSION=\"" .. debver .. "\" lua bin/build_luajit_asan.lua"))
+        os.exec("DYLD_LIBRARY_PATH=\"" .. prefix .. "/lib:$DYLD_LIBRARY_PATH\" LUNET_BIN=\"$(pwd)/build/macosx/arm64/debug/lunet-run\" ITERATIONS=${ITERATIONS:-10} REQUESTS=${REQUESTS:-50} CONCURRENCY=${CONCURRENCY:-4} WORKERS=${WORKERS:-4} timeout 180 .tmp/repro-payload/scripts/repro.sh")
+    end)
+task_end()
+
+task("release")
+    set_menu {
+        usage = "xmake release",
+        description = "Run lint + test + stress, then build release"
+    }
+    on_run(function ()
+        os.exec("xmake lint")
+        os.exec("xmake test")
+        os.exec("xmake stress")
+        os.exec("xmake build-release")
+    end)
+task_end()

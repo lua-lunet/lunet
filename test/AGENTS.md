@@ -31,7 +31,7 @@ kill $SERVER_PID
 
 ## Tracing Verification
 
-Always build with `make build-debug` to enable `LUNET_TRACE`. 
+Always build with `xmake build-debug` to enable `LUNET_TRACE`. 
 Inspect `stderr` for `[UDP_TRACE]` and `[TRACE]` prefixes.
 
 A balanced run should show:

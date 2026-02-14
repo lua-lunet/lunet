@@ -3,6 +3,7 @@
 -- minimal work so LeakSanitizer can validate shutdown behavior.
 
 local lunet = require("lunet")
+local ITERATIONS = tonumber(os.getenv("LSAN_STRESS_ITERATIONS")) or 5
 
 local failures = 0
 
@@ -22,19 +23,23 @@ local function sqlite_probe()
         return
     end
 
-    local conn, err = db.open({ path = ":memory:" })
-    if not conn then
-        fail("sqlite open failed: " .. tostring(err))
-        return
-    end
+    for i = 1, ITERATIONS do
+        local conn, err = db.open({ path = ":memory:" })
+        if not conn then
+            fail("sqlite open failed (iter " .. i .. "): " .. tostring(err))
+            return
+        end
 
-    local _, exec_err = db.exec(conn, "CREATE TABLE lsan_probe (id INTEGER PRIMARY KEY)")
-    if exec_err then
-        fail("sqlite exec failed: " .. tostring(exec_err))
-    end
+        local _, exec_err = db.exec(conn, "CREATE TABLE lsan_probe (id INTEGER PRIMARY KEY)")
+        if exec_err then
+            fail("sqlite exec failed (iter " .. i .. "): " .. tostring(exec_err))
+            db.close(conn)
+            return
+        end
 
-    db.close(conn)
-    info("sqlite probe completed")
+        db.close(conn)
+    end
+    info("sqlite probe completed (" .. ITERATIONS .. " iterations)")
 end
 
 local function mysql_optional_probe()
@@ -44,22 +49,21 @@ local function mysql_optional_probe()
         return
     end
 
-    -- Even when the server is unavailable, this exercises async connect setup.
-    local conn, err = db.open({
-        host = "127.0.0.1",
-        port = 3306,
-        user = "root",
-        password = "root",
-        database = "test"
-    })
-
-    if conn then
-        db.close(conn)
-        info("mysql probe connected and closed")
-        return
+    -- Even when the server is unavailable, repeated open attempts still exercise
+    -- driver init/teardown paths and catch leak-growth regressions.
+    for _ = 1, ITERATIONS do
+        local conn = db.open({
+            host = "127.0.0.1",
+            port = 3306,
+            user = "root",
+            password = "root",
+            database = "test"
+        })
+        if conn then
+            db.close(conn)
+        end
     end
-
-    info("mysql probe server unavailable: " .. tostring(err))
+    info("mysql probe completed (" .. ITERATIONS .. " iterations)")
 end
 
 lunet.spawn(function()

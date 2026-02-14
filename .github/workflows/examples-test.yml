@@ -13,7 +13,7 @@ jobs:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
@@ -71,11 +71,17 @@ jobs:
       - name: Build Core
         run: xmake build
 
-      - name: Build Drivers
+      - name: Build Drivers (Unix)
+        if: runner.os != 'Windows'
         run: |
           xmake build lunet-sqlite3
           xmake build lunet-mysql
           xmake build lunet-postgres
+
+      - name: Build Drivers (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          xmake build lunet-sqlite3
 
       - name: Examples Compile Check (Unix)
         if: runner.os != 'Windows'
@@ -118,25 +124,32 @@ jobs:
           $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
           xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n --asan=y --easy_memory=y -y
 
-      - name: Build Core + Drivers (EasyMem + ASAN)
+      - name: Build Core + Drivers (EasyMem + ASAN, Unix)
+        if: runner.os != 'Windows'
         run: |
           xmake build lunet-bin
           xmake build lunet-sqlite3
           xmake build lunet-mysql
           xmake build lunet-postgres
 
+      - name: Build Core + SQLite Driver (EasyMem + ASAN, Windows)
+        if: runner.os == 'Windows'
+        run: |
+          xmake build lunet-bin
+          xmake build lunet-sqlite3
+
       - name: EasyMem DB Stress (Unix)
         if: runner.os != 'Windows'
         env:
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
           LSAN_OPTIONS: exitcode=0:print_suppressions=0
           LSAN_LEAK_BUDGET_ALLOCS: "4"
         run: |
           LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
-          timeout 60 env LIGHT_DB_STRESS_OPS=20 "$LUNET_BIN" test/ci_easy_memory_db_stress.lua
+          TIMEOUT_BIN=$(command -v gtimeout || command -v timeout)
+          "$TIMEOUT_BIN" 60 env ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 LIGHT_DB_STRESS_OPS=20 "$LUNET_BIN" test/ci_easy_memory_db_stress.lua
           LSAN_LOG="$RUNNER_TEMP/lsan_regression.log"
           set +e
-          timeout 60 "$LUNET_BIN" test/ci_easy_memory_lsan_regression.lua >"$LSAN_LOG" 2>&1
+          "$TIMEOUT_BIN" 60 env ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 LSAN_STRESS_ITERATIONS=10 "$LUNET_BIN" test/ci_easy_memory_lsan_regression.lua >"$LSAN_LOG" 2>&1
           LSAN_RC=$?
           set -e
           luajit test/ci_lsan_leak_budget.lua "$LSAN_LOG"

@@ -17,6 +17,7 @@ We do **not** blanket-disable LeakSanitizer.
 
 Instead, we:
 - run the LSAN regression with `LSAN_OPTIONS=exitcode=0` so the process output is available even if LSAN reports leaks
+- run repeated lifecycle probes (`LSAN_STRESS_ITERATIONS`, default `5`, CI uses `10`) so leak growth under normal driver usage is visible
 - parse the log and enforce a strict budget via `test/ci_lsan_leak_budget.lua`
 
 Default policy:

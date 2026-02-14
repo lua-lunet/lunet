@@ -64,8 +64,98 @@ luajit -e 'local lunet=require("lunet"); print(type(lunet))'
 | **Debug + trace** | Development, catches bugs | `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n -y` |
 | **Verbose trace** | Detailed debugging, logs every event | `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=y -y` |
 | **ASan** | Memory bugs (use-after-free, leaks) | `xmake f -c -m debug --lunet_trace=y --asan=y -y` |
+| **EasyMem release** | Production with arena allocator | `xmake f -c -m release --easy_memory=y -y` |
+| **EasyMem debug** | Full diagnostics + arena profiling | `xmake f -c -m debug --lunet_trace=y --easy_memory=y -y` |
+| **ASan + EasyMem** | Maximum coverage (auto-enabled) | `xmake f -c -m debug --lunet_trace=y --asan=y -y` |
 
 **Tip:** Use `-c` to force a clean reconfigure when switching profiles.
+
+---
+
+## EasyMem/easy_memory (Experimental Arena Allocator)
+
+Lunet optionally integrates [EasyMem/easy_memory](https://github.com/EasyMem/easy_memory) for richer memory diagnostics, arena-scoped allocation, and cross-platform safety checks that go beyond what ASan alone provides.
+
+### Opting In
+
+Pass `--easy_memory=y` to `xmake f`:
+
+```bash
+# Release build with easy_memory
+xmake f -c -m release --easy_memory=y -y
+xmake build
+
+# Debug build with full diagnostics
+xmake f -c -m debug --lunet_trace=y --easy_memory=y -y
+xmake build
+```
+
+Or use the Makefile shortcuts:
+
+```bash
+make build-easy-memory        # Release with easy_memory
+make build-debug-easy-memory  # Debug + trace + easy_memory (full diagnostics)
+```
+
+### What Gets Enabled
+
+When `--easy_memory=y` is set:
+
+| Build mode | Defines | Behavior |
+|------------|---------|----------|
+| **Release** (`-m release`) | `LUNET_EASY_MEMORY`, `EM_SAFETY_POLICY=1` | Defensive mode. Graceful `NULL` on misuse. Arena available. |
+| **Debug + trace** | `LUNET_EASY_MEMORY`, `EM_ASSERT_STAYS`, `EM_POISONING`, `EM_SAFETY_POLICY=0` | Contract mode. Assertions always on. Freed memory poisoned. Crashes on misuse. |
+| **ASan** (`--asan=y`) | Same as debug + trace | EasyMem is **auto-enabled** when ASan is active. No need to pass `--easy_memory=y` separately. |
+
+### Profiling Output
+
+At shutdown, the EasyMem integration prints a profiling summary to stderr:
+
+```
+========================================
+       EASY_MEMORY PROFILING SUMMARY
+========================================
+Allocations:
+  Total allocs:   0
+  Total frees:    0
+  ...
+Worker Arenas:
+  Created:        0
+  Destroyed:      0
+Arena Config:
+  Arena size:     16777216 bytes
+  Poisoning:      ENABLED
+  Assertions:     ALWAYS ON (EM_ASSERT_STAYS)
+========================================
+```
+
+### Worker Arenas for DB Drivers
+
+The integration provides scoped nested arenas for database driver thread-pool callbacks:
+
+```c
+#include "lunet_easy_memory.h"
+
+void db_query_work(uv_work_t *req) {
+    EM *arena = lunet_em_worker_arena_begin(64 * 1024);  // 64KB
+    // ... allocate temp buffers from arena ...
+    lunet_em_worker_arena_end(arena);  // O(1) cleanup
+}
+```
+
+This is particularly useful for SQLite3/MySQL/PostgreSQL drivers where query execution allocates temporary buffers that should be freed in bulk when the work function returns.
+
+### Disabling
+
+To build without easy_memory (the default):
+
+```bash
+xmake f -c --easy_memory=n -y
+```
+
+Or simply omit the flag — easy_memory is opt-in except when ASan is active.
+
+For full details, see [EASY_MEMORY_REPORT.md](EASY_MEMORY_REPORT.md).
 
 ---
 
@@ -76,9 +166,10 @@ If your app uses Lunet and you run CI (e.g. GitHub Actions), test with these pro
 1. **Release** — `--lunet_trace=n --lunet_verbose_trace=n`
 2. **Debug trace** — `--lunet_trace=y --lunet_verbose_trace=n`
 3. **Verbose trace** — `--lunet_trace=y --lunet_verbose_trace=y`
-4. **ASan** — `--asan=y --lunet_trace=y`
+4. **ASan** — `--asan=y --lunet_trace=y` (auto-enables easy_memory)
+5. **EasyMem debug** — `--lunet_trace=y --easy_memory=y` (arena diagnostics without ASan overhead)
 
-This catches most lifecycle and coroutine issues early.
+This catches most lifecycle, coroutine, and memory issues early.
 
 ---
 

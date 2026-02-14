@@ -1,5 +1,7 @@
 # Lunet
 
+[![EasyMem](https://img.shields.io/badge/Memory%20Diagnostics-EasyMem%2Feasy__memory-blueviolet?logo=c&logoColor=white)](https://github.com/EasyMem/easy_memory)
+
 A high-performance coroutine-based networking library for LuaJIT, built on top of libuv.
 
 [中文文档](README-CN.md)
@@ -351,6 +353,44 @@ If a crash happens inside `lua_rawgeti` from a libuv callback, it often means th
 ### Memory Tracing
 
 When `LUNET_TRACE` is enabled, all allocations through `lunet_alloc()` / `lunet_free()` are tracked with canary headers and poison-on-free. At shutdown, `lunet_mem_assert_balanced()` checks for leaks. Use `lunet_alloc` / `lunet_free` instead of raw `malloc` / `free` in all lunet C code.
+
+## EasyMem/easy_memory Integration (Experimental)
+
+Lunet optionally integrates [EasyMem/easy_memory](https://github.com/EasyMem/easy_memory) -- a header-only, platform-agnostic memory management system with arena allocation, XOR-magic integrity checks, memory poisoning, and profiling. This provides richer diagnostics than the built-in canary allocator and compiler-level ASan, particularly on platforms where ASan is unavailable (e.g., Windows, bare-metal).
+
+### Quick Start
+
+```bash
+# Release build with easy_memory arena allocator
+make build-easy-memory
+
+# Debug build with full diagnostics (EM_ASSERT_STAYS + EM_POISONING)
+make build-debug-easy-memory
+
+# Or via xmake directly
+xmake f -m debug --lunet_trace=y --easy_memory=y -y
+xmake build lunet-bin
+```
+
+When `--asan=y` is set, easy_memory is **automatically enabled** with full profiling and integrity checks, giving you both compiler-level sanitization and application-level arena diagnostics simultaneously.
+
+### What You Get
+
+| Feature | Built-in (`lunet_mem`) | ASan | EasyMem |
+|---------|----------------------|------|---------|
+| Canary headers | Yes (4 bytes) | No | Yes (XOR-magic, address-dependent) |
+| Poison-on-free | Yes (`0xDE`) | Yes | Yes (configurable `EM_POISON_BYTE`) |
+| Double-free detection | Yes | Yes | Yes |
+| Buffer overflow detection | No | Yes | Yes (block validation) |
+| Arena/scoped allocation | No | No | Yes (`em_create_nested`) |
+| Worker thread arenas | No | No | Yes (`lunet_em_worker_arena_begin/end`) |
+| Profiling summary | Basic | No | Detailed (allocs, frees, peak, arenas) |
+| Cross-platform | Yes | Linux/macOS | Yes (all platforms, bare-metal) |
+| Zero-cost release | Yes | N/A | Yes (compile out with `--easy_memory=n`) |
+
+See [docs/EASY_MEMORY_REPORT.md](docs/EASY_MEMORY_REPORT.md) for profiling results and advanced usage strategies.
+
+See [docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md) for detailed build configuration.
 
 ## Testing
 

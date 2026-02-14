@@ -40,6 +40,101 @@ option("luajit_debian_version")
     set_description("Debian source package version (for luajit_*.dsc and *.debian.tar.xz)")
 option_end()
 
+-- Address Sanitizer option for debugging memory bugs
+option("asan")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Enable Address Sanitizer (-fsanitize=address). On Windows this option is skipped.")
+    add_deps("lunet_trace")
+option_end()
+
+-- EasyMem/easy_memory optional integration
+option("easy_memory")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Enable EasyMem allocator backend (optional add-in)")
+option_end()
+
+option("easy_memory_experimental")
+    set_default(false)
+    set_showmenu(true)
+    set_description("EXPERIMENTAL: Enable EasyMem in release builds with full diagnostics")
+option_end()
+
+option("easy_memory_arena_mb")
+    set_default("128")
+    set_showmenu(true)
+    set_description("EasyMem arena size in MB (default: 128)")
+option_end()
+
+package("easy_memory")
+    set_kind("library", {headeronly = true})
+    set_homepage("https://github.com/EasyMem/easy_memory")
+    set_description("Header-only memory management system for C")
+    set_license("MIT")
+    add_urls("https://github.com/EasyMem/easy_memory.git")
+    add_versions("2026.02.14", "a3605f1bf759961b3f03fb00ffc1bfa18476929f")
+    on_install(function (package)
+        os.cp("easy_memory.h", package:installdir("include"))
+    end)
+    on_test(function (package)
+        assert(package:check_csnippets({test = [[
+            #define EASY_MEMORY_IMPLEMENTATION
+            #define EM_STATIC
+            #include <easy_memory.h>
+            void test(void) {
+                EM *em = em_create(4096);
+                if (em) em_destroy(em);
+            }
+        ]]}, {configs = {languages = "c99"}}))
+    end)
+package_end()
+
+local function lunet_easy_memory_enabled()
+    return has_config("easy_memory")
+        or has_config("easy_memory_experimental")
+        or has_config("lunet_trace")
+        or has_config("asan")
+end
+
+local function lunet_easy_memory_diagnostics_enabled()
+    return has_config("lunet_trace")
+        or has_config("asan")
+        or has_config("easy_memory_experimental")
+end
+
+local function lunet_easy_memory_arena_bytes()
+    local arena_mb = tonumber(get_config("easy_memory_arena_mb") or "128") or 128
+    if arena_mb < 8 then
+        arena_mb = 8
+    end
+    return math.floor(arena_mb * 1024 * 1024)
+end
+
+local function lunet_apply_asan_flags()
+    if not has_config("asan") then
+        return
+    end
+    if is_plat("windows") then
+        cprint("${yellow}[lunet] --asan is currently skipped on Windows.${clear}")
+        return
+    end
+    add_cflags("-fsanitize=address", "-fno-omit-frame-pointer", {force = true})
+    add_ldflags("-fsanitize=address", {force = true})
+end
+
+local function lunet_apply_easy_memory()
+    if not lunet_easy_memory_enabled() then
+        return
+    end
+    add_packages("easy_memory")
+    add_defines("LUNET_EASY_MEMORY")
+    add_defines(string.format("LUNET_EASY_MEMORY_ARENA_BYTES=%dULL", lunet_easy_memory_arena_bytes()))
+    if lunet_easy_memory_diagnostics_enabled() then
+        add_defines("LUNET_EASY_MEMORY_DIAGNOSTICS")
+    end
+end
+
 -- Common source files for core lunet
 local core_sources = {
     "src/main.c",
@@ -66,6 +161,10 @@ if is_plat("windows") then
 else
     add_requires("pkgconfig::luajit", {alias = "luajit"})
     add_requires("pkgconfig::libuv", {alias = "libuv"})
+end
+
+if lunet_easy_memory_enabled() then
+    add_requires("easy_memory 2026.02.14")
 end
 
 -- Database driver dependencies (optional)
@@ -98,6 +197,8 @@ target("lunet")
     add_files(core_sources)
     add_includedirs("include", {public = true})
     add_packages("luajit", "libuv")
+    lunet_apply_asan_flags()
+    lunet_apply_easy_memory()
 
     -- Build as a Lua C module (no CLI entrypoint)
     add_defines("LUNET_NO_MAIN")
@@ -135,13 +236,6 @@ target("lunet")
     end
 target_end()
 
--- Address Sanitizer option for debugging memory bugs
-option("asan")
-    set_default(false)
-    set_showmenu(true)
-    set_description("Enable Address Sanitizer (-fsanitize=address)")
-option_end()
-
 -- Standalone executable target for ./lunet-run script.lua
 target("lunet-bin")
     set_kind("binary")
@@ -150,12 +244,8 @@ target("lunet-bin")
     add_files(core_sources)
     add_includedirs("include", {public = true})
     add_packages("luajit", "libuv")
-    
-    -- Address Sanitizer support
-    if has_config("asan") then
-        add_cflags("-fsanitize=address", "-fno-omit-frame-pointer", {force = true})
-        add_ldflags("-fsanitize=address", {force = true})
-    end
+    lunet_apply_asan_flags()
+    lunet_apply_easy_memory()
     
     -- Linux: system libs
     if is_plat("linux") then
@@ -193,7 +283,7 @@ target("lunet-sqlite3")
     set_kind("shared")
     set_prefixname("")
     set_basename("sqlite3")  -- Output: lunet/sqlite3.so
-    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
+    set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
     else
@@ -204,6 +294,8 @@ target("lunet-sqlite3")
     add_files("ext/sqlite3/sqlite3.c")
     add_includedirs("include", "ext/sqlite3", {public = true})
     add_packages("luajit", "libuv", "sqlite3")
+    lunet_apply_asan_flags()
+    lunet_apply_easy_memory()
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_SQLITE3")
     
     if is_plat("macosx") then
@@ -234,7 +326,7 @@ target("lunet-mysql")
     set_kind("shared")
     set_prefixname("")
     set_basename("mysql")  -- Output: lunet/mysql.so
-    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
+    set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
     else
@@ -245,6 +337,8 @@ target("lunet-mysql")
     add_files("ext/mysql/mysql.c")
     add_includedirs("include", "ext/mysql", {public = true})
     add_packages("luajit", "libuv", "mysql")
+    lunet_apply_asan_flags()
+    lunet_apply_easy_memory()
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_MYSQL")
     
     if is_plat("macosx") then
@@ -275,7 +369,7 @@ target("lunet-postgres")
     set_kind("shared")
     set_prefixname("")
     set_basename("postgres")  -- Output: lunet/postgres.so
-    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
+    set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
     else
@@ -286,6 +380,8 @@ target("lunet-postgres")
     add_files("ext/postgres/postgres.c")
     add_includedirs("include", "ext/postgres", {public = true})
     add_packages("luajit", "libuv", "pq")
+    lunet_apply_asan_flags()
+    lunet_apply_easy_memory()
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_POSTGRES")
 
     if is_plat("macosx") then
@@ -320,7 +416,7 @@ target("lunet-paxe")
     set_kind("shared")
     set_prefixname("")
     set_basename("paxe")  -- Output: lunet/paxe.so
-    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
+    set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
     else
@@ -334,6 +430,8 @@ target("lunet-paxe")
     -- CRITICAL: Fail fast if libsodium is not available
     add_packages("luajit", "libuv", {public = true})
     add_packages("sodium")  -- Will fail at config time if not found (no optional = true)
+    lunet_apply_asan_flags()
+    lunet_apply_easy_memory()
 
     add_defines("LUNET_NO_MAIN", "LUNET_PAXE")
 

@@ -1,4 +1,4 @@
-.PHONY: all build init test clean help
+.PHONY: all build build-easy-memory-experimental init test clean help
 .PHONY: lint build-debug stress release rock rocks-validate certs smoke socket-gc luajit-asan build-debug-asan-luajit repro-50-asan-luajit
 
 all: build ## Build the project (default)
@@ -29,6 +29,15 @@ build-debug: lint ## Build with LUNET_TRACE=ON for debugging (enables safety ass
 	@echo "Build complete:"
 	@echo "  Module: $$(find build -path '*/debug/lunet.so' -type f 2>/dev/null | head -1)"
 	@echo "  Binary: $$(find build -path '*/debug/lunet-run' -type f 2>/dev/null | head -1)"
+
+build-easy-memory-experimental: lint ## Build release with EasyMem experimental diagnostics
+	@echo "=== Building lunet with EasyMem experimental release profile ==="
+	xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=$${EASY_MEMORY_ARENA_MB:-128} -y
+	xmake build
+	@echo ""
+	@echo "Build complete:"
+	@echo "  Module: $$(find build -path '*/release/lunet.so' -type f 2>/dev/null | head -1)"
+	@echo "  Binary: $$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1)"
 
 # =============================================================================
 # Quality Assurance

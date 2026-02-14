@@ -213,8 +213,10 @@ LUNET_API int luaopen_lunet(lua_State *L) {
 }
 
 static void lunet_trace_shutdown(void) {
-#ifdef LUNET_TRACE
+#if defined(LUNET_TRACE) || defined(LUNET_EASY_MEMORY)
     lunet_mem_summary();
+#endif
+#ifdef LUNET_TRACE
     lunet_socket_trace_summary();
     lunet_udp_trace_summary();
     lunet_timer_trace_summary();
@@ -222,6 +224,8 @@ static void lunet_trace_shutdown(void) {
     lunet_fs_trace_summary();
     lunet_trace_dump();
     lunet_trace_assert_balanced("shutdown");
+#endif
+#if defined(LUNET_TRACE) || defined(LUNET_EASY_MEMORY)
     lunet_mem_assert_balanced("shutdown");
 #endif
 }

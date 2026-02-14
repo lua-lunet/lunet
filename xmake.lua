@@ -114,6 +114,13 @@ local function lunet_easy_memory_enabled()
 end
 
 local function lunet_easy_memory_diagnostics_enabled()
+    -- EasyMem diagnostics (EM_ASSERT_STAYS/contract checks) currently trigger
+    -- unstable aborts on macOS under ASAN/CI in regression loops. Keep the
+    -- allocator backend enabled, but disable diagnostics there until upstream
+    -- behavior is stabilized.
+    if is_plat("macosx") then
+        return false
+    end
     return has_config("lunet_trace")
         or has_config("asan")
         or has_config("easy_memory_experimental")

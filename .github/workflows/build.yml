@@ -96,6 +96,34 @@ jobs:
       run: |
         xmake build
 
+    - name: Examples compile check (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
+        "$LUNET_BIN" test/ci_examples_compile.lua
+
+    - name: Examples compile check (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
+        if (-not $lunet) { throw "lunet-run.exe not found" }
+        & $lunet.FullName test/ci_examples_compile.lua
+
+    - name: SQLite3 example smoke (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
+        "$LUNET_BIN" examples/03_db_sqlite3.lua
+
+    - name: SQLite3 example smoke (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
+        if (-not $lunet) { throw "lunet-run.exe not found" }
+        & $lunet.FullName examples/03_db_sqlite3.lua
+
     - name: Package release archive (Linux)
       if: runner.os == 'Linux'
       run: |

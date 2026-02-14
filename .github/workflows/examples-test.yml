@@ -127,11 +127,9 @@ jobs:
 
       - name: EasyMem DB Stress (Unix)
         if: runner.os != 'Windows'
-        env:
-          ASAN_OPTIONS: detect_leaks=0
         run: |
           LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
-          timeout 60 env LIGHT_DB_STRESS_OPS=20 "$LUNET_BIN" test/ci_easy_memory_db_stress.lua
+          timeout 60 env ASAN_OPTIONS=detect_leaks=0 LIGHT_DB_STRESS_OPS=20 "$LUNET_BIN" test/ci_easy_memory_db_stress.lua
           timeout 60 "$LUNET_BIN" test/ci_easy_memory_lsan_regression.lua
 
       - name: EasyMem DB Stress (Windows)

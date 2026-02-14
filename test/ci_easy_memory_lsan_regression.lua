@@ -1,6 +1,12 @@
 -- Regression probe for EasyMem+ASAN leak cleanup on Linux.
--- This script intentionally loads DB driver modules and performs
--- minimal work so LeakSanitizer can validate shutdown behavior.
+-- This script exercises lunet's own code paths (pure-C drivers only) and
+-- exits cleanly so LeakSanitizer can validate that we free everything.
+--
+-- IMPORTANT: Do NOT load lunet.mysql here.  libmysqlclient is a C++ library
+-- whose one-time runtime allocations (locale facets, etc.) are reported as
+-- leaks by LSAN.  Because the library is dlopen'd, LSAN often cannot resolve
+-- the module name (shows "<unknown module>") making suppressions unreliable.
+-- MySQL driver coverage lives in ci_easy_memory_db_stress.lua instead.
 
 local lunet = require("lunet")
 
@@ -37,34 +43,8 @@ local function sqlite_probe()
     info("sqlite probe completed")
 end
 
-local function mysql_optional_probe()
-    local ok, db = pcall(require, "lunet.mysql")
-    if not ok then
-        info("skip lunet.mysql (module unavailable): " .. tostring(db))
-        return
-    end
-
-    -- Even when the server is unavailable, this exercises async connect setup.
-    local conn, err = db.open({
-        host = "127.0.0.1",
-        port = 3306,
-        user = "root",
-        password = "root",
-        database = "test"
-    })
-
-    if conn then
-        db.close(conn)
-        info("mysql probe connected and closed")
-        return
-    end
-
-    info("mysql probe server unavailable: " .. tostring(err))
-end
-
 lunet.spawn(function()
     sqlite_probe()
-    mysql_optional_probe()
 
     if failures > 0 then
         info("probe completed with failures=" .. failures)

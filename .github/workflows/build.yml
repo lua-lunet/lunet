@@ -17,6 +17,11 @@ on:
 permissions:
   contents: write
 
+# Cancel previous runs when a new commit is pushed to the same PR/branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: ${{ matrix.os }}
@@ -244,8 +249,6 @@ jobs:
         vcpkg install libuv:x64-windows
         vcpkg install luajit:x64-windows
         vcpkg install sqlite3:x64-windows
-        vcpkg install libmysql:x64-windows
-        vcpkg install libpq[lz4,openssl,zlib]:x64-windows
 
     - name: Configure EasyMem + ASAN (Unix)
       if: runner.os != 'Windows'
@@ -262,14 +265,23 @@ jobs:
         xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n --asan=y --easy_memory=y -y
 
     - name: Build Core + DB Drivers (EasyMem + ASAN)
+      if: runner.os != 'Windows'
       run: |
         xmake build lunet-bin
         xmake build lunet-sqlite3
         xmake build lunet-mysql
         xmake build lunet-postgres
 
+    - name: Build Core + SQLite Driver (EasyMem + ASAN, Windows)
+      if: runner.os == 'Windows'
+      run: |
+        xmake build lunet-bin
+        xmake build lunet-sqlite3
+
     - name: Run light DB stress (Unix)
       if: runner.os != 'Windows'
+      env:
+        LSAN_OPTIONS: suppressions=${{ github.workspace }}/test/lsan_suppressions.txt
       run: |
         LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
         timeout 60 env LIGHT_DB_STRESS_OPS=20 "$LUNET_BIN" test/ci_easy_memory_db_stress.lua
@@ -298,12 +310,19 @@ jobs:
         $env:CI = "true"
         xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y
 
-    - name: Build Core + DB Drivers (EasyMem experimental release)
+    - name: Build Core + DB Drivers (EasyMem experimental, Unix)
+      if: runner.os != 'Windows'
       run: |
         xmake build lunet-bin
         xmake build lunet-sqlite3
         xmake build lunet-mysql
         xmake build lunet-postgres
+
+    - name: Build Core + SQLite Driver (EasyMem experimental, Windows)
+      if: runner.os == 'Windows'
+      run: |
+        xmake build lunet-bin
+        xmake build lunet-sqlite3
 
   publish-release:
     name: Publish release

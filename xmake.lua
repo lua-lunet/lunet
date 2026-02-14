@@ -240,12 +240,10 @@ target("lunet")
     -- Build as a Lua C module (no CLI entrypoint)
     add_defines("LUNET_NO_MAIN")
 
-    -- macOS: build as a bundle with undefined symbols allowed (for Lua host)
+    -- macOS shared modules: allow unresolved Lua symbols at link time
     if is_plat("macosx") then
-        -- NOTE: for `set_kind("shared")`, xmake uses shared-linker flags.
-        -- These must be in `shflags` or they may not reach the linker.
-        add_shflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
-        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+        add_shflags("-undefined", "dynamic_lookup", {force = true})
+        add_ldflags("-undefined", "dynamic_lookup", {force = true})
     end
     
     -- Linux: system libs
@@ -341,8 +339,8 @@ target("lunet-sqlite3")
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_SQLITE3")
     
     if is_plat("macosx") then
-        add_shflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
-        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+        add_shflags("-undefined", "dynamic_lookup", {force = true})
+        add_ldflags("-undefined", "dynamic_lookup", {force = true})
     end
     if is_plat("linux") then
         add_defines("_GNU_SOURCE")
@@ -386,8 +384,8 @@ target("lunet-mysql")
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_MYSQL")
     
     if is_plat("macosx") then
-        add_shflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
-        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+        add_shflags("-undefined", "dynamic_lookup", {force = true})
+        add_ldflags("-undefined", "dynamic_lookup", {force = true})
     end
     if is_plat("linux") then
         add_defines("_GNU_SOURCE")
@@ -431,8 +429,8 @@ target("lunet-postgres")
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_POSTGRES")
 
     if is_plat("macosx") then
-        add_shflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
-        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+        add_shflags("-undefined", "dynamic_lookup", {force = true})
+        add_ldflags("-undefined", "dynamic_lookup", {force = true})
     end
     if is_plat("linux") then
         add_defines("_GNU_SOURCE")
@@ -484,8 +482,8 @@ target("lunet-paxe")
     add_defines("LUNET_NO_MAIN", "LUNET_PAXE")
 
     if is_plat("macosx") then
-        add_shflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
-        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+        add_shflags("-undefined", "dynamic_lookup", {force = true})
+        add_ldflags("-undefined", "dynamic_lookup", {force = true})
     end
     if is_plat("linux") then
         add_defines("_GNU_SOURCE")

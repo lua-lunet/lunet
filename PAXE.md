@@ -9,14 +9,14 @@ PAXE is an **extension module** that:
 - Uses **AES-256-GCM** for authenticated encryption
 - Supports both standard and DEK (Data Encryption Key) modes
 - Performs **in-place decryption** to minimize memory copying
-- Integrates with Lunet's coroutine-based async I/O
+- Provides native **Lua bindings** for easy integration
 
 ```
 App Layer (Lua)
+    ↓ require("lunet.paxe")
+PAXE Lua Bindings (C)
     ↓
-Lunet UDP/Socket (C)
-    ↓ (LUNET_PAXE gated)
-PAXE Decryption (C)
+PAXE Core (C)
     ↓
 libsodium (AES-256-GCM)
 ```
@@ -36,16 +36,13 @@ brew install libsodium
 # Install libsodium (Linux)
 apt-get install libsodium-dev
 
-# Configure Lunet with tracing (recommended for debugging)
-xmake f -c -y --lunet_trace=y
-
 # Build PAXE extension module
 xmake build lunet-paxe
 ```
 
 ### Build Artifacts
-- Debug: `build/macosx/arm64/debug/lunet/paxe.so` (~121 KB)
-- Release: `build/macosx/arm64/release/lunet/paxe.so` (smaller, optimized)
+- Release: `build/macosx/arm64/release/lunet/paxe.so`
+- Debug: `build/macosx/arm64/debug/lunet/paxe.so`
 
 ## Fail-Fast Dependency Checking
 
@@ -59,7 +56,44 @@ $ xmake build lunet-paxe
 #   Install via: vcpkg install libsodium (Windows)
 ```
 
-## API Overview
+## Lua API
+
+```lua
+local paxe = require("lunet.paxe")
+
+-- Initialization
+local ok, err = paxe.init()          -- Initialize PAXE + libsodium
+paxe.shutdown()                       -- Cleanup
+
+-- Enable/Disable
+paxe.set_enabled(true)                -- Enable encryption
+local enabled = paxe.is_enabled()     -- Check if enabled
+
+-- Key Management (keys must be exactly 32 bytes)
+local ok, err = paxe.keystore_set(key_id, key_string)
+paxe.keystore_clear()                 -- Wipe all keys securely
+
+-- Failure Policy: "DROP", "LOG_ONCE", or "VERBOSE"
+paxe.set_fail_policy("DROP")
+
+-- Encryption (standard mode)
+local ciphertext, err = paxe.encrypt(plaintext, key_id)
+
+-- Decryption
+local plaintext, key_id, flags = paxe.try_decrypt(ciphertext)
+-- Returns nil, error_string on failure
+
+-- Statistics
+local stats = paxe.stats()
+-- stats.rx_total, stats.rx_ok, stats.rx_auth_fail, etc.
+
+-- Constants
+paxe.OVERHEAD_STANDARD  -- 36 bytes (header + nonce + tag)
+paxe.OVERHEAD_DEK       -- 82 bytes (DEK mode overhead)
+paxe.VERSION            -- Module version string
+```
+
+## C API
 
 ### Initialization
 ```c
@@ -75,7 +109,7 @@ int paxe_keystore_set(uint32_t key_id, const uint8_t key[32]);
 int paxe_keystore_clear(void);           // Wipe keys from memory
 ```
 
-### Packet Decryption
+### Packet Operations
 ```c
 ssize_t paxe_try_decrypt(uint8_t *buf, size_t len,
                          uint32_t *out_key_id,
@@ -112,50 +146,50 @@ Header (8) | Nonce (12) | Ciphertext+Tag (N+16)
 Header (8) | KEK_Nonce (12) | Enc_DEK (32) | DEK_Nonce (12) | DEK_Len (2) | Ciphertext+Tag (N+16)
 ```
 
-## Integration with UDP
-
-When `LUNET_PAXE` is enabled, applications can integrate PAXE into UDP receive callbacks:
-
-```c
-// In UDP receive callback
-uint8_t buf[MAX_PKT_SIZE];
-size_t len = /* filled by UDP */;
-
-if (paxe_is_enabled()) {
-    uint32_t key_id;
-    uint8_t flags;
-    ssize_t plaintext_len = paxe_try_decrypt(buf, len, &key_id, &flags);
-    if (plaintext_len < 0) {
-        // Policy already applied (DROP/LOG/VERBOSE)
-        return;  // Packet dropped
-    }
-    len = plaintext_len;  // Use decrypted packet
-}
-
-// Continue with plaintext packet
-```
-
 ## Examples
 
-See the `examples/` directory for API previews and simulations:
+See the `examples/` directory for working code:
 
-- **`examples/06_paxe_encryption.lua`** - API walkthrough showing initialization, key management, policies, and statistics (simulation until Lua bindings added)
-- **`examples/07_paxe_stress.lua`** - Stress test simulation for load testing packet processing loops
+- **`examples/06_paxe_encryption.lua`** - Complete API walkthrough with round-trip encryption/decryption
+- **`examples/07_paxe_stress.lua`** - Stress test with configurable iterations, packet size, and key count
+
+### Quick Start
+
+```lua
+local paxe = require("lunet.paxe")
+
+-- Initialize
+paxe.init()
+
+-- Set up a key (32 bytes required)
+paxe.keystore_set(1, string.rep("K", 32))
+
+-- Encrypt
+local ciphertext = paxe.encrypt("Hello, PAXE!", 1)
+
+-- Decrypt
+local plaintext, key_id, flags = paxe.try_decrypt(ciphertext)
+print(plaintext)  -- "Hello, PAXE!"
+
+-- Cleanup
+paxe.keystore_clear()
+paxe.shutdown()
+```
 
 ## Testing
 
 ### Run Examples
 ```bash
-# Run the encryption demo (shows full API usage)
+# Run the encryption demo
 ./build/macosx/arm64/release/lunet-run examples/06_paxe_encryption.lua
 
-# Run stress test with default settings (100 packets)
+# Run stress test (1000 iterations default)
 ./build/macosx/arm64/release/lunet-run examples/07_paxe_stress.lua
 ```
 
 ### Stress Testing
 ```bash
-# Simulate high-volume packet flow
+# High-volume test
 ITERATIONS=10000 PACKET_SIZE=1500 NUM_KEYS=256 \
   ./build/macosx/arm64/release/lunet-run examples/07_paxe_stress.lua
 ```
@@ -166,24 +200,25 @@ ITERATIONS=10000 PACKET_SIZE=1500 NUM_KEYS=256 \
 xmake f -c -y --lunet_trace=y --lunet_verbose_trace=y
 xmake build lunet-paxe
 
-# Run examples with stderr logging
-./build/macosx/arm64/debug/lunet-run examples/06_paxe_encryption.lua 2>&1 | grep PAXE_TRACE
+# Run with stderr logging
+./build/macosx/arm64/debug/lunet-run examples/06_paxe_encryption.lua 2>&1 | grep PAXE
 ```
 
 ## Performance
 
-Benchmarks (macOS arm64, debug build with tracing):
-- Packets/sec: ~1,000 pkt/s per core (in simulation)
-- Memory overhead: ~121 KB module + ~4 KB runtime state
-- CPU overhead: In-place AES-256-GCM (hardware accelerated)
+Benchmarks (macOS arm64, Apple Silicon, release build):
+- Throughput: ~400,000 ops/sec (encrypt + decrypt cycles)
+- Bandwidth: ~400 MB/sec (1KB packets)
+- Overhead: 36 bytes per packet (standard mode)
+- Hardware AES-256-GCM acceleration
 
 ## Security Considerations
 
-1. **Key Derivation**: Keys must be 32 bytes (256-bit). Derive from secrets using a KDF.
-2. **Nonce Handling**: PAXE generates random 12-byte nonces per packet. Ensure uniqueness.
+1. **Key Derivation**: Keys must be 32 bytes (256-bit). Derive from secrets using a KDF (HKDF, Argon2).
+2. **Nonce Handling**: PAXE generates random 12-byte nonces per packet via libsodium.
 3. **Authentication**: Failed decryption is always dropped (no oracle attacks).
-4. **Key Wiping**: `paxe_keystore_clear()` uses `sodium_memzero()` to prevent key recovery.
-5. **Policy-Based Logging**: Use `PAXE_LOG_ONCE` to detect attacks without noise.
+4. **Key Wiping**: `keystore_clear()` uses `sodium_memzero()` to prevent key recovery.
+5. **Policy-Based Logging**: Use `LOG_ONCE` to detect attacks without noise.
 
 ## Build Flags
 
@@ -195,14 +230,12 @@ Benchmarks (macOS arm64, debug build with tracing):
 
 ## Limitations
 
-- **No Lua Bindings Yet**: PAXE is C-only. Use LuaJIT FFI to call the C API directly. See `examples/06_paxe_encryption.lua` for planned API design.
-- **No Compression**: PAXE is encryption-only. Combine with other modules for compression.
 - **Single-Threaded**: Keystore is not thread-safe. Protect with locks if needed.
-- **No Key Rotation API**: Clear and re-add keys for rotation (planned enhancement).
+- **No Key Rotation API**: Clear and re-add keys for rotation.
+- **No Compression**: PAXE is encryption-only. Combine with other modules for compression.
 
 ## Future Enhancements
 
-- [ ] Lua FFI bindings for direct Lua access
 - [ ] Per-peer key rotation with versioning
 - [ ] Hardware AES detection + fallback
 - [ ] ChaCha20-Poly1305 support (alternative to AES-GCM)

@@ -331,3 +331,256 @@ ssize_t paxe_try_decrypt(uint8_t *buf, size_t len, uint32_t *out_key_id, uint8_t
     PAXE_TRACE_DECRYPT_OK(key_id, plaintext_len);
     return (ssize_t)plaintext_len;
 }
+
+/* ============================================================================
+ * Lua Bindings
+ * ============================================================================ */
+
+#include "lunet_lua.h"
+
+/* paxe.init() -> boolean, string|nil */
+static int l_paxe_init(lua_State *L) {
+    int ret = paxe_init();
+    if (ret == 0) {
+        lua_pushboolean(L, 1);
+        return 1;
+    } else if (ret == -1) {
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, "sodium_init failed");
+        return 2;
+    } else {
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, "AES-256-GCM not available (no hardware support?)");
+        return 2;
+    }
+}
+
+/* paxe.shutdown() */
+static int l_paxe_shutdown(lua_State *L) {
+    (void)L;
+    paxe_shutdown();
+    return 0;
+}
+
+/* paxe.is_enabled() -> boolean */
+static int l_paxe_is_enabled(lua_State *L) {
+    lua_pushboolean(L, paxe_is_enabled());
+    return 1;
+}
+
+/* paxe.set_enabled(boolean) */
+static int l_paxe_set_enabled(lua_State *L) {
+    int enabled = lua_toboolean(L, 1);
+    paxe_set_enabled(enabled);
+    return 0;
+}
+
+/* paxe.keystore_set(key_id, key_string) -> boolean, string|nil */
+static int l_paxe_keystore_set(lua_State *L) {
+    lua_Integer key_id = luaL_checkinteger(L, 1);
+    size_t key_len;
+    const char *key = luaL_checklstring(L, 2, &key_len);
+
+    if (key_len != 32) {
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, "key must be exactly 32 bytes");
+        return 2;
+    }
+
+    int ret = paxe_keystore_set((uint32_t)key_id, (const uint8_t *)key);
+    if (ret == 0) {
+        lua_pushboolean(L, 1);
+        return 1;
+    } else {
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, "keystore full");
+        return 2;
+    }
+}
+
+/* paxe.keystore_clear() */
+static int l_paxe_keystore_clear(lua_State *L) {
+    (void)L;
+    paxe_keystore_clear();
+    return 0;
+}
+
+/* paxe.set_fail_policy(policy_string) -> boolean */
+static int l_paxe_set_fail_policy(lua_State *L) {
+    const char *policy_str = luaL_checkstring(L, 1);
+    paxe_fail_policy_t policy;
+
+    if (strcmp(policy_str, "DROP") == 0 || strcmp(policy_str, "drop") == 0) {
+        policy = PAXE_DROP;
+    } else if (strcmp(policy_str, "LOG_ONCE") == 0 || strcmp(policy_str, "log_once") == 0) {
+        policy = PAXE_LOG_ONCE;
+    } else if (strcmp(policy_str, "VERBOSE") == 0 || strcmp(policy_str, "verbose") == 0) {
+        policy = PAXE_VERBOSE;
+    } else {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    paxe_set_fail_policy(policy);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+/* paxe.stats() -> table */
+static int l_paxe_stats(lua_State *L) {
+    paxe_stats_t stats;
+    paxe_stats_get(&stats);
+
+    lua_createtable(L, 0, 7);
+
+    lua_pushinteger(L, (lua_Integer)stats.rx_total);
+    lua_setfield(L, -2, "rx_total");
+
+    lua_pushinteger(L, (lua_Integer)stats.rx_ok);
+    lua_setfield(L, -2, "rx_ok");
+
+    lua_pushinteger(L, (lua_Integer)stats.rx_short);
+    lua_setfield(L, -2, "rx_short");
+
+    lua_pushinteger(L, (lua_Integer)stats.rx_len_mismatch);
+    lua_setfield(L, -2, "rx_len_mismatch");
+
+    lua_pushinteger(L, (lua_Integer)stats.rx_no_key);
+    lua_setfield(L, -2, "rx_no_key");
+
+    lua_pushinteger(L, (lua_Integer)stats.rx_auth_fail);
+    lua_setfield(L, -2, "rx_auth_fail");
+
+    lua_pushinteger(L, (lua_Integer)stats.rx_reserved_nonzero);
+    lua_setfield(L, -2, "rx_reserved_nonzero");
+
+    return 1;
+}
+
+/* paxe.try_decrypt(buffer_string) -> plaintext_string, key_id, flags | nil, error_string */
+static int l_paxe_try_decrypt(lua_State *L) {
+    size_t len;
+    const char *input = luaL_checklstring(L, 1, &len);
+
+    /* Make a mutable copy since paxe_try_decrypt modifies in-place */
+    uint8_t *buf = malloc(len);
+    if (!buf) {
+        lua_pushnil(L);
+        lua_pushstring(L, "out of memory");
+        return 2;
+    }
+    memcpy(buf, input, len);
+
+    uint32_t key_id = 0;
+    uint8_t flags = 0;
+    ssize_t plaintext_len = paxe_try_decrypt(buf, len, &key_id, &flags);
+
+    if (plaintext_len < 0) {
+        free(buf);
+        lua_pushnil(L);
+        lua_pushstring(L, "decryption failed");
+        return 2;
+    }
+
+    lua_pushlstring(L, (const char *)buf, (size_t)plaintext_len);
+    lua_pushinteger(L, (lua_Integer)key_id);
+    lua_pushinteger(L, (lua_Integer)flags);
+    free(buf);
+    return 3;
+}
+
+/* paxe.encrypt(plaintext, key_id) -> ciphertext | nil, error
+ * Standard mode encryption for testing/demos
+ */
+static int l_paxe_encrypt(lua_State *L) {
+    size_t plaintext_len;
+    const char *plaintext = luaL_checklstring(L, 1, &plaintext_len);
+    lua_Integer key_id = luaL_checkinteger(L, 2);
+
+    /* Get key from keystore */
+    const uint8_t *key = keystore_get((uint32_t)key_id);
+    if (!key) {
+        lua_pushnil(L);
+        lua_pushstring(L, "key not found");
+        return 2;
+    }
+
+    /* Allocate output buffer: Header(8) + Nonce(12) + Ciphertext + Tag(16) */
+    size_t ciphertext_len = plaintext_len + TAG_LEN;
+    size_t total_len = HEADER_LEN + NONCE_LEN + ciphertext_len;
+    uint8_t *buf = malloc(total_len);
+    if (!buf) {
+        lua_pushnil(L);
+        lua_pushstring(L, "out of memory");
+        return 2;
+    }
+
+    /* Build header */
+    buf[0] = (plaintext_len >> 8) & 0xFF;  /* Length high byte */
+    buf[1] = plaintext_len & 0xFF;          /* Length low byte */
+    buf[2] = 0;                              /* Flags (standard mode) */
+    buf[3] = 0;                              /* Reserved */
+    buf[4] = (key_id >> 24) & 0xFF;
+    buf[5] = (key_id >> 16) & 0xFF;
+    buf[6] = (key_id >> 8) & 0xFF;
+    buf[7] = key_id & 0xFF;
+
+    /* Generate random nonce */
+    uint8_t *nonce = buf + HEADER_LEN;
+    randombytes_buf(nonce, NONCE_LEN);
+
+    /* Encrypt */
+    uint8_t *ciphertext = buf + HEADER_LEN + NONCE_LEN;
+    unsigned long long actual_ciphertext_len;
+
+    int ret = crypto_aead_aes256gcm_encrypt(
+        ciphertext, &actual_ciphertext_len,
+        (const uint8_t *)plaintext, plaintext_len,
+        buf, HEADER_LEN,  /* AAD is header */
+        NULL,
+        nonce, key
+    );
+
+    if (ret != 0) {
+        free(buf);
+        lua_pushnil(L);
+        lua_pushstring(L, "encryption failed");
+        return 2;
+    }
+
+    lua_pushlstring(L, (const char *)buf, total_len);
+    free(buf);
+    return 1;
+}
+
+/* Module function table */
+static const luaL_Reg paxe_funcs[] = {
+    {"init", l_paxe_init},
+    {"shutdown", l_paxe_shutdown},
+    {"is_enabled", l_paxe_is_enabled},
+    {"set_enabled", l_paxe_set_enabled},
+    {"keystore_set", l_paxe_keystore_set},
+    {"keystore_clear", l_paxe_keystore_clear},
+    {"set_fail_policy", l_paxe_set_fail_policy},
+    {"stats", l_paxe_stats},
+    {"try_decrypt", l_paxe_try_decrypt},
+    {"encrypt", l_paxe_encrypt},
+    {NULL, NULL}
+};
+
+/* Module entry point */
+int lunet_open_paxe(lua_State *L) {
+    luaL_register(L, NULL, paxe_funcs);
+
+    /* Add constants */
+    lua_pushinteger(L, OVERHEAD_STD);
+    lua_setfield(L, -2, "OVERHEAD_STANDARD");
+
+    lua_pushinteger(L, OVERHEAD_DEK);
+    lua_setfield(L, -2, "OVERHEAD_DEK");
+
+    lua_pushstring(L, "1.0.0");
+    lua_setfield(L, -2, "VERSION");
+
+    return 1;
+}

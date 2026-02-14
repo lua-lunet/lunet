@@ -56,4 +56,8 @@ void paxe_stats_get(paxe_stats_t *out);
 #define PAXE_TRACE_DECRYPT_FAIL(reason) ((void)0)
 #endif
 
+/* Lua module entry point (defined in paxe.c) */
+struct lua_State;
+int lunet_open_paxe(struct lua_State *L);
+
 #endif // PAXE_H

@@ -18,6 +18,9 @@
 #include "trace.h"
 #include "runtime.h"
 #include "lunet_mem.h"
+#ifdef LUNET_PAXE
+#include "paxe.h"
+#endif
 
 static char *lunet_resolve_executable_path(const char *argv0) {
 #if defined(_WIN32)
@@ -142,6 +145,15 @@ LUNET_API int luaopen_lunet_postgres(lua_State *L) {
   lunet_init_once();
   set_default_luaL(L);
   return lunet_open_db(L);
+}
+#endif
+
+#if defined(LUNET_PAXE)
+LUNET_API int luaopen_lunet_paxe(lua_State *L) {
+  lunet_init_once();
+  set_default_luaL(L);
+  lua_newtable(L);
+  return lunet_open_paxe(L);
 }
 #endif
 

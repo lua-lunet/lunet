@@ -3,104 +3,149 @@
 Example 07: PAXE Stress Test
 ============================
 
-This test validates PAXE packet encryption simulation under load.
+This stress test validates PAXE packet encryption under load:
+- Multiple encryption/decryption operations
+- Multi-key rotation
+- Statistics verification
+- Performance measurement
 
-NOTE: This is a simulation that tests the packet processing loop logic
-without requiring actual encrypted packets. In production, you would
-integrate with real UDP packet flow using paxe.try_decrypt().
+Prerequisites:
+  - libsodium installed (brew install libsodium / apt install libsodium-dev)
+  - Build PAXE extension: xmake build lunet-paxe
 
 Environment variables:
-  ITERATIONS   - Number of packets to simulate (default: 100)
-  PACKET_SIZE  - Simulated packet size in bytes (default: 1024)
+  ITERATIONS   - Number of encrypt/decrypt cycles (default: 1000)
+  PACKET_SIZE  - Plaintext size in bytes (default: 1024)
   NUM_KEYS     - Number of keys in rotation (default: 4)
 
 Usage:
   ITERATIONS=10000 ./build/macosx/arm64/release/lunet-run examples/07_paxe_stress.lua
 ]]
 
-local iterations = tonumber(os.getenv("ITERATIONS")) or 100
+local paxe = require("lunet.paxe")
+
+local iterations = tonumber(os.getenv("ITERATIONS")) or 1000
 local packet_size = tonumber(os.getenv("PACKET_SIZE")) or 1024
 local num_keys = tonumber(os.getenv("NUM_KEYS")) or 4
 
 print(string.format(
-    "[PAXE STRESS] Starting test: iterations=%d, packet_size=%d, keys=%d",
+    "[PAXE STRESS] Config: iterations=%d, packet_size=%d, num_keys=%d",
     iterations, packet_size, num_keys
 ))
 
--- Simulation state (mirrors what paxe.stats_get() would return)
-local paxe_simulation = {
-    packets_processed = 0,
-    bytes_processed = 0,
-    errors = 0,
-    start_time = os.time(),
-}
+-- Initialize PAXE
+local ok, err = paxe.init()
+if not ok then
+    print("[ERROR] Failed to initialize PAXE: " .. tostring(err))
+    os.exit(1)
+end
+print("[PAXE STRESS] PAXE initialized")
 
--- PAXE packet format overhead:
---   Standard mode: Header(8) + Nonce(12) + Tag(16) = 36 bytes
---   DEK mode: adds KEK_Nonce(12) + Enc_DEK(32) + DEK_Nonce(12) + DEK_Len(2) = 58 more
-local PAXE_STANDARD_OVERHEAD = 36
-local PAXE_DEK_OVERHEAD = 36 + 58
-
-local function simulate_paxe_operations(count, pkt_size, nkeys)
-    local overhead = PAXE_STANDARD_OVERHEAD
-
-    for i = 1, count do
-        -- Simulate key selection (round-robin for testing)
-        local key_id = (i % nkeys) + 1
-
-        -- Simulate packet sizes
-        local encrypted_size = pkt_size + overhead
-        local decrypted_size = pkt_size
-
-        -- Update statistics
-        paxe_simulation.packets_processed = paxe_simulation.packets_processed + 1
-        paxe_simulation.bytes_processed = paxe_simulation.bytes_processed + pkt_size
-
-        -- Simulate 1% authentication failure rate (for stress testing)
-        if i % 100 == 0 then
-            paxe_simulation.errors = paxe_simulation.errors + 1
-        end
+-- Set up keys
+for i = 1, num_keys do
+    -- Generate deterministic test keys (NOT for production!)
+    local key = string.char(i):rep(32)
+    local ok, err = paxe.keystore_set(i, key)
+    if not ok then
+        print("[ERROR] Failed to set key " .. i .. ": " .. tostring(err))
+        os.exit(1)
     end
 end
+print(string.format("[PAXE STRESS] Added %d keys to keystore", num_keys))
 
--- Run stress test in batches
-print("[PAXE STRESS] Running main loop...")
-local batch_size = math.max(1, math.floor(iterations / 10))
-local num_batches = 10
+paxe.set_enabled(true)
+paxe.set_fail_policy("DROP")
 
-for batch = 1, num_batches do
-    simulate_paxe_operations(batch_size, packet_size, num_keys)
+-- Generate test plaintext
+local plaintext = string.rep("X", packet_size)
 
-    if batch % 2 == 0 then
-        local elapsed = os.time() - paxe_simulation.start_time + 1
+-- Timing
+local start_time = os.clock()
+local errors = 0
+local bytes_processed = 0
+
+print("[PAXE STRESS] Running encryption/decryption cycles...")
+
+-- Main stress loop
+for i = 1, iterations do
+    -- Round-robin key selection
+    local key_id = ((i - 1) % num_keys) + 1
+
+    -- Encrypt
+    local ciphertext, enc_err = paxe.encrypt(plaintext, key_id)
+    if not ciphertext then
+        errors = errors + 1
+        if errors <= 5 then
+            print("[ERROR] Encryption failed at iteration " .. i .. ": " .. tostring(enc_err))
+        end
+    else
+        -- Decrypt
+        local decrypted, dec_key_id, flags = paxe.try_decrypt(ciphertext)
+        if not decrypted then
+            errors = errors + 1
+            if errors <= 5 then
+                print("[ERROR] Decryption failed at iteration " .. i)
+            end
+        elseif decrypted ~= plaintext then
+            errors = errors + 1
+            if errors <= 5 then
+                print("[ERROR] Plaintext mismatch at iteration " .. i)
+            end
+        elseif dec_key_id ~= key_id then
+            errors = errors + 1
+            if errors <= 5 then
+                print("[ERROR] Key ID mismatch at iteration " .. i)
+            end
+        else
+            bytes_processed = bytes_processed + packet_size
+        end
+    end
+
+    -- Progress report
+    if i % (iterations / 10) == 0 then
+        local pct = math.floor(i / iterations * 100)
+        local elapsed = os.clock() - start_time
+        local rate = bytes_processed / (1024 * 1024) / elapsed
         print(string.format(
-            "[PAXE STRESS] Batch %d/%d: %d packets, %.2f MB/s",
-            batch, num_batches,
-            paxe_simulation.packets_processed,
-            (paxe_simulation.bytes_processed / 1024 / 1024) / elapsed
+            "[PAXE STRESS] %3d%% complete: %d ops, %.2f MB/s",
+            pct, i, rate
         ))
     end
 end
 
--- Final report
-local elapsed = os.time() - paxe_simulation.start_time + 1
-print(string.format("\n[PAXE STRESS] Results:"))
-print(string.format("  Packets processed: %d", paxe_simulation.packets_processed))
-print(string.format("  Bytes processed:   %.2f MB", paxe_simulation.bytes_processed / 1024 / 1024))
-print(string.format("  Errors (simulated): %d (%.2f%%)",
-    paxe_simulation.errors,
-    100 * paxe_simulation.errors / paxe_simulation.packets_processed))
-print(string.format("  Throughput:        %.2f pkt/s", paxe_simulation.packets_processed / elapsed))
-print(string.format("  Throughput:        %.2f MB/s", (paxe_simulation.bytes_processed / 1024 / 1024) / elapsed))
-print(string.format("  Elapsed:           %d seconds", elapsed))
+local elapsed = os.clock() - start_time
+local successful = iterations - errors
 
--- Verification
-local expected = batch_size * num_batches
-if paxe_simulation.packets_processed == expected then
-    print("\n[OK] Stress test completed successfully")
+-- Final statistics
+print("")
+print("[PAXE STRESS] Results:")
+print(string.format("  Total iterations:  %d", iterations))
+print(string.format("  Successful:        %d (%.2f%%)", successful, successful / iterations * 100))
+print(string.format("  Errors:            %d", errors))
+print(string.format("  Bytes processed:   %.2f MB", bytes_processed / 1024 / 1024))
+print(string.format("  Elapsed time:      %.3f seconds", elapsed))
+print(string.format("  Throughput:        %.2f ops/sec", iterations / elapsed))
+print(string.format("  Throughput:        %.2f MB/sec", bytes_processed / 1024 / 1024 / elapsed))
+
+-- PAXE internal statistics
+print("")
+print("[PAXE STRESS] PAXE Statistics:")
+local stats = paxe.stats()
+print(string.format("  rx_total:        %d", stats.rx_total))
+print(string.format("  rx_ok:           %d", stats.rx_ok))
+print(string.format("  rx_auth_fail:    %d", stats.rx_auth_fail))
+print(string.format("  rx_no_key:       %d", stats.rx_no_key))
+
+-- Cleanup
+paxe.keystore_clear()
+paxe.shutdown()
+
+-- Verdict
+print("")
+if errors == 0 then
+    print("[OK] Stress test completed successfully - all " .. iterations .. " operations passed")
     os.exit(0)
 else
-    print(string.format("\n[ERROR] Expected %d packets, processed %d",
-        expected, paxe_simulation.packets_processed))
+    print("[FAIL] Stress test completed with " .. errors .. " errors")
     os.exit(1)
 end

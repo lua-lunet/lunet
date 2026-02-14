@@ -128,9 +128,9 @@ Default is `128` MB (minimum clamped to `8` MB).
 For deep memory debugging (LuaJIT + Lunet both instrumented), use the macOS-only helpers:
 
 ```bash
-make luajit-asan
-make build-debug-asan-luajit
-make repro-50-asan-luajit
+xmake luajit-asan
+xmake build-debug-asan-luajit
+xmake repro-50-asan-luajit
 ```
 
 These helpers configure `--asan=y --lunet_trace=y`, so EasyMem is also enabled automatically.

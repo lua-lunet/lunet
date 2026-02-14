@@ -52,7 +52,7 @@ When modifying networking code (sockets, binding, listeners):
 
 ## C Code Conventions (STRICT)
 
-This section defines naming conventions and safety rules for C code. These are enforced by `make lint`.
+This section defines naming conventions and safety rules for C code. These are enforced by `xmake lint`.
 
 ### Naming Conventions
 
@@ -84,10 +84,10 @@ When adding new C plugins or features that use coroutines:
 
 1. **Include trace.h**: `#include "trace.h"` in your source file
 2. **Use safe wrappers**: For coroutine checks and reference management
-3. **Run lint**: `make lint` must pass (no direct `_lunet_*` calls)
-4. **Test with tracing**: `make stress` (builds with `LUNET_TRACE=ON`)
+3. **Run lint**: `xmake lint` must pass (no direct `_lunet_*` calls)
+4. **Test with tracing**: `xmake stress` (builds with `LUNET_TRACE=ON`)
 5. **Crash is good**: If tracing asserts fail, you found a bug - fix it before release
-6. **Release build**: `make release` runs tests + stress + optimized build
+6. **Release build**: `xmake release` runs tests + stress + optimized build
 
 ### Example: Async Operation Pattern
 
@@ -127,9 +127,9 @@ static void my_callback(uv_req_t *req) {
 Before merging any C code changes:
 
 ```bash
-make lint     # Check naming conventions (no _lunet_* leaks)
-make stress   # Debug build + concurrent stress test (must pass)
-make release  # Full release build (runs test + stress first)
+xmake lint     # Check naming conventions (no _lunet_* leaks)
+xmake stress   # Debug build + concurrent stress test (must pass)
+xmake release  # Full release build (runs test + stress first)
 ```
 
 ## Debugging Notes: Lua-C Stack Issues
@@ -271,7 +271,7 @@ Logs go to `.tmp/repro-payload/.tmp-repro-logs/{dmz,echo,load}.log`.
 
 This is a **Lua** project. If a task requires logic, loops, parsing, or file manipulation beyond simple command chaining, **write it in Lua**.
 
-*   **Allowed in Shell:** Simple wrappers (e.g., `make` targets), environment setup, `curl` tests.
+*   **Allowed in Shell:** Simple wrappers (e.g., `xmake` targets), environment setup, `curl` tests.
 *   **Must be Lua:** Linting logic, complex build steps, benchmarks, data processing.
 *   **Rationale:** Shell scripts (sh/bash) are fragile, platform-dependent, and hard to debug. Lua is robust, portable, and native to this environment.
 
@@ -286,14 +286,14 @@ The application MUST be built and tested with zero-cost tracing enabled. This ac
 - Hard crashes on violation
 
 ```bash
-make build-debug  # Includes -DLUNET_TRACE=ON
+xmake build-debug  # Includes -DLUNET_TRACE=ON
 ```
 
 ### 2. Run Stress Tests
 Before testing the application logic, ensure the core runtime is stable under load.
 
 ```bash
-make stress
+xmake stress
 ```
 
 ### 3. Application Load Testing (RealWorld Conduit)
@@ -337,7 +337,7 @@ At application exit (in debug builds), `lunet_udp_trace_summary()` is called:
 When adding new UDP operations:
 
 1. Add `UDP_TRACE_*` calls at key points (after address resolution, before/after I/O)
-2. Build with `make build-debug` to enable tracing
+2. Build with `xmake build-debug` to enable tracing
 3. Run test scripts and inspect stderr for `[UDP_TRACE]` lines
 4. Verify counts balance (e.g., echo server should have tx == rx)
 

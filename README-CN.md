@@ -8,25 +8,18 @@
 
 ## 设计理念：无冗余，无臃肿
 
-Lunet 采用**模块化设计**。只安装你需要的：
+Lunet 采用**模块化设计**。只构建你需要的：
 
 - **核心** (`lunet`)：TCP/UDP 套接字、文件系统、定时器、信号
-- **数据库驱动** (独立包)：
+- **数据库驱动**（可选 xmake 目标）：
   - `lunet-sqlite3` - SQLite3 驱动
   - `lunet-mysql` - MySQL/MariaDB 驱动
   - `lunet-postgres` - PostgreSQL 驱动
 
-只安装一个数据库驱动，而不是全部。没有未使用的依赖。不需要为从未使用的库打安全补丁。
+只构建一个数据库驱动，而不是全部。没有未使用的依赖。不需要为从未使用的库打安全补丁。
 
-```bash
-# 安装核心
-luarocks install lunet
-
-# 只安装你需要的数据库驱动
-luarocks install lunet-sqlite3   # 或者
-luarocks install lunet-mysql     # 或者
-luarocks install lunet-postgres
-```
+入门（完整构建流程、配置档位、集成方式）：
+- **[docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md)**
 
 ### 为什么使用 lunet 数据库驱动？
 
@@ -42,12 +35,15 @@ Lunet 数据库驱动是**协程安全的**：
 ## 构建
 
 ```bash
-# 默认 SQLite 构建
-make build
+# 配置并构建核心运行时
+xmake f -m release --lunet_trace=n --lunet_verbose_trace=n -y
+xmake build
 
-# 调试模式构建（启用追踪）
-make build-debug
+# 可选：只构建你需要的数据库驱动
+xmake build lunet-sqlite3   # 或 lunet-mysql / lunet-postgres
 ```
+
+如果更习惯 Makefile：`make build` 与 `make build-debug` 是对相同 xmake 流程的封装。
 
 ## 示例应用
 
@@ -92,12 +88,12 @@ udp.close(h)
 
 ## 数据库驱动
 
-数据库驱动是**独立的包**。只安装你需要的：
+数据库驱动是**可选构建目标**。只构建你需要的：
 
 ```bash
-luarocks install lunet-sqlite3   # SQLite3
-luarocks install lunet-mysql     # MySQL/MariaDB
-luarocks install lunet-postgres  # PostgreSQL
+xmake build lunet-sqlite3   # SQLite3
+xmake build lunet-mysql     # MySQL/MariaDB
+xmake build lunet-postgres  # PostgreSQL
 ```
 
 ### SQLite3 (`lunet.sqlite3`)
@@ -108,8 +104,9 @@ local db = require("lunet.sqlite3")
 -- 打开数据库（文件路径或 ":memory:"）
 local conn = db.open("myapp.db")
 
--- 执行语句（INSERT/UPDATE/DELETE）- 返回影响的行数
-local rows = db.exec(conn, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+-- 执行语句（INSERT/UPDATE/DELETE）- 返回结果元数据
+local result = db.exec(conn, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+print(result.affected_rows)
 
 -- 查询（SELECT）- 返回行表数组
 local users = db.query(conn, "SELECT * FROM users WHERE active = 1")
@@ -118,11 +115,8 @@ for _, user in ipairs(users) do
 end
 
 -- 参数化查询（防止 SQL 注入）
-local results = db.query_params(conn, "SELECT * FROM users WHERE name = ?", "alice")
-db.exec_params(conn, "INSERT INTO users (name) VALUES (?)", "bob")
-
--- 转义字符串（用于动态 SQL - 尽量使用参数化查询）
-local safe = db.escape(conn, "O'Brien")
+local results = db.query(conn, "SELECT * FROM users WHERE name = ?", "alice")
+db.exec(conn, "INSERT INTO users (name) VALUES (?)", "bob")
 
 -- 关闭连接
 db.close(conn)
@@ -144,7 +138,7 @@ local conn = db.open({
 
 -- 与 SQLite3 相同的 API
 local users = db.query(conn, "SELECT * FROM users")
-db.exec_params(conn, "INSERT INTO users (name) VALUES (?)", "alice")
+db.exec(conn, "INSERT INTO users (name) VALUES (?)", "alice")
 
 db.close(conn)
 ```
@@ -165,7 +159,7 @@ local conn = db.open({
 
 -- 与 SQLite3 相同的 API
 local users = db.query(conn, "SELECT * FROM users")
-db.exec_params(conn, "INSERT INTO users (name) VALUES ($1)", "alice")  -- PostgreSQL 使用 $1, $2 等
+db.exec(conn, "INSERT INTO users (name) VALUES ($1)", "alice")  -- PostgreSQL 使用 $1, $2 等
 
 db.close(conn)
 ```
@@ -176,11 +170,11 @@ db.close(conn)
 |------|------|--------|
 | `db.open(path_or_config)` | 打开连接 | 连接句柄 |
 | `db.close(conn)` | 关闭连接 | - |
-| `db.query(conn, sql)` | 执行 SELECT | 行表数组 |
-| `db.exec(conn, sql)` | 执行 INSERT/UPDATE/DELETE | 影响行数 |
-| `db.query_params(conn, sql, ...)` | 参数化 SELECT | 行表数组 |
-| `db.exec_params(conn, sql, ...)` | 参数化 INSERT/UPDATE/DELETE | 影响行数 |
-| `db.escape(conn, str)` | 转义 SQL 字符串 | 转义后的字符串 |
+| `db.query(conn, sql, ...)` | 执行 SELECT（可带参数） | 行表数组 |
+| `db.exec(conn, sql, ...)` | 执行 INSERT/UPDATE/DELETE（可带参数） | 结果表（`affected_rows`、`last_insert_id`） |
+| `db.query_params(conn, sql, ...)` | 与 `db.query` 行为一致 | 行表数组 |
+| `db.exec_params(conn, sql, ...)` | 与 `db.exec` 行为一致 | 结果表（`affected_rows`、`last_insert_id`） |
+| `db.escape(str)` | 转义 SQL 字符串 | 转义后的字符串 |
 
 ## 安全性：零开销追踪
 

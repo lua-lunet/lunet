@@ -35,10 +35,9 @@ xmake build
 - `-y` = accept defaults without prompting
 
 **Output files:**
-- `build/<platform>/<arch>/release/lunet.so` — the Lua module
-- `build/<platform>/<arch>/release/liblunet.dylib` (macOS) or `liblunet.so` (Linux) — the core shared library
-- `build/<platform>/<arch>/release/lunet-run` — standalone runner
-- `build/<platform>/<arch>/release/lunet/*.so` — driver modules (sqlite3, mysql, postgres)
+- `build/<platform>/<arch>/release/lunet.so` — the Lunet core shared library (also loadable via `require("lunet")`)
+- `build/<platform>/<arch>/release/lunet-run` — standalone runner (links against `lunet.so`)
+- `build/<platform>/<arch>/release/lunet/*.so` — driver modules (sqlite3, mysql, postgres) that link against `lunet.so`
 
 ### 2. Run your app with lunet-run
 

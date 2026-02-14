@@ -18,6 +18,7 @@
 #include "trace.h"
 #include "runtime.h"
 #include "lunet_mem.h"
+#include "embed_scripts.h"
 #ifdef LUNET_PAXE
 #include "paxe.h"
 #endif
@@ -34,10 +35,8 @@ static char *lunet_resolve_executable_path(const char *argv0) {
 LUNET_API int luaopen_lunet(lua_State *L);
 
 static void lunet_trace_shutdown(void) {
-#if defined(LUNET_TRACE) || defined(LUNET_EASY_MEMORY)
-    lunet_mem_summary();
-#endif
 #ifdef LUNET_TRACE
+    lunet_mem_summary();
     lunet_socket_trace_summary();
     lunet_udp_trace_summary();
     lunet_timer_trace_summary();
@@ -45,8 +44,6 @@ static void lunet_trace_shutdown(void) {
     lunet_fs_trace_summary();
     lunet_trace_dump();
     lunet_trace_assert_balanced("shutdown");
-#endif
-#if defined(LUNET_TRACE) || defined(LUNET_EASY_MEMORY)
     lunet_mem_assert_balanced("shutdown");
 #endif
 }
@@ -85,6 +82,12 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Error: No script file specified.\n");
     return 1;
   }
+
+#ifdef LUNET_EMBED_SCRIPTS
+  char embedded_root[LUNET_EMBED_PATH_MAX] = {0};
+  char embedded_script[LUNET_EMBED_PATH_MAX] = {0};
+  char embed_error[512] = {0};
+#endif
 
   lua_State *L = luaL_newstate();
   luaL_openlibs(L);
@@ -143,8 +146,37 @@ int main(int argc, char **argv) {
   cpath_done:;
   }
 
+  const char *script_to_run = argv[script_index];
+#ifdef LUNET_EMBED_SCRIPTS
+  if (lunet_embed_scripts_prepare(L,
+                                  embedded_root,
+                                  sizeof(embedded_root),
+                                  embed_error,
+                                  sizeof(embed_error)) != 0) {
+    fprintf(stderr, "Error: failed to prepare embedded scripts: %s\n", embed_error);
+    lua_close(L);
+    return 1;
+  }
+  {
+    int resolved = lunet_embed_scripts_resolve_script(embedded_root,
+                                                      script_to_run,
+                                                      embedded_script,
+                                                      sizeof(embedded_script),
+                                                      embed_error,
+                                                      sizeof(embed_error));
+    if (resolved < 0) {
+      fprintf(stderr, "Error: failed to resolve embedded script path: %s\n", embed_error);
+      lua_close(L);
+      return 1;
+    }
+    if (resolved > 0) {
+      script_to_run = embedded_script;
+    }
+  }
+#endif
+
   // run lua file
-  if (luaL_dofile(L, argv[script_index]) != LUA_OK) {
+  if (luaL_dofile(L, script_to_run) != LUA_OK) {
     const char *error = lua_tostring(L, -1);
     fprintf(stderr, "Error: %s\n", error);
     lua_pop(L, 1);
@@ -181,9 +213,6 @@ int main(int argc, char **argv) {
     }
 #endif
   }
-#if defined(LUNET_TRACE) || defined(LUNET_EASY_MEMORY)
-  lunet_mem_shutdown();
-#endif
   if (lua_exit_code >= 0) {
     return lua_exit_code;
   }

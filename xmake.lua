@@ -10,6 +10,116 @@ set_languages("c99")
 
 add_rules("mode.debug", "mode.release")
 
+-- Run C safety lint automatically before any target build.
+-- This keeps lint enforcement on the standard xmake path (xmake build, xmake run, etc).
+local c_safety_lint_ran = false
+
+local function lint_check_file(filepath)
+    local filename = path.filename(filepath)
+
+    -- Implementation files / trace internals are allowed to use internal symbols.
+    if filename:match("_impl%.c$") or
+       filename == "trace.c" or
+       filename == "co.c" or
+       filename == "trace.h" or
+       filename == "co.h" then
+        return true, 0
+    end
+
+    local content = io.readfile(filepath)
+    if not content then
+        return true, 0
+    end
+
+    local violations = {}
+    local line_number = 0
+    for line in (content .. "\n"):gmatch("(.-)\r?\n") do
+        line_number = line_number + 1
+        local code_part = line:match("^(.-)//") or line:match("^(.-)/%*") or line
+
+        if code_part:match("_lunet_[%w_]+%s*%(") and
+           not code_part:match("int%s+_lunet_") and
+           not code_part:match("void%s+_lunet_") and
+           not code_part:match("luaopen_lunet_") then
+            table.insert(violations, {
+                line = line_number,
+                content = line,
+                msg = "Internal call. Use safe wrapper (e.g., lunet_ensure_coroutine)"
+            })
+        end
+
+        if code_part:match("luaL_ref%s*%(.*LUA_REGISTRYINDEX") then
+            table.insert(violations, {
+                line = line_number,
+                content = line,
+                msg = "Unsafe ref creation. Use lunet_coref_create()"
+            })
+        end
+
+        if code_part:match("luaL_unref%s*%(.*LUA_REGISTRYINDEX") then
+            table.insert(violations, {
+                line = line_number,
+                content = line,
+                msg = "Unsafe ref release. Use lunet_coref_release()"
+            })
+        end
+    end
+
+    if #violations > 0 then
+        print(string.format("VIOLATION in %s:", filepath))
+        for _, v in ipairs(violations) do
+            print(string.format("  %d: %s", v.line, v.content:gsub("^%s+", "")))
+            print(string.format("     -> %s", v.msg))
+        end
+        print("")
+        return false, #violations
+    end
+
+    return true, 0
+end
+
+local function run_c_safety_lint_once()
+    if c_safety_lint_ran then
+        return
+    end
+    c_safety_lint_ran = true
+
+    local root = os.projectdir()
+    local files = {}
+
+    local function collect(pattern)
+        for _, f in ipairs(os.files(path.join(root, pattern))) do
+            table.insert(files, f)
+        end
+    end
+
+    collect("src/**.c")
+    collect("ext/**.c")
+    collect("include/**.h")
+    collect("ext/**.h")
+    table.sort(files)
+
+    local violations_count = 0
+    local files_with_violations = 0
+    for _, filepath in ipairs(files) do
+        local ok, count = lint_check_file(filepath)
+        if not ok then
+            files_with_violations = files_with_violations + 1
+            violations_count = violations_count + count
+        end
+    end
+
+    if violations_count > 0 then
+        os.raise("C safety lint failed: %d violation(s) in %d file(s)", violations_count, files_with_violations)
+    end
+end
+
+rule("lunet.c_safety_lint")
+    before_build(function ()
+        run_c_safety_lint_once()
+    end)
+rule_end()
+
 -- Debug tracing option (enables LUNET_TRACE for coroutine debugging)
 -- NOTE: Do not name this option "trace" because xmake reserves --trace.
 option("lunet_trace")
@@ -86,6 +196,7 @@ end
 -- Shared library target for require("lunet")
 target("lunet")
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     
     -- Platform-specific module naming
     set_prefixname("")
@@ -145,6 +256,7 @@ option_end()
 -- Standalone executable target for ./lunet-run script.lua
 target("lunet-bin")
     set_kind("binary")
+    add_rules("lunet.c_safety_lint")
     set_basename("lunet-run")  -- Avoid conflict with lunet/ driver directory
     
     add_files(core_sources)
@@ -191,6 +303,7 @@ target_end()
 target("lunet-sqlite3")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("sqlite3")  -- Output: lunet/sqlite3.so
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
@@ -232,6 +345,7 @@ target_end()
 target("lunet-mysql")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("mysql")  -- Output: lunet/mysql.so
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
@@ -273,6 +387,7 @@ target_end()
 target("lunet-postgres")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("postgres")  -- Output: lunet/postgres.so
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
@@ -318,6 +433,7 @@ target_end()
 target("lunet-paxe")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("paxe")  -- Output: lunet/paxe.so
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")

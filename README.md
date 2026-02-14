@@ -10,25 +10,18 @@ A high-performance coroutine-based networking library for LuaJIT, built on top o
 
 ## Philosophy: No Bloat, No Kitchen Sink
 
-Lunet is **modular by design**. You install only what you need:
+Lunet is **modular by design**. You build only what you need:
 
 - **Core** (`lunet`): TCP/UDP sockets, filesystem, timers, signals
-- **Database drivers** (separate packages):
+- **Database drivers** (optional xmake targets):
   - `lunet-sqlite3` - SQLite3 driver
   - `lunet-mysql` - MySQL/MariaDB driver
   - `lunet-postgres` - PostgreSQL driver
 
-Install one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
+Build one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
 
-```bash
-# Install core
-luarocks install lunet
-
-# Install ONLY the database driver you need
-luarocks install lunet-sqlite3   # OR
-luarocks install lunet-mysql     # OR
-luarocks install lunet-postgres
-```
+Getting started (build flow, profiles, and integration details):
+- **[docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md)**
 
 ### Why use lunet database drivers?
 
@@ -147,12 +140,12 @@ udp.close(h)
 
 ## Database Drivers
 
-Database drivers are **separate packages**. Install only what you need:
+Database drivers are **optional build targets**. Build only what you need:
 
 ```bash
-luarocks install lunet-sqlite3   # SQLite3
-luarocks install lunet-mysql     # MySQL/MariaDB
-luarocks install lunet-postgres  # PostgreSQL
+xmake build lunet-sqlite3   # SQLite3
+xmake build lunet-mysql     # MySQL/MariaDB
+xmake build lunet-postgres  # PostgreSQL
 ```
 
 ### SQLite3 (`lunet.sqlite3`)
@@ -163,8 +156,9 @@ local db = require("lunet.sqlite3")
 -- Open database (file path or ":memory:")
 local conn = db.open("myapp.db")
 
--- Execute (INSERT/UPDATE/DELETE) - returns affected rows
-local rows = db.exec(conn, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+-- Execute (INSERT/UPDATE/DELETE) - returns metadata
+local result = db.exec(conn, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+print(result.affected_rows)
 
 -- Query (SELECT) - returns array of row tables
 local users = db.query(conn, "SELECT * FROM users WHERE active = 1")
@@ -229,10 +223,10 @@ db.close(conn)
 | `db.open(path_or_config)` | Open connection | connection handle |
 | `db.close(conn)` | Close connection | - |
 | `db.query(conn, sql, ...)` | Execute SELECT (with optional parameters) | array of row tables |
-| `db.exec(conn, sql, ...)` | Execute INSERT/UPDATE/DELETE (with optional parameters) | affected row count |
-| `db.query_params(conn, sql, ...)` | Alias for `db.query` (legacy) | array of row tables |
-| `db.exec_params(conn, sql, ...)` | Alias for `db.exec` (legacy) | affected row count |
-| `db.escape(conn, str)` | Escape string for SQL (rarely needed) | escaped string |
+| `db.exec(conn, sql, ...)` | Execute INSERT/UPDATE/DELETE (with optional parameters) | result table (`affected_rows`, `last_insert_id`) |
+| `db.query_params(conn, sql, ...)` | Same behavior as `db.query` | array of row tables |
+| `db.exec_params(conn, sql, ...)` | Same behavior as `db.exec` | result table (`affected_rows`, `last_insert_id`) |
+| `db.escape(str)` | Escape string for SQL (rarely needed) | escaped string |
 
 **Note**: All three drivers now use native prepared statements internally. Parameters are automatically bound using driver-native functions (`sqlite3_bind_*`, `mysql_stmt_bind_param`, `PQexecParams`), eliminating SQL injection risks.
 

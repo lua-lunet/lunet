@@ -1,10 +1,7 @@
-# DEPRECATED: Main workflows (build, lint, test, stress, release) have migrated to xmake.
-# Use: xmake build, xmake lint, xmake check, xmake test, xmake stress, xmake release
-# This Makefile is retained for: luajit-asan, build-debug-asan-luajit, repro-50-asan-luajit (macOS)
-# and rock/rocks-validate/smoke/certs. See README.md for xmake usage.
-
 .PHONY: all build init test clean help
 .PHONY: lint build-debug stress release rock rocks-validate certs smoke socket-gc luajit-asan build-debug-asan-luajit repro-50-asan-luajit
+
+LUA ?= lua
 
 all: build ## Build the project (default)
 
@@ -41,11 +38,13 @@ build-debug: lint ## Build with LUNET_TRACE=ON for debugging (enables safety ass
 
 lint: ## Check C code for unsafe _lunet_* calls (must use safe wrappers)
 	@echo "=== Linting C code for safety violations ==="
-	@lua bin/lint_c_safety.lua
+	@command -v luarocks >/dev/null 2>&1 || { echo >&2 "Error: luarocks not found. Please install it."; exit 1; }
+	@eval $$(luarocks path) && $(LUA) bin/lint_c_safety.lua
 
-init: ## Install dev dependencies (busted, luacheck) - run once
+init: ## Install dev dependencies (busted, luacheck, luafilesystem) - run once
 	@command -v luarocks >/dev/null 2>&1 || { echo >&2 "Error: luarocks not found. Please install it."; exit 1; }
 	@echo "Installing dev dependencies..."
+	luarocks install luafilesystem --local
 	luarocks install busted --local
 	luarocks install luacheck --local
 	@echo "Done. Run 'make test' to run tests."

@@ -5,7 +5,7 @@
 -- The include/lunet_lua.h header enforces this at compile time.
 
 set_project("lunet")
-set_version("0.1.0")
+set_version("0.2.0")
 set_languages("c99")
 
 add_rules("mode.debug", "mode.release")

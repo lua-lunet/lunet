@@ -1,7 +1,9 @@
 ## Highlights
 
-- Runtime fixes and instrumentation updates included in this release.
-- See merged PRs and commit list in the auto-generated notes below.
+- **PAXE packet encryption**: New optional extension module (`lunet.paxe`) for secure peer-to-peer protocols with AES-256-GCM, libsodium, and Lua bindings. Build with `xmake build lunet-paxe`.
+- **Downstream documentation**: Badge guide for downstream projects, beginner-friendly xmake integration guide replacing XMAKE_INTEGRATION.
+- **Release automation**: Tag-triggered CI now builds Linux/macOS/Windows binaries and publishes GitHub releases with assets.
+- **CI improvements**: Minimal lint-only pipeline scope, release quality gate in AGENTS.md.
 
 ## Binaries
 

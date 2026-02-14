@@ -279,6 +279,10 @@ With `--asan=y`, Lunet now also enables the EasyMem backend with diagnostic mode
 
 ASan output goes to stderr. The process exits with `Abort trap: 6` instead of `Segmentation fault: 11`. Look for `ERROR: AddressSanitizer:` in the log.
 
+#### LeakSanitizer (LSAN) in CI (EasyMem QA)
+
+Some CI runners may report a small, stable set of LSAN “leaks” originating from third-party runtime initialization (not lunet). We enforce a strict **leak budget** (default: 0 or exactly 4 allocations) instead of disabling LSAN entirely. See `docs/ci/lsan-leak-budget.md`.
+
 #### Full LuaJIT + Lunet ASan (Debian Trixie source)
 
 To instrument both Lunet and LuaJIT (not just Lunet C code), build the OpenResty LuaJIT source package used by Debian Trixie and link Lunet against it:

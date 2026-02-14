@@ -9,9 +9,10 @@ You MUST NOT do any git reset or stash or an git rm or rm or anything that might
 ## **Operational Rules (STRICT)**
 
 1.  **TIMEOUTS:** All commands interacting with servers or DB must have a timeout (`timeout 3` or `curl --max-time 3`).
-2.  **NO DATA LOSS:** Never use `rm -rf` to clear directories. Move them to `.tmp/` with a timestamp: `mv dir .tmp/dir.YYYYMMDD_HHMMSS`.
-3.  **LOGGING:** All test runs must log stdout/stderr to `.tmp/logs/YYYYMMDD_HHMMSS/`.
-4.  **SECURE BINDING:** Never bind to `0.0.0.0` or public interfaces. Use Unix sockets (preferred) or `127.0.0.1` (development). Only bypass this rule if the user explicitly requests it via CLI flag `--dangerously-skip-loopback-restriction`.
+2.  **HARD TIMEOUT CAP:** All commands (including builds/tests) MUST be capped to **< 60 seconds** runtime. Use `timeout 60 ...` (or less). If a step genuinely needs longer, stop and ask the user for explicit permission before running it.
+3.  **NO DATA LOSS:** Never use `rm -rf` to clear directories. Move them to `.tmp/` with a timestamp: `mv dir .tmp/dir.YYYYMMDD_HHMMSS`.
+4.  **LOGGING:** All test runs must log stdout/stderr to `.tmp/logs/YYYYMMDD_HHMMSS/`.
+5.  **SECURE BINDING:** Never bind to `0.0.0.0` or public interfaces. Use Unix sockets (preferred) or `127.0.0.1` (development). Only bypass this rule if the user explicitly requests it via CLI flag `--dangerously-skip-loopback-restriction`.
 5.  **MANDATORY LOCAL CI PARITY BEFORE PUSH:** Before any push, agents MUST run locally all steps from `.github/workflows/build.yml` for their current OS matrix entry (Linux/macOS/Windows), including configure, build, and packaging commands. If any required step cannot be run locally or fails, do not push until fixed or explicitly approved by the user.
 
 ## Release Quality Gate (STRICT)

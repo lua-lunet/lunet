@@ -177,11 +177,32 @@ db.close(conn)
 
 使用 `xmake build-debug` 构建可启用协程引用追踪和栈完整性检查。运行时会在检测到泄漏或栈污染时触发断言并崩溃。
 
-## 测试
+## 开发者工作流
+
+xmake 是标准构建系统。没有 Makefile。所有任务定义在 `xmake.lua` 中。
+
+| 任务 | 描述 |
+|------|------|
+| `xmake lint` | C 安全代码检查 |
+| `xmake check` | luacheck 静态分析 |
+| `xmake test` | 单元测试（busted） |
+| `xmake build-release` | 优化的发布构建 |
+| `xmake build-debug` | 启用追踪的调试构建 |
+| `xmake examples-compile` | 示例编译/语法检查 |
+| `xmake sqlite3-smoke` | SQLite3 示例冒烟测试 |
+| `xmake stress` | 带追踪的并发压力测试 |
+| `xmake ci` | 本地 CI 一致性检查（lint + 构建 + 示例 + sqlite3 冒烟） |
+| `xmake preflight-easy-memory` | EasyMem + ASan 预检门控 |
+| `xmake release` | 完整发布门控（lint + test + stress + 预检 + 构建） |
+
+完整任务目录和推荐工作流请参见 **[docs/WORKFLOW-CN.md](docs/WORKFLOW-CN.md)**。
+
+### 快速测试
 
 ```bash
 xmake test    # 单元测试
 xmake stress  # 带追踪的并发负载测试
+xmake ci      # 完整的本地 CI 一致性检查
 ```
 
 ## 许可证

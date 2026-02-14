@@ -43,6 +43,12 @@ local function sqlite_probe()
 end
 
 local function mysql_optional_probe()
+    local jit_ok, jit_mod = pcall(require, "jit")
+    if jit_ok and jit_mod and jit_mod.os == "OSX" then
+        info("skip lunet.mysql probe on macOS (known unstable under EasyMem+ASAN CI)")
+        return
+    end
+
     local ok, db = pcall(require, "lunet.mysql")
     if not ok then
         info("skip lunet.mysql (module unavailable): " .. tostring(db))

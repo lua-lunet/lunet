@@ -105,3 +105,37 @@ jobs:
           $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
           if (-not $lunet) { throw "lunet-run.exe not found" }
           & $lunet.FullName examples/03_db_sqlite3.lua
+
+      - name: Configure EasyMem + ASAN (Unix)
+        if: runner.os != 'Windows'
+        run: xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n --asan=y --easy_memory=y -y
+
+      - name: Configure EasyMem + ASAN (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:VCPKG_ROOT = "${{ github.workspace }}/vcpkg"
+          $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
+          xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n --asan=y --easy_memory=y -y
+
+      - name: Build Core + Drivers (EasyMem + ASAN)
+        run: |
+          xmake build lunet-bin
+          xmake build lunet-sqlite3
+          xmake build lunet-mysql
+          xmake build lunet-postgres
+
+      - name: EasyMem DB Stress (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
+          timeout 60 env LIGHT_DB_STRESS_OPS=20 "$LUNET_BIN" test/ci_easy_memory_db_stress.lua
+
+      - name: EasyMem DB Stress (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
+          if (-not $lunet) { throw "lunet-run.exe not found" }
+          $env:LIGHT_DB_STRESS_OPS = "20"
+          & $lunet.FullName test/ci_easy_memory_db_stress.lua

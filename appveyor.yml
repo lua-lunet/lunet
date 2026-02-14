@@ -1,0 +1,20 @@
+version: "{build}"
+
+image: Visual Studio 2022
+
+clone_depth: 1
+
+build: off
+test: off
+
+init:
+  - cmd: git config --global core.autocrlf input
+
+install:
+  - cmd: echo Preparing AppVeyor script-mode validation
+
+build_script:
+  - cmd: git --version
+  - cmd: if not exist xmake.lua exit /b 1
+  - cmd: if not exist src\\main.c exit /b 1
+  - cmd: echo AppVeyor script-mode sanity checks passed

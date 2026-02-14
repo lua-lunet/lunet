@@ -17,12 +17,17 @@ on:
 permissions:
   contents: write
 
+# Cancel previous runs when a new commit is pushed to the same PR/branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
@@ -204,10 +209,160 @@ jobs:
         name: release-windows
         path: lunet-windows-amd64.zip
 
+  easy-memory:
+    name: EasyMem QA (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
+
+    - name: Cache vcpkg
+      uses: actions/cache@v4
+      with:
+        path: |
+          vcpkg/installed
+          vcpkg/packages
+        key: ${{ runner.os }}-vcpkg-${{ hashFiles('xmake.lua') }}-${{ hashFiles('vcpkg.json', 'ports/*/vcpkg.json') }}
+        restore-keys: |
+          ${{ runner.os }}-vcpkg-
+
+    - name: Install xmake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: latest
+
+    - name: Install Dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          pkg-config \
+          libuv1-dev \
+          luajit \
+          libluajit-5.1-dev \
+          libsqlite3-dev \
+          libpq-dev \
+          default-libmysqlclient-dev
+
+    - name: Install Dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install pkg-config libuv luajit libpq mysql-client coreutils
+        echo "PKG_CONFIG_PATH=$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mysql-client)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+
+    - name: Setup vcpkg (Windows)
+      if: runner.os == 'Windows'
+      uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgGitCommitId: '66c0373dc7fca549e5803087b9487edfe3aca0a1'
+      env:
+        VCPKG_BINARY_SOURCES: 'clear;nuget,readwrite'
+
+    - name: Install Dependencies (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        vcpkg install libuv:x64-windows
+        vcpkg install luajit:x64-windows
+        vcpkg install sqlite3:x64-windows
+
+    - name: Configure EasyMem + ASAN (Unix)
+      if: runner.os != 'Windows'
+      run: xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n --asan=y --easy_memory=y -y
+
+    - name: Configure EasyMem + ASAN (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $env:VCPKG_ROOT = "${{ github.workspace }}/vcpkg"
+        $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
+        $env:CL = "/MP"
+        $env:CI = "true"
+        xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n --asan=y --easy_memory=y -y
+
+    - name: Build Core + DB Drivers (EasyMem + ASAN)
+      if: runner.os != 'Windows'
+      run: |
+        xmake build lunet-bin
+        xmake build lunet-sqlite3
+        xmake build lunet-mysql
+        xmake build lunet-postgres
+
+    - name: Build Core + SQLite Driver (EasyMem + ASAN, Windows)
+      if: runner.os == 'Windows'
+      run: |
+        xmake build lunet-bin
+        xmake build lunet-sqlite3
+
+    - name: Run light DB stress (Unix)
+      if: runner.os != 'Windows'
+      env:
+        LSAN_OPTIONS: exitcode=0:print_suppressions=0
+        LSAN_LEAK_BUDGET_ALLOCS: "4"
+      run: |
+        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
+        TIMEOUT_BIN=$(command -v gtimeout || command -v timeout)
+        "$TIMEOUT_BIN" 60 env ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 LIGHT_DB_STRESS_OPS=20 "$LUNET_BIN" test/ci_easy_memory_db_stress.lua
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          LSAN_LOG="$RUNNER_TEMP/lsan_regression.log"
+          set +e
+          "$TIMEOUT_BIN" 60 env ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 LSAN_STRESS_ITERATIONS=10 "$LUNET_BIN" test/ci_easy_memory_lsan_regression.lua >"$LSAN_LOG" 2>&1
+          LSAN_RC=$?
+          set -e
+          luajit test/ci_lsan_leak_budget.lua "$LSAN_LOG"
+          if [ "$LSAN_RC" -ne 0 ]; then
+            exit "$LSAN_RC"
+          fi
+        else
+          echo "Skipping LSAN regression on $RUNNER_OS (Linux remains strict gate)."
+        fi
+
+    - name: Run light DB stress (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $env:LIGHT_DB_STRESS_OPS = "20"
+        $script = Join-Path $env:GITHUB_WORKSPACE "test/ci_easy_memory_db_stress.lua"
+        xmake run lunet-bin $script
+
+    - name: Configure EasyMem experimental release (Unix)
+      if: runner.os != 'Windows'
+      run: xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y
+
+    - name: Configure EasyMem experimental release (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $env:VCPKG_ROOT = "${{ github.workspace }}/vcpkg"
+        $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
+        $env:CL = "/MP"
+        $env:CI = "true"
+        xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y
+
+    - name: Build Core + DB Drivers (EasyMem experimental, Unix)
+      if: runner.os != 'Windows'
+      run: |
+        xmake build lunet-bin
+        xmake build lunet-sqlite3
+        xmake build lunet-mysql
+        xmake build lunet-postgres
+
+    - name: Build Core + SQLite Driver (EasyMem experimental, Windows)
+      if: runner.os == 'Windows'
+      run: |
+        xmake build lunet-bin
+        xmake build lunet-sqlite3
+
   publish-release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))
-    needs: build
+    needs: [build, easy-memory]
     runs-on: ubuntu-latest
     steps:
     - name: Checkout

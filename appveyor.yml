@@ -16,5 +16,5 @@ install:
 build_script:
   - cmd: git --version
   - cmd: if not exist xmake.lua exit /b 1
-  - cmd: if not exist src\main.c exit /b 1
+  - cmd: if not exist src\\main.c exit /b 1
   - cmd: echo AppVeyor script-mode sanity checks passed

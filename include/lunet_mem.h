@@ -52,6 +52,7 @@ typedef struct {
 extern lunet_mem_state_t lunet_mem_state;
 
 void lunet_mem_init(void);
+void lunet_mem_shutdown(void);
 void lunet_mem_summary(void);
 void lunet_mem_assert_balanced(const char *context);
 
@@ -79,6 +80,7 @@ void  lunet_mem_free_impl(void *ptr, const char *file, int line);
 #define lunet_free_nonnull(ptr)    free(ptr)
 
 static inline void lunet_mem_init(void) {}
+static inline void lunet_mem_shutdown(void) {}
 static inline void lunet_mem_summary(void) {}
 static inline void lunet_mem_assert_balanced(const char *context) { (void)context; }
 

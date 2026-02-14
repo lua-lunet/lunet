@@ -12,6 +12,31 @@
 
 #define LUNET_MYSQL_CONN_MT "lunet.mysql.conn"
 
+static int g_mysql_library_initialized = 0;
+static int g_mysql_library_shutdown_registered = 0;
+
+static void lunet_mysql_library_shutdown(void) {
+  if (!g_mysql_library_initialized) {
+    return;
+  }
+  mysql_library_end();
+  g_mysql_library_initialized = 0;
+}
+
+static int lunet_mysql_library_ensure(void) {
+  if (g_mysql_library_initialized) {
+    return 0;
+  }
+  if (mysql_library_init(0, NULL, NULL) != 0) {
+    return -1;
+  }
+  g_mysql_library_initialized = 1;
+  if (!g_mysql_library_shutdown_registered && atexit(lunet_mysql_library_shutdown) == 0) {
+    g_mysql_library_shutdown_registered = 1;
+  }
+  return 0;
+}
+
 static char* lunet_strdup_local(const char* s) {
   if (!s) return NULL;
   size_t len = strlen(s);
@@ -277,6 +302,10 @@ static int bind_params(MYSQL_STMT* stmt, MYSQL_BIND* bind, param_t* params, int 
 
 int lunet_db_open(lua_State* L) {
   if (lunet_ensure_coroutine(L, "db.open")) {
+    return lua_error(L);
+  }
+  if (lunet_mysql_library_ensure() != 0) {
+    lua_pushstring(L, "db.open: mysql_library_init failed");
     return lua_error(L);
   }
   if (lua_gettop(L) < 1 || !lua_istable(L, 1)) {

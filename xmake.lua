@@ -502,6 +502,41 @@ local function lunet_runner_path(mode)
     return matches[1]
 end
 
+local function lunet_quote(s)
+    return "\"" .. tostring(s):gsub("\"", "\\\"") .. "\""
+end
+
+local function lunet_new_logdir(osmod, suite)
+    local stamp = os.date("%Y%m%d_%H%M%S")
+    local base = path.join(".tmp", "logs", stamp)
+    if suite and #suite > 0 then
+        base = path.join(base, suite)
+    end
+    local candidate = base
+    local idx = 1
+    while osmod.isdir(candidate) do
+        candidate = base .. "_" .. tostring(idx)
+        idx = idx + 1
+    end
+    if is_host("windows") then
+        osmod.execv("cmd", {"/C", "if not exist " .. lunet_quote(candidate) .. " mkdir " .. lunet_quote(candidate)})
+    else
+        osmod.execv("bash", {"-lc", "mkdir -p " .. lunet_quote(candidate)})
+    end
+    return candidate
+end
+
+local function lunet_exec_logged(osmod, logdir, name, command)
+    local logfile = path.join(logdir, name .. ".log")
+    print("$ " .. command)
+    local wrapped = command .. " > " .. lunet_quote(logfile) .. " 2>&1"
+    if is_host("windows") then
+        osmod.execv("cmd", {"/C", wrapped})
+    else
+        osmod.execv("bash", {"-lc", wrapped})
+    end
+end
+
 task("init")
     set_menu {
         usage = "xmake init",
@@ -576,6 +611,41 @@ task("build-easy-memory-experimental")
         local arena_mb = os.getenv("EASY_MEMORY_ARENA_MB") or "128"
         os.exec("xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=" .. arena_mb .. " -y")
         os.exec("xmake build")
+    end)
+task_end()
+
+task("preflight-easy-memory")
+    set_menu {
+        usage = "xmake preflight-easy-memory",
+        description = "Run local EasyMem+ASan preflight smoke with logs"
+    }
+    on_run(function ()
+        local ops = os.getenv("LIGHT_DB_STRESS_OPS") or "20"
+        local logdir = lunet_new_logdir(os, "easy_memory_preflight")
+        print("EasyMem preflight logs: " .. logdir)
+
+        lunet_exec_logged(os, logdir, "01_configure_debug_easy_memory_asan",
+            "xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n --asan=y --easy_memory=y -y")
+        lunet_exec_logged(os, logdir, "02_build_lunet_bin", "xmake build lunet-bin")
+        lunet_exec_logged(os, logdir, "03_build_lunet_sqlite3", "xmake build lunet-sqlite3")
+        lunet_exec_logged(os, logdir, "04_build_lunet_mysql", "xmake build lunet-mysql")
+        lunet_exec_logged(os, logdir, "05_build_lunet_postgres", "xmake build lunet-postgres")
+
+        local runner = lunet_runner_path("debug")
+        local runnerq = lunet_quote(runner)
+        if is_host("windows") then
+            lunet_exec_logged(os, logdir, "06_ci_easy_memory_db_stress",
+                "set ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 && set LIGHT_DB_STRESS_OPS=" .. ops .. " && " .. runnerq .. " test/ci_easy_memory_db_stress.lua")
+            lunet_exec_logged(os, logdir, "07_ci_easy_memory_lsan_regression",
+                "set ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 && " .. runnerq .. " test/ci_easy_memory_lsan_regression.lua")
+        else
+            lunet_exec_logged(os, logdir, "06_ci_easy_memory_db_stress",
+                "ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 LIGHT_DB_STRESS_OPS=" .. ops .. " timeout 120 " .. runnerq .. " test/ci_easy_memory_db_stress.lua")
+            lunet_exec_logged(os, logdir, "07_ci_easy_memory_lsan_regression",
+                "ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 timeout 120 " .. runnerq .. " test/ci_easy_memory_lsan_regression.lua")
+        end
+
+        print("EasyMem preflight passed. Logs: " .. logdir)
     end)
 task_end()
 
@@ -677,12 +747,13 @@ task_end()
 task("release")
     set_menu {
         usage = "xmake release",
-        description = "Run lint + test + stress, then build release"
+        description = "Run lint + test + stress + EasyMem preflight, then build release"
     }
     on_run(function ()
         os.exec("xmake lint")
         os.exec("xmake test")
         os.exec("xmake stress")
+        os.exec("xmake preflight-easy-memory")
         os.exec("xmake build-release")
     end)
 task_end()

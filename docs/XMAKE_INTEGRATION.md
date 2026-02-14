@@ -83,6 +83,23 @@ This catches most lifecycle and coroutine issues early.
 
 ---
 
+## Local Preflight Safety Gate (run before pushing)
+
+Use the built-in EasyMem preflight task to run the same fast leak/smoke checks locally that CI uses for the EasyMem+ASan profile:
+
+```bash
+xmake preflight-easy-memory
+```
+
+What it does:
+- configures `debug + trace + ASan + EasyMem`
+- builds `lunet-bin` and DB modules (MySQL/Postgres optional if deps are missing locally)
+- runs `test/ci_easy_memory_db_stress.lua`
+- runs `test/ci_easy_memory_lsan_regression.lua`
+- writes all step logs to `.tmp/logs/YYYYMMDD_HHMMSS/easy_memory_preflight/`
+
+---
+
 ## EasyMem Opt-In Modes
 
 Lunet supports [EasyMem/easy_memory](https://github.com/EasyMem/easy_memory) as an allocator backend.

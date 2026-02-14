@@ -273,6 +273,7 @@ jobs:
       run: |
         LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
         timeout 60 env LIGHT_DB_STRESS_OPS=20 "$LUNET_BIN" test/ci_easy_memory_db_stress.lua
+        timeout 60 "$LUNET_BIN" test/ci_easy_memory_lsan_regression.lua
 
     - name: Run light DB stress (Windows)
       if: runner.os == 'Windows'

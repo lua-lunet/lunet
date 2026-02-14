@@ -14,6 +14,18 @@ You MUST NOT do any git reset or stash or an git rm or rm or anything that might
 4.  **SECURE BINDING:** Never bind to `0.0.0.0` or public interfaces. Use Unix sockets (preferred) or `127.0.0.1` (development). Only bypass this rule if the user explicitly requests it via CLI flag `--dangerously-skip-loopback-restriction`.
 5.  **MANDATORY LOCAL CI PARITY BEFORE PUSH:** Before any push, agents MUST run locally all steps from `.github/workflows/build.yml` for their current OS matrix entry (Linux/macOS/Windows), including configure, build, and packaging commands. If any required step cannot be run locally or fails, do not push until fixed or explicitly approved by the user.
 
+## Internationalisation Parity (STRICT)
+
+All user-facing documentation MUST be kept in sync between English and Chinese (简体中文).  When you create or modify any of the files below, you MUST create or update its counterpart:
+
+| English | Chinese |
+|---------|---------|
+| `README.md` | `README-CN.md` |
+| `PAXE.md` | `PAXE-CN.md` |
+| `docs/*.md` | `docs/*-CN.md` (same basename with `-CN` suffix) |
+
+This includes badges, links, examples, and section structure.  A missing or stale translation is a build-quality defect.
+
 ## Release Quality Gate (STRICT)
 
 Before creating or announcing a release:

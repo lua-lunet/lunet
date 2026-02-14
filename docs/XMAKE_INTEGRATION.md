@@ -74,7 +74,8 @@ luajit -e 'local lunet=require("lunet"); print(type(lunet))'
 | **Release** | Production, best performance | `xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n -y` |
 | **Debug + trace** | Development, catches bugs | `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n -y` |
 | **Verbose trace** | Detailed debugging, logs every event | `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=y -y` |
-| **ASan** | Memory bugs (use-after-free, leaks) | `xmake f -c -m debug --lunet_trace=y --asan=y -y` |
+| **ASan + EasyMem** | Memory bugs (ASan + allocator integrity diagnostics) | `xmake f -c -m debug --lunet_trace=y --asan=y -y` |
+| **Experimental EasyMem Release** | Release binary with allocator diagnostics | `xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y` |
 
 **Tip:** Use `-c` to force a clean reconfigure when switching profiles.
 
@@ -87,9 +88,66 @@ If your app uses Lunet and you run CI (e.g. GitHub Actions), test with these pro
 1. **Release** — `--lunet_trace=n --lunet_verbose_trace=n`
 2. **Debug trace** — `--lunet_trace=y --lunet_verbose_trace=n`
 3. **Verbose trace** — `--lunet_trace=y --lunet_verbose_trace=y`
-4. **ASan** — `--asan=y --lunet_trace=y`
+4. **ASan + EasyMem** — `--asan=y --lunet_trace=y`
 
 This catches most lifecycle and coroutine issues early.
+
+---
+
+## Local Preflight Safety Gate (run before pushing)
+
+Use the built-in EasyMem preflight task to run the same fast leak/smoke checks locally that CI uses for the EasyMem+ASan profile:
+
+```bash
+xmake preflight-easy-memory
+```
+
+What it does:
+- configures `debug + trace + ASan + EasyMem`
+- builds `lunet-bin` and DB modules (MySQL/Postgres optional if deps are missing locally)
+- runs `test/ci_easy_memory_db_stress.lua`
+- runs `test/ci_easy_memory_lsan_regression.lua`
+- writes all step logs to `.tmp/logs/YYYYMMDD_HHMMSS/easy_memory_preflight/`
+
+---
+
+## EasyMem Opt-In Modes
+
+Lunet supports [EasyMem/easy_memory](https://github.com/EasyMem/easy_memory) as an allocator backend.
+
+### Automatic enablement
+
+EasyMem is enabled automatically when either of these is enabled:
+- `--lunet_trace=y`
+- `--asan=y`
+
+### Manual opt-in
+
+Enable EasyMem explicitly without enabling trace:
+
+```bash
+xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory=y -y
+xmake build
+```
+
+### Experimental release mode
+
+Enable full diagnostics in release for allocator analysis:
+
+```bash
+xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y
+xmake build
+```
+
+### Arena sizing
+
+Tune EasyMem arena capacity in MB:
+
+```bash
+xmake f --easy_memory_arena_mb=256 -y
+```
+
+Default is `128` MB (minimum clamped to `8` MB).
 
 ---
 
@@ -98,10 +156,12 @@ This catches most lifecycle and coroutine issues early.
 For deep memory debugging (LuaJIT + Lunet both instrumented), use the macOS-only helpers:
 
 ```bash
-make luajit-asan
-make build-debug-asan-luajit
-make repro-50-asan-luajit
+xmake luajit-asan
+xmake build-debug-asan-luajit
+xmake repro-50-asan-luajit
 ```
+
+These helpers configure `--asan=y --lunet_trace=y`, so EasyMem is also enabled automatically.
 
 LuaJIT version pins are in `xmake.lua`. Override if needed:
 
@@ -120,6 +180,7 @@ xmake f --luajit_snapshot=2.1.0+openresty20250117 --luajit_debian_version=2.1.0+
 | `luajit not found` | Install: `apt install libluajit-5.1-dev` (Linux), `brew install luajit` (macOS) |
 | Build fails after changing options | Run `xmake f -c -y` then reconfigure |
 | Wrong architecture | Use `xmake f -a arm64` (or `x64`) to target a specific arch |
+| `--asan=y` fails on a specific Windows toolchain | Ensure your MSVC/clang-cl version supports `/fsanitize=address` |
 
 ---
 

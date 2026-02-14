@@ -35,15 +35,12 @@ Lunet 数据库驱动是**协程安全的**：
 ## 构建
 
 ```bash
-# 配置并构建核心运行时
-xmake f -m release --lunet_trace=n --lunet_verbose_trace=n -y
-xmake build
+# 默认 SQLite 构建
+xmake build-release
 
-# 可选：只构建你需要的数据库驱动
-xmake build lunet-sqlite3   # 或 lunet-mysql / lunet-postgres
+# 调试模式构建（启用追踪）
+xmake build-debug
 ```
-
-如果更习惯 Makefile：`make build` 与 `make build-debug` 是对相同 xmake 流程的封装。
 
 ## 示例应用
 
@@ -178,13 +175,13 @@ db.close(conn)
 
 ## 安全性：零开销追踪
 
-使用 `make build-debug` 构建可启用协程引用追踪和栈完整性检查。运行时会在检测到泄漏或栈污染时触发断言并崩溃。
+使用 `xmake build-debug` 构建可启用协程引用追踪和栈完整性检查。运行时会在检测到泄漏或栈污染时触发断言并崩溃。
 
 ## 测试
 
 ```bash
-make test    # 单元测试
-make stress  # 带追踪的并发负载测试
+xmake test    # 单元测试
+xmake stress  # 带追踪的并发负载测试
 ```
 
 ## 许可证

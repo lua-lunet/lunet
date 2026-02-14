@@ -4,6 +4,8 @@ A high-performance coroutine-based networking library for LuaJIT, built on top o
 
 [中文文档](README-CN.md)
 
+[![EasyMem](https://img.shields.io/badge/EasyMem-easy__memory-7C3AED?logo=github)](https://github.com/EasyMem/easy_memory)
+
 > This project is based on [xialeistudio/lunet](https://github.com/xialeistudio/lunet) by [夏磊 (Xia Lei)](https://github.com/xialeistudio). See also his excellent write-up: [Lunet: Design and Implementation of a High-Performance Coroutine Network Library](https://www.ddhigh.com/en/2025/07/12/lunet-high-performance-coroutine-network-library/).
 
 ## Philosophy: No Bloat, No Kitchen Sink
@@ -35,15 +37,21 @@ If you use raw FFI database bindings inside a lunet application, you lose all th
 ## Build
 
 ```bash
-# Configure + build core runtime
-xmake f -m release --lunet_trace=n --lunet_verbose_trace=n -y
-xmake build
+# Default SQLite build
+xmake build-release
 
-# Optional: build ONLY the database driver you need
-xmake build lunet-sqlite3   # or lunet-mysql / lunet-postgres
+# Build with tracing (debug mode)
+xmake build-debug
 ```
 
-Prefer Makefile wrappers? `make build` and `make build-debug` call the same xmake flow.
+### Experimental release with EasyMem
+
+```bash
+xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y
+xmake build
+```
+
+`easy_memory_experimental` is opt-in and intended for diagnostics-heavy release experiments.
 
 ## Example: MCP-SSE Server
 
@@ -79,9 +87,8 @@ echo "TAVILY_API_KEY=your_key" > .env
 First build the runner:
 
 ```bash
-xmake f -m release --lunet_trace=n --lunet_verbose_trace=n -y
-xmake build
-LUNET_BIN="build/$(xmake l print(os.host()))/$(xmake l print(os.arch()))/release/lunet-run"
+xmake build-release
+LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1)
 ```
 
 | # | Example | What it shows | Requires | Run |
@@ -225,7 +232,7 @@ db.close(conn)
 
 ## Safety: Zero-Cost Tracing
 
-Build with `make build-debug` to enable coroutine reference tracking and stack integrity checks. The runtime will assert and crash on leaks or stack pollution.
+Build with `xmake build-debug` to enable coroutine reference tracking and stack integrity checks. The runtime will assert and crash on leaks or stack pollution.
 
 ## Debugging
 
@@ -236,8 +243,8 @@ Lunet has a layered debugging strategy for runtime crashes. Use them in order �
 | Level | Tool | What it catches | Build command |
 |-------|------|----------------|---------------|
 | 1 | Domain tracing | Logic errors, sequence of operations | `xmake f --lunet_trace=y --lunet_verbose_trace=y` |
-| 2 | Memory tracing | UAF, double-free, leaks, buffer overflows | `xmake f --lunet_trace=y` (automatic) |
-| 3 | Address Sanitizer | All memory errors with exact stack traces | `xmake f -m debug --asan=y` |
+| 2 | Memory tracing + EasyMem | UAF, double-free, leaks, allocator integrity | `xmake f --lunet_trace=y` (EasyMem auto-enabled) |
+| 3 | Address Sanitizer + EasyMem | Compiler-level memory errors plus allocator diagnostics | `xmake f -m debug --asan=y` |
 | 4 | lldb / core dumps | Register-level inspection, full backtraces | `lldb -- ./build/.../lunet-run app.lua` |
 
 ### Domain Tracing (Level 1)
@@ -262,6 +269,8 @@ xmake build lunet-bin
 ./build/.../lunet-run app.lua 2> asan.log
 ```
 
+With `--asan=y`, Lunet now also enables the EasyMem backend with diagnostic mode (`LUNET_EASY_MEMORY_DIAGNOSTICS`) so allocator-level integrity checks and profiling output run alongside ASan.
+
 ASan output goes to stderr. The process exits with `Abort trap: 6` instead of `Segmentation fault: 11`. Look for `ERROR: AddressSanitizer:` in the log.
 
 #### Full LuaJIT + Lunet ASan (Debian Trixie source)
@@ -269,10 +278,12 @@ ASan output goes to stderr. The process exits with `Abort trap: 6` instead of `S
 To instrument both Lunet and LuaJIT (not just Lunet C code), build the OpenResty LuaJIT source package used by Debian Trixie and link Lunet against it:
 
 ```bash
-make luajit-asan
-make build-debug-asan-luajit
-make repro-50-asan-luajit
+xmake luajit-asan
+xmake build-debug-asan-luajit
+xmake repro-50-asan-luajit
 ```
+
+These helper targets now inherit EasyMem automatically because they configure `--asan=y --lunet_trace=y`.
 
 This uses Debian source package `luajit_2.1.0+openresty20250117-2` and installs a local ASan LuaJIT into `.tmp/luajit-asan/install/2.1.0+openresty20250117/`.
 
@@ -295,7 +306,7 @@ export ASAN_SYMBOLIZER_PATH="$(xcrun --find llvm-symbolizer)"
 export ASAN_OPTIONS="abort_on_error=1,halt_on_error=1,fast_unwind_on_malloc=0,detect_leaks=0"
 ```
 
-If `make luajit-asan` fails with `missing: export MACOSX_DEPLOYMENT_TARGET=XX.YY`, set:
+If `xmake luajit-asan` fails with `missing: export MACOSX_DEPLOYMENT_TARGET=XX.YY`, set:
 
 ```bash
 export MACOSX_DEPLOYMENT_TARGET="$(sw_vers -productVersion | awk -F. '{print $1 "." $2}')"
@@ -306,14 +317,14 @@ export MACOSX_DEPLOYMENT_TARGET="$(sw_vers -productVersion | awk -F. '{print $1 
 Do not rely only on edge tracing to infer the fault location. First try to make LuaJIT/Lunet crash immediately under ASan:
 
 ```bash
-make build-debug-asan-luajit
-make repro-50-asan-luajit
+xmake build-debug-asan-luajit
+xmake repro-50-asan-luajit
 ```
 
 If the bug is timing-sensitive, run more iterations:
 
 ```bash
-ITERATIONS=100 REQUESTS=100 CONCURRENCY=8 WORKERS=8 make repro-50-asan-luajit
+ITERATIONS=100 REQUESTS=100 CONCURRENCY=8 WORKERS=8 xmake repro-50-asan-luajit
 ```
 
 To reduce JIT-side nondeterminism while isolating yield/resume bookkeeping bugs, disable JIT in the repro Lua entrypoint:
@@ -348,19 +359,21 @@ If a crash happens inside `lua_rawgeti` from a libuv callback, it often means th
 
 ### Memory Tracing
 
-When `LUNET_TRACE` is enabled, all allocations through `lunet_alloc()` / `lunet_free()` are tracked with canary headers and poison-on-free. At shutdown, `lunet_mem_assert_balanced()` checks for leaks. Use `lunet_alloc` / `lunet_free` instead of raw `malloc` / `free` in all lunet C code.
+When `LUNET_TRACE` is enabled, all allocations through `lunet_alloc()` / `lunet_free()` are tracked with canary headers and poison-on-free. EasyMem is also enabled automatically in trace builds, providing allocator-level integrity checks and memory usage visualization. At shutdown, `lunet_mem_assert_balanced()` checks for leaks. Use `lunet_alloc` / `lunet_free` instead of raw `malloc` / `free` in all lunet C code.
 
 ## Testing
 
 ```bash
-make test    # Unit tests
-make stress  # Concurrent load test with tracing
+xmake test    # Unit tests
+xmake stress  # Concurrent load test with tracing
+xmake preflight-easy-memory  # Local EasyMem+ASan smoke/regression gate (logs in .tmp/logs/)
 ```
 
 ## Downstream Integration
 
 - **[Integration guide](docs/XMAKE_INTEGRATION.md)** — Build Lunet and integrate it into your project (beginner-friendly)
 - **[Badge guide](docs/BADGES.md)** — Add badges (build status, Lunet version) to your project README
+- **[EasyMem report](docs/EASY_MEMORY_REPORT.md)** — Profiling findings and next-step memory recommendations
 
 ## License
 

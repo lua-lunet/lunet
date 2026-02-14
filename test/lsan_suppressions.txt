@@ -1,0 +1,12 @@
+# LeakSanitizer suppressions for lunet CI.
+#
+# These suppress known false-positive leaks from third-party C++ libraries
+# (e.g. libmysqlclient pulls in libstdc++ which performs one-time allocations
+# that are never freed but are NOT leaks in our code).
+
+# libstdc++ internal one-time C++ runtime allocations (locale facets, etc.)
+leak:libstdc++
+
+# MySQL client library internal allocations (C++ based)
+leak:libmysqlclient
+leak:libmariadb

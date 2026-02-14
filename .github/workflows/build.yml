@@ -232,7 +232,7 @@ jobs:
     - name: Install Dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        brew install pkg-config libuv luajit libpq mysql-client
+        brew install pkg-config libuv luajit libpq mysql-client coreutils
         echo "PKG_CONFIG_PATH=$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mysql-client)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
 
     - name: Setup vcpkg (Windows)

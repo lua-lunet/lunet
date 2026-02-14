@@ -10,6 +10,22 @@ set_languages("c99")
 
 add_rules("mode.debug", "mode.release")
 
+-- Run C safety lint automatically before any target build.
+-- This keeps lint enforcement on the standard xmake path (xmake build, xmake run, etc).
+local c_safety_lint_ran = false
+
+rule("lunet.c_safety_lint")
+    before_build(function ()
+        if c_safety_lint_ran then
+            return
+        end
+        c_safety_lint_ran = true
+        local root = os.projectdir()
+        local lint_script = path.join(root, "bin", "lint_c_safety.lua")
+        os.execv("xmake", {"lua", lint_script}, {curdir = root})
+    end)
+rule_end()
+
 -- Debug tracing option (enables LUNET_TRACE for coroutine debugging)
 -- NOTE: Do not name this option "trace" because xmake reserves --trace.
 option("lunet_trace")
@@ -111,7 +127,11 @@ local function lunet_easy_memory_arena_bytes()
     return math.floor(arena_mb * 1024 * 1024)
 end
 
-local function lunet_apply_asan_flags()
+-- target_kind: "binary" or "shared". On macOS, shared libraries are built as
+-- bundles with -undefined dynamic_lookup, so they must NOT link the ASAN
+-- runtime directly; the symbols are resolved at load time from the host
+-- binary.  On Linux and Windows, shared libs link ASAN normally.
+local function lunet_apply_asan_flags(target_kind)
     if not has_config("asan") then
         return
     end
@@ -126,6 +146,12 @@ local function lunet_apply_asan_flags()
         return
     end
     add_cflags("-fsanitize=address", "-fno-omit-frame-pointer", {force = true})
+    -- On macOS, shared libraries are bundles with -undefined dynamic_lookup.
+    -- ASAN runtime symbols will be resolved from the host binary at load time,
+    -- so we must NOT add -fsanitize=address to ldflags for bundles.
+    if is_plat("macosx") and target_kind == "shared" then
+        return
+    end
     add_ldflags("-fsanitize=address", {force = true})
 end
 
@@ -191,6 +217,7 @@ end
 -- Shared library target for require("lunet")
 target("lunet")
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     
     -- Platform-specific module naming
     set_prefixname("")
@@ -203,7 +230,7 @@ target("lunet")
     add_files(core_sources)
     add_includedirs("include", {public = true})
     add_packages("luajit", "libuv")
-    lunet_apply_asan_flags()
+    lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
 
     -- Build as a Lua C module (no CLI entrypoint)
@@ -245,12 +272,13 @@ target_end()
 -- Standalone executable target for ./lunet-run script.lua
 target("lunet-bin")
     set_kind("binary")
+    add_rules("lunet.c_safety_lint")
     set_basename("lunet-run")  -- Avoid conflict with lunet/ driver directory
     
     add_files(core_sources)
     add_includedirs("include", {public = true})
     add_packages("luajit", "libuv")
-    lunet_apply_asan_flags()
+    lunet_apply_asan_flags("binary")
     lunet_apply_easy_memory()
     
     -- Linux: system libs
@@ -287,6 +315,7 @@ target_end()
 target("lunet-sqlite3")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("sqlite3")  -- Output: lunet/sqlite3.so
     set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
@@ -300,7 +329,7 @@ target("lunet-sqlite3")
     add_files("ext/sqlite3/sqlite3.c")
     add_includedirs("include", "ext/sqlite3", {public = true})
     add_packages("luajit", "libuv", "sqlite3")
-    lunet_apply_asan_flags()
+    lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_SQLITE3")
     
@@ -330,6 +359,7 @@ target_end()
 target("lunet-mysql")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("mysql")  -- Output: lunet/mysql.so
     set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
@@ -343,7 +373,7 @@ target("lunet-mysql")
     add_files("ext/mysql/mysql.c")
     add_includedirs("include", "ext/mysql", {public = true})
     add_packages("luajit", "libuv", "mysql")
-    lunet_apply_asan_flags()
+    lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_MYSQL")
     
@@ -373,6 +403,7 @@ target_end()
 target("lunet-postgres")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("postgres")  -- Output: lunet/postgres.so
     set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
@@ -386,7 +417,7 @@ target("lunet-postgres")
     add_files("ext/postgres/postgres.c")
     add_includedirs("include", "ext/postgres", {public = true})
     add_packages("luajit", "libuv", "pq")
-    lunet_apply_asan_flags()
+    lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_POSTGRES")
 
@@ -420,6 +451,7 @@ target_end()
 target("lunet-paxe")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("paxe")  -- Output: lunet/paxe.so
     set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
@@ -436,7 +468,7 @@ target("lunet-paxe")
     -- CRITICAL: Fail fast if libsodium is not available
     add_packages("luajit", "libuv", {public = true})
     add_packages("sodium")  -- Will fail at config time if not found (no optional = true)
-    lunet_apply_asan_flags()
+    lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
 
     add_defines("LUNET_NO_MAIN", "LUNET_PAXE")
@@ -611,6 +643,7 @@ task("preflight-easy-memory")
 
         local runner = lunet_runner_path("debug")
         local runnerq = lunet_quote(runner)
+        local lsan_supp = "LSAN_OPTIONS=suppressions=test/lsan_suppressions.txt"
         if is_host("windows") then
             lunet_exec_logged(os, logdir, "06_ci_easy_memory_db_stress",
                 "set ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 && set LIGHT_DB_STRESS_OPS=" .. ops .. " && " .. runnerq .. " test/ci_easy_memory_db_stress.lua")
@@ -618,9 +651,9 @@ task("preflight-easy-memory")
                 "set ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 && " .. runnerq .. " test/ci_easy_memory_lsan_regression.lua")
         else
             lunet_exec_logged(os, logdir, "06_ci_easy_memory_db_stress",
-                "ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 LIGHT_DB_STRESS_OPS=" .. ops .. " timeout 120 " .. runnerq .. " test/ci_easy_memory_db_stress.lua")
+                lsan_supp .. " ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 LIGHT_DB_STRESS_OPS=" .. ops .. " timeout 120 " .. runnerq .. " test/ci_easy_memory_db_stress.lua")
             lunet_exec_logged(os, logdir, "07_ci_easy_memory_lsan_regression",
-                "ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 timeout 120 " .. runnerq .. " test/ci_easy_memory_lsan_regression.lua")
+                lsan_supp .. " ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 timeout 120 " .. runnerq .. " test/ci_easy_memory_lsan_regression.lua")
         end
 
         print("EasyMem preflight passed. Logs: " .. logdir)

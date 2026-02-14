@@ -280,6 +280,8 @@ jobs:
 
     - name: Run light DB stress (Unix)
       if: runner.os != 'Windows'
+      env:
+        LSAN_OPTIONS: suppressions=${{ github.workspace }}/test/lsan_suppressions.txt
       run: |
         LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
         timeout 60 env ASAN_OPTIONS=detect_leaks=0 LIGHT_DB_STRESS_OPS=20 "$LUNET_BIN" test/ci_easy_memory_db_stress.lua

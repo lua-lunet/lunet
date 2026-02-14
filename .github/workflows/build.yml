@@ -305,10 +305,8 @@ jobs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
-        if (-not $lunet) { throw "lunet-run.exe not found" }
         $env:LIGHT_DB_STRESS_OPS = "20"
-        & $lunet.FullName test/ci_easy_memory_db_stress.lua
+        xmake run lunet-bin test/ci_easy_memory_db_stress.lua
 
     - name: Configure EasyMem experimental release (Unix)
       if: runner.os != 'Windows'

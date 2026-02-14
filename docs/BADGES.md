@@ -7,10 +7,10 @@ If your project uses Lunet, you can add badges to your README to show build stat
 Show which version of Lunet your project depends on:
 
 ```markdown
-[![Lunet](https://img.shields.io/badge/Lunet-v0.1.0-blue?logo=lua)](https://github.com/lua-lunet/lunet)
+[![Lunet](https://img.shields.io/badge/Lunet-v0.2.1-blue?logo=lua)](https://github.com/lua-lunet/lunet)
 ```
 
-Replace `v0.1.0` with your actual Lunet version. For the latest release, check [lunet releases](https://github.com/lua-lunet/lunet/releases).
+Replace `v0.2.1` with your actual Lunet version. For the latest release, check [lunet releases](https://github.com/lua-lunet/lunet/releases).
 
 ## Build Status Badge
 
@@ -36,7 +36,7 @@ A typical README header for a Lunet-based project:
 # My Lunet App
 
 [![Build](https://github.com/lua-lunet/my-app/actions/workflows/build.yml/badge.svg)](https://github.com/lua-lunet/my-app/actions/workflows/build.yml)
-[![Lunet](https://img.shields.io/badge/Lunet-v0.1.0-blue?logo=lua)](https://github.com/lua-lunet/lunet)
+[![Lunet](https://img.shields.io/badge/Lunet-v0.2.1-blue?logo=lua)](https://github.com/lua-lunet/lunet)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A high-performance app built with [Lunet](https://github.com/lua-lunet/lunet).
@@ -51,7 +51,7 @@ A high-performance app built with [Lunet](https://github.com/lua-lunet/lunet).
 Example with flat-square style:
 
 ```markdown
-[![Lunet](https://img.shields.io/badge/Lunet-v0.1.0-blue?style=flat-square&logo=lua)](https://github.com/lua-lunet/lunet)
+[![Lunet](https://img.shields.io/badge/Lunet-v0.2.1-blue?style=flat-square&logo=lua)](https://github.com/lua-lunet/lunet)
 ```
 
 ## Linking to Lunet
@@ -59,5 +59,5 @@ Example with flat-square style:
 Always link the badge to the Lunet repository so users can discover the library:
 
 ```markdown
-[![Lunet](https://img.shields.io/badge/Lunet-v0.1.0-blue)](https://github.com/lua-lunet/lunet)
+[![Lunet](https://img.shields.io/badge/Lunet-v0.2.1-blue)](https://github.com/lua-lunet/lunet)
 ```

@@ -5,10 +5,26 @@
 -- The include/lunet_lua.h header enforces this at compile time.
 
 set_project("lunet")
-set_version("0.1.0")
+set_version("0.2.0")
 set_languages("c99")
 
 add_rules("mode.debug", "mode.release")
+
+-- Run C safety lint automatically before any target build.
+-- This keeps lint enforcement on the standard xmake path (xmake build, xmake run, etc).
+local c_safety_lint_ran = false
+
+rule("lunet.c_safety_lint")
+    before_build(function ()
+        if c_safety_lint_ran then
+            return
+        end
+        c_safety_lint_ran = true
+        local root = os.projectdir()
+        local lint_script = path.join(root, "bin", "lint_c_safety.lua")
+        os.execv("xmake", {"lua", lint_script}, {curdir = root})
+    end)
+rule_end()
 
 -- Debug tracing option (enables LUNET_TRACE for coroutine debugging)
 -- NOTE: Do not name this option "trace" because xmake reserves --trace.
@@ -140,10 +156,23 @@ local function lunet_apply_easy_memory()
         add_defines("LUNET_EASY_MEMORY_DIAGNOSTICS")
     end
 end
+-- Embedded Lua scripts option (release-only, opt-in)
+option("lunet_embed_scripts")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Embed a Lua script tree into lunet-run as compressed data (release mode only)")
+option_end()
 
+option("lunet_embed_scripts_dir")
+    set_default("lua")
+    set_showmenu(true)
+    set_description("Lua script directory to embed when lunet_embed_scripts is enabled")
+option_end()
 -- Common source files for core lunet
 local core_sources = {
     "src/main.c",
+    "src/embed_scripts.c",
+    "src/embed_scripts_blob.c",
     "src/co.c",
     "src/fs.c",
     "src/rt.c",
@@ -164,9 +193,11 @@ local core_sources = {
 if is_plat("windows") then
     add_requires("vcpkg::luajit", {alias = "luajit"})
     add_requires("vcpkg::libuv", {alias = "libuv"})
+    add_requires("vcpkg::zlib", {alias = "zlib", optional = true})
 else
     add_requires("pkgconfig::luajit", {alias = "luajit"})
     add_requires("pkgconfig::libuv", {alias = "libuv"})
+    add_requires("pkgconfig::zlib", {alias = "zlib", optional = true})
 end
 
 if lunet_easy_memory_enabled() then
@@ -191,6 +222,7 @@ end
 -- Shared library target for require("lunet")
 target("lunet")
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     
     -- Platform-specific module naming
     set_prefixname("")
@@ -245,6 +277,7 @@ target_end()
 -- Standalone executable target for ./lunet-run script.lua
 target("lunet-bin")
     set_kind("binary")
+    add_rules("lunet.c_safety_lint")
     set_basename("lunet-run")  -- Avoid conflict with lunet/ driver directory
     
     add_files(core_sources)
@@ -252,6 +285,28 @@ target("lunet-bin")
     add_packages("luajit", "libuv")
     lunet_apply_asan_flags()
     lunet_apply_easy_memory()
+    
+    -- Embedded script packaging (release-only)
+    if has_config("lunet_embed_scripts") then
+        if not is_mode("release") then
+            raise("lunet_embed_scripts is release-only. Reconfigure with: xmake f -m release --lunet_embed_scripts=y")
+        end
+
+        add_defines("LUNET_EMBED_SCRIPTS")
+        add_packages("zlib")
+        add_includedirs(".tmp/generated")
+
+        before_build(function ()
+            local root = os.projectdir()
+            local generator = path.join(root, "bin", "generate_embed_scripts.lua")
+            local source_dir = get_config("lunet_embed_scripts_dir") or "lua"
+            local generated_dir = path.join(root, ".tmp", "generated")
+            local output = path.join(generated_dir, "lunet_embed_scripts_blob.h")
+
+            os.mkdir(generated_dir)
+            os.execv("xmake", {"lua", generator, "--source", source_dir, "--output", output, "--project-root", root}, {curdir = root})
+        end)
+    end
     
     -- Linux: system libs
     if is_plat("linux") then
@@ -287,6 +342,7 @@ target_end()
 target("lunet-sqlite3")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("sqlite3")  -- Output: lunet/sqlite3.so
     set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
@@ -330,6 +386,7 @@ target_end()
 target("lunet-mysql")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("mysql")  -- Output: lunet/mysql.so
     set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
@@ -373,6 +430,7 @@ target_end()
 target("lunet-postgres")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("postgres")  -- Output: lunet/postgres.so
     set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
@@ -420,6 +478,7 @@ target_end()
 target("lunet-paxe")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
+    add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("paxe")  -- Output: lunet/paxe.so
     set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")

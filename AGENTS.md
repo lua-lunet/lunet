@@ -12,10 +12,9 @@ You MUST NOT do any git reset or stash or an git rm or rm or anything that might
 2.  **NO DATA LOSS:** Never use `rm -rf` to clear directories. Move them to `.tmp/` with a timestamp: `mv dir .tmp/dir.YYYYMMDD_HHMMSS`.
 3.  **LOGGING:** All test runs must log stdout/stderr to `.tmp/logs/YYYYMMDD_HHMMSS/`.
 4.  **SECURE BINDING:** Never bind to `0.0.0.0` or public interfaces. Use Unix sockets (preferred) or `127.0.0.1` (development). Only bypass this rule if the user explicitly requests it via CLI flag `--dangerously-skip-loopback-restriction`.
-5.  **LOCAL CI PARITY BEFORE PUSH (MANDATORY):** Before any push, run locally all GitHub Actions steps that execute on the current OS (Linux/macOS/Windows) for the workflows touched by the change. This is required and must pass before pushing.
+5.  **MANDATORY LOCAL CI PARITY BEFORE PUSH:** Before any push, agents MUST run locally all steps from `.github/workflows/build.yml` for their current OS matrix entry (Linux/macOS/Windows), including configure, build, and packaging commands. If any required step cannot be run locally or fails, do not push until fixed or explicitly approved by the user.
     - Minimum local gate for this repo: `xmake lint`, `xmake test` (or CI-equivalent Lua test step), `xmake preflight-easy-memory`, and `xmake build-release`.
     - If the change affects examples, packaging, or specialized jobs, run the corresponding local equivalents for the current OS as well.
-    - If any required local CI-equivalent step fails, do not push until fixed.
 
 ## Release Quality Gate (STRICT)
 

@@ -4,6 +4,8 @@ A high-performance coroutine-based networking library for LuaJIT, built on top o
 
 [中文文档](README-CN.md)
 
+[![EasyMem](https://img.shields.io/badge/EasyMem-easy__memory-7C3AED?logo=github)](https://github.com/EasyMem/easy_memory)
+
 > This project is based on [xialeistudio/lunet](https://github.com/xialeistudio/lunet) by [夏磊 (Xia Lei)](https://github.com/xialeistudio). See also his excellent write-up: [Lunet: Design and Implementation of a High-Performance Coroutine Network Library](https://www.ddhigh.com/en/2025/07/12/lunet-high-performance-coroutine-network-library/).
 
 ## Philosophy: No Bloat, No Kitchen Sink
@@ -48,6 +50,15 @@ make build
 # Build with tracing (debug mode)
 make build-debug
 ```
+
+### Experimental release with EasyMem
+
+```bash
+xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y
+xmake build
+```
+
+`easy_memory_experimental` is opt-in and intended for diagnostics-heavy release experiments.
 
 ## Example: MCP-SSE Server
 
@@ -238,8 +249,8 @@ Lunet has a layered debugging strategy for runtime crashes. Use them in order �
 | Level | Tool | What it catches | Build command |
 |-------|------|----------------|---------------|
 | 1 | Domain tracing | Logic errors, sequence of operations | `xmake f --lunet_trace=y --lunet_verbose_trace=y` |
-| 2 | Memory tracing | UAF, double-free, leaks, buffer overflows | `xmake f --lunet_trace=y` (automatic) |
-| 3 | Address Sanitizer | All memory errors with exact stack traces | `xmake f -m debug --asan=y` |
+| 2 | Memory tracing + EasyMem | UAF, double-free, leaks, allocator integrity | `xmake f --lunet_trace=y` (EasyMem auto-enabled) |
+| 3 | Address Sanitizer + EasyMem | Compiler-level memory errors plus allocator diagnostics | `xmake f -m debug --asan=y` |
 | 4 | lldb / core dumps | Register-level inspection, full backtraces | `lldb -- ./build/.../lunet-run app.lua` |
 
 ### Domain Tracing (Level 1)
@@ -264,6 +275,8 @@ xmake build lunet-bin
 ./build/.../lunet-run app.lua 2> asan.log
 ```
 
+With `--asan=y`, Lunet now also enables the EasyMem backend with diagnostic mode (`LUNET_EASY_MEMORY_DIAGNOSTICS`) so allocator-level integrity checks and profiling output run alongside ASan. On Windows, ASan compiler flags are skipped.
+
 ASan output goes to stderr. The process exits with `Abort trap: 6` instead of `Segmentation fault: 11`. Look for `ERROR: AddressSanitizer:` in the log.
 
 #### Full LuaJIT + Lunet ASan (Debian Trixie source)
@@ -275,6 +288,8 @@ make luajit-asan
 make build-debug-asan-luajit
 make repro-50-asan-luajit
 ```
+
+These helper targets now inherit EasyMem automatically because they configure `--asan=y --lunet_trace=y`.
 
 This uses Debian source package `luajit_2.1.0+openresty20250117-2` and installs a local ASan LuaJIT into `.tmp/luajit-asan/install/2.1.0+openresty20250117/`.
 
@@ -350,7 +365,7 @@ If a crash happens inside `lua_rawgeti` from a libuv callback, it often means th
 
 ### Memory Tracing
 
-When `LUNET_TRACE` is enabled, all allocations through `lunet_alloc()` / `lunet_free()` are tracked with canary headers and poison-on-free. At shutdown, `lunet_mem_assert_balanced()` checks for leaks. Use `lunet_alloc` / `lunet_free` instead of raw `malloc` / `free` in all lunet C code.
+When `LUNET_TRACE` is enabled, all allocations through `lunet_alloc()` / `lunet_free()` are tracked with canary headers and poison-on-free. EasyMem is also enabled automatically in trace builds, providing allocator-level integrity checks and memory usage visualization. At shutdown, `lunet_mem_assert_balanced()` checks for leaks. Use `lunet_alloc` / `lunet_free` instead of raw `malloc` / `free` in all lunet C code.
 
 ## Testing
 
@@ -363,6 +378,7 @@ make stress  # Concurrent load test with tracing
 
 - **[Integration guide](docs/XMAKE_INTEGRATION.md)** — Build Lunet and integrate it into your project (beginner-friendly)
 - **[Badge guide](docs/BADGES.md)** — Add badges (build status, Lunet version) to your project README
+- **[EasyMem report](docs/EASY_MEMORY_REPORT.md)** — Profiling findings and next-step memory recommendations
 
 ## License
 

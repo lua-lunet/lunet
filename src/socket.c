@@ -399,9 +399,9 @@ static void lunet_write_cb(uv_write_t *req, int status) {
    * something went very wrong, guard against NULL. */
   if (!ctx) {
     if (write_req->data) {
-      free(write_req->data);
+      lunet_free_nonnull(write_req->data);
     }
-    free(write_req);
+    lunet_free_nonnull(write_req);
     return;
   }
 
@@ -494,7 +494,7 @@ static void lunet_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
    * No socket_ctx_release here because the ctx is already gone. */
   if (!ctx) {
     if (buf && buf->base) {
-      free(buf->base);  /* raw free: ctx/lunet_mem may already be torn down */
+      lunet_free_nonnull(buf->base);  /* must match lunet_alloc backend (libc or EasyMem) */
     }
     return;
   }

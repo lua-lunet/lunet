@@ -56,9 +56,24 @@ option("luajit_debian_version")
     set_description("Debian source package version (for luajit_*.dsc and *.debian.tar.xz)")
 option_end()
 
+-- Embedded Lua scripts option (release-only, opt-in)
+option("lunet_embed_scripts")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Embed a Lua script tree into lunet-run as compressed data (release mode only)")
+option_end()
+
+option("lunet_embed_scripts_dir")
+    set_default("lua")
+    set_showmenu(true)
+    set_description("Lua script directory to embed when lunet_embed_scripts is enabled")
+option_end()
+
 -- Common source files for core lunet
 local core_sources = {
     "src/main.c",
+    "src/embed_scripts.c",
+    "src/embed_scripts_blob.c",
     "src/co.c",
     "src/fs.c",
     "src/rt.c",
@@ -79,9 +94,11 @@ local core_sources = {
 if is_plat("windows") then
     add_requires("vcpkg::luajit", {alias = "luajit"})
     add_requires("vcpkg::libuv", {alias = "libuv"})
+    add_requires("vcpkg::zlib", {alias = "zlib", optional = true})
 else
     add_requires("pkgconfig::luajit", {alias = "luajit"})
     add_requires("pkgconfig::libuv", {alias = "libuv"})
+    add_requires("pkgconfig::zlib", {alias = "zlib", optional = true})
 end
 
 -- Database driver dependencies (optional)
@@ -173,6 +190,28 @@ target("lunet-bin")
     if has_config("asan") then
         add_cflags("-fsanitize=address", "-fno-omit-frame-pointer", {force = true})
         add_ldflags("-fsanitize=address", {force = true})
+    end
+
+    -- Embedded script packaging (release-only)
+    if has_config("lunet_embed_scripts") then
+        if not is_mode("release") then
+            raise("lunet_embed_scripts is release-only. Reconfigure with: xmake f -m release --lunet_embed_scripts=y")
+        end
+
+        add_defines("LUNET_EMBED_SCRIPTS")
+        add_packages("zlib")
+        add_includedirs(".tmp/generated")
+
+        before_build(function ()
+            local root = os.projectdir()
+            local generator = path.join(root, "bin", "generate_embed_scripts.lua")
+            local source_dir = get_config("lunet_embed_scripts_dir") or "lua"
+            local generated_dir = path.join(root, ".tmp", "generated")
+            local output = path.join(generated_dir, "lunet_embed_scripts_blob.h")
+
+            os.mkdir(generated_dir)
+            os.execv("xmake", {"lua", generator, "--source", source_dir, "--output", output, "--project-root", root}, {curdir = root})
+        end)
     end
     
     -- Linux: system libs

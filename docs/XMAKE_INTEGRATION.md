@@ -45,6 +45,17 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f | head -1)
 "$LUNET_BIN" path/to/your_app.lua
 ```
 
+### 2b. Optional: Embed Lua scripts into lunet-run
+
+For deployments where Lua source should not live on disk, enable script embedding in release builds:
+
+```bash
+xmake f -c -m release --lunet_embed_scripts=y --lunet_embed_scripts_dir=lua -y
+xmake build lunet-bin
+```
+
+When enabled, `lunet-run` extracts the embedded script tree into a private temp directory at startup and prepends that location to `package.path` and `package.cpath`.
+
 ### 3. Or load lunet.so from plain LuaJIT
 
 If you prefer to use `luajit` directly:

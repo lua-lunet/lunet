@@ -3,6 +3,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "lunet_mem.h"
+#include "lunet_exports.h"
+#include "rt.h"
 
 /* Constants */
 #define HEADER_LEN 8
@@ -583,4 +586,10 @@ int lunet_open_paxe(lua_State *L) {
     lua_setfield(L, -2, "VERSION");
 
     return 1;
+}
+
+LUNET_MODULE_API int luaopen_lunet_paxe(lua_State *L) {
+    lunet_init_core(L);
+    lua_newtable(L);
+    return lunet_open_paxe(L);
 }

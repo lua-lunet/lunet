@@ -69,11 +69,59 @@ option("lunet_embed_scripts_dir")
     set_description("Lua script directory to embed when lunet_embed_scripts is enabled")
 option_end()
 
--- Common source files for core lunet
+-- Address Sanitizer option for debugging memory bugs
+option("asan")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Enable Address Sanitizer (-fsanitize=address)")
+option_end()
+
+local function lunet_apply_trace_defines()
+    if has_config("lunet_trace") then
+        add_defines("LUNET_TRACE")
+    end
+    if has_config("lunet_verbose_trace") then
+        add_defines("LUNET_TRACE_VERBOSE")
+    end
+end
+
+local function lunet_apply_asan_flags()
+    if not has_config("asan") then
+        return
+    end
+    add_cflags("-fsanitize=address", "-fno-omit-frame-pointer", {force = true})
+    add_ldflags("-fsanitize=address", {force = true})
+end
+
+local function lunet_apply_platform_flags(is_lua_module)
+    -- macOS: modules are bundles, core is a dylib (.so filename)
+    if is_plat("macosx") and is_lua_module then
+        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+        add_shflags("-Wl,-rpath,@loader_path/..", {force = true})
+    end
+
+    -- Linux: system libs
+    if is_plat("linux") then
+        add_defines("_GNU_SOURCE")
+        add_cflags("-pthread")
+        add_ldflags("-pthread")
+        add_syslinks("pthread", "dl", "m")
+        if is_lua_module then
+            add_shflags("-Wl,-rpath,$ORIGIN/..", {force = true})
+        end
+    end
+
+    -- Windows: system libs
+    if is_plat("windows") then
+        add_cflags("/TC")
+        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
+    end
+end
+
+-- Common source files for core lunet (built once, linked by extensions)
 local core_sources = {
-    "src/main.c",
-    "src/embed_scripts.c",
-    "src/embed_scripts_blob.c",
+    "src/lunet_module.c",
+    "src/runtime_config.c",
     "src/co.c",
     "src/fs.c",
     "src/rt.c",
@@ -83,7 +131,7 @@ local core_sources = {
     "src/stl.c",
     "src/timer.c",
     "src/trace.c",
-    "src/lunet_mem.c"  -- New memory wrapper implementation
+    "src/lunet_mem.c"
 }
 
 -- =============================================================================
@@ -116,81 +164,43 @@ else
     add_requires("pkgconfig::libsodium", {alias = "sodium", optional = true})
 end
 
--- Shared library target for require("lunet")
+-- Shared core library for require("lunet") and for linking extensions
 target("lunet")
     set_kind("shared")
     add_rules("lunet.c_safety_lint")
-    
-    -- Platform-specific module naming
+
     set_prefixname("")
     if is_plat("windows") then
         set_extension(".dll")
     else
         set_extension(".so")
     end
-    
+
     add_files(core_sources)
     add_includedirs("include", {public = true})
     add_packages("luajit", "libuv")
 
-    -- Build as a Lua C module (no CLI entrypoint)
-    add_defines("LUNET_NO_MAIN")
+    add_defines("LUNET_BUILDING_CORE")
+    lunet_apply_asan_flags()
+    lunet_apply_trace_defines()
+    lunet_apply_platform_flags(false)
 
-    -- macOS: build as a bundle with undefined symbols allowed (for Lua host)
+    -- macOS: make the dylib discoverable via rpath
     if is_plat("macosx") then
-        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
-    end
-    
-    -- Linux: system libs
-    if is_plat("linux") then
-        -- Ensure pthread types/macros are visible in libuv headers and link correctly.
-        -- (Some libc setups require -pthread for pthread_rwlock_t.)
-        add_defines("_GNU_SOURCE")
-        add_cflags("-pthread")
-        add_ldflags("-pthread")
-        add_syslinks("pthread", "dl", "m")
-    end
-    
-    -- Windows: export the module entry point and system libs
-    if is_plat("windows") then
-        -- Force MSVC to compile .c files as C (not C++).
-        add_cflags("/TC")
-        add_defines("LUNET_BUILDING_DLL")
-        -- libuv on Windows pulls in a number of Win32/COM/security APIs.
-        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
-    end
-    
-    -- Enable tracing if requested
-    if has_config("lunet_trace") then
-        add_defines("LUNET_TRACE")
-    end
-    if has_config("lunet_verbose_trace") then
-        add_defines("LUNET_TRACE_VERBOSE")
+        add_ldflags("-Wl,-install_name,@rpath/lunet.so", {force = true})
     end
 target_end()
-
--- Address Sanitizer option for debugging memory bugs
-option("asan")
-    set_default(false)
-    set_showmenu(true)
-    set_description("Enable Address Sanitizer (-fsanitize=address)")
-option_end()
 
 -- Standalone executable target for ./lunet-run script.lua
 target("lunet-bin")
     set_kind("binary")
     add_rules("lunet.c_safety_lint")
-    set_basename("lunet-run")  -- Avoid conflict with lunet/ driver directory
-    
-    add_files(core_sources)
+    set_basename("lunet-run") -- Avoid conflict with lunet/ driver directory
+
+    add_deps("lunet")
+    add_files("src/lunet_cli.c", "src/embed_scripts.c", "src/embed_scripts_blob.c")
     add_includedirs("include", {public = true})
     add_packages("luajit", "libuv")
-    
-    -- Address Sanitizer support
-    if has_config("asan") then
-        add_cflags("-fsanitize=address", "-fno-omit-frame-pointer", {force = true})
-        add_ldflags("-fsanitize=address", {force = true})
-    end
 
     -- Embedded script packaging (release-only)
     if has_config("lunet_embed_scripts") then
@@ -213,28 +223,17 @@ target("lunet-bin")
             os.execv("xmake", {"lua", generator, "--source", source_dir, "--output", output, "--project-root", root}, {curdir = root})
         end)
     end
-    
-    -- Linux: system libs
+
+    if is_plat("macosx") then
+        add_ldflags("-Wl,-rpath,@executable_path/.", {force = true})
+    end
     if is_plat("linux") then
-        add_defines("_GNU_SOURCE")
-        add_cflags("-pthread")
-        add_ldflags("-pthread")
-        add_syslinks("pthread", "dl", "m")
+        add_ldflags("-Wl,-rpath,$ORIGIN", {force = true})
     end
-    
-    -- Windows: system libs
-    if is_plat("windows") then
-        add_cflags("/TC")
-        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
-    end
-    
-    -- Enable tracing if requested
-    if has_config("lunet_trace") then
-        add_defines("LUNET_TRACE")
-    end
-    if has_config("lunet_verbose_trace") then
-        add_defines("LUNET_TRACE_VERBOSE")
-    end
+
+    lunet_apply_asan_flags()
+    lunet_apply_trace_defines()
+    lunet_apply_platform_flags(false)
 target_end()
 
 -- =============================================================================
@@ -246,176 +245,107 @@ target_end()
 
 -- SQLite3 driver: require("lunet.sqlite3")
 target("lunet-sqlite3")
-    set_default(false)  -- Only build when explicitly requested
+    set_default(false)
     set_kind("shared")
     add_rules("lunet.c_safety_lint")
     set_prefixname("")
-    set_basename("sqlite3")  -- Output: lunet/sqlite3.so
+    set_basename("sqlite3")
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
+        add_defines("LUNET_BUILDING_MODULE")
     else
         set_extension(".so")
     end
-    
-    add_files(core_sources)
+
+    add_deps("lunet")
     add_files("ext/sqlite3/sqlite3.c")
     add_includedirs("include", "ext/sqlite3", {public = true})
     add_packages("luajit", "libuv", "sqlite3")
-    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_SQLITE3")
-    
-    if is_plat("macosx") then
-        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
-    end
-    if is_plat("linux") then
-        add_defines("_GNU_SOURCE")
-        add_cflags("-pthread")
-        add_ldflags("-pthread")
-        add_syslinks("pthread", "dl", "m")
-    end
-    if is_plat("windows") then
-        add_cflags("/TC")
-        add_defines("LUNET_BUILDING_DLL")
-        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
-    end
-    if has_config("lunet_trace") then
-        add_defines("LUNET_TRACE")
-    end
-    if has_config("lunet_verbose_trace") then
-        add_defines("LUNET_TRACE_VERBOSE")
-    end
+    add_defines("LUNET_HAS_DB", "LUNET_DB_SQLITE3")
+
+    lunet_apply_asan_flags()
+    lunet_apply_trace_defines()
+    lunet_apply_platform_flags(true)
 target_end()
 
 -- MySQL driver: require("lunet.mysql")
 target("lunet-mysql")
-    set_default(false)  -- Only build when explicitly requested
+    set_default(false)
     set_kind("shared")
     add_rules("lunet.c_safety_lint")
     set_prefixname("")
-    set_basename("mysql")  -- Output: lunet/mysql.so
+    set_basename("mysql")
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
+        add_defines("LUNET_BUILDING_MODULE")
     else
         set_extension(".so")
     end
-    
-    add_files(core_sources)
+
+    add_deps("lunet")
     add_files("ext/mysql/mysql.c")
     add_includedirs("include", "ext/mysql", {public = true})
     add_packages("luajit", "libuv", "mysql")
-    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_MYSQL")
-    
-    if is_plat("macosx") then
-        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
-    end
-    if is_plat("linux") then
-        add_defines("_GNU_SOURCE")
-        add_cflags("-pthread")
-        add_ldflags("-pthread")
-        add_syslinks("pthread", "dl", "m")
-    end
-    if is_plat("windows") then
-        add_cflags("/TC")
-        add_defines("LUNET_BUILDING_DLL")
-        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
-    end
-    if has_config("lunet_trace") then
-        add_defines("LUNET_TRACE")
-    end
-    if has_config("lunet_verbose_trace") then
-        add_defines("LUNET_TRACE_VERBOSE")
-    end
+    add_defines("LUNET_HAS_DB", "LUNET_DB_MYSQL")
+
+    lunet_apply_asan_flags()
+    lunet_apply_trace_defines()
+    lunet_apply_platform_flags(true)
 target_end()
 
 -- PostgreSQL driver: require("lunet.postgres")
 target("lunet-postgres")
-    set_default(false)  -- Only build when explicitly requested
+    set_default(false)
     set_kind("shared")
     add_rules("lunet.c_safety_lint")
     set_prefixname("")
-    set_basename("postgres")  -- Output: lunet/postgres.so
+    set_basename("postgres")
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
+        add_defines("LUNET_BUILDING_MODULE")
     else
         set_extension(".so")
     end
-    
-    add_files(core_sources)
+
+    add_deps("lunet")
     add_files("ext/postgres/postgres.c")
     add_includedirs("include", "ext/postgres", {public = true})
     add_packages("luajit", "libuv", "pq")
-    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_POSTGRES")
+    add_defines("LUNET_HAS_DB", "LUNET_DB_POSTGRES")
 
-    if is_plat("macosx") then
-        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
-    end
-    if is_plat("linux") then
-        add_defines("_GNU_SOURCE")
-        add_cflags("-pthread")
-        add_ldflags("-pthread")
-        add_syslinks("pthread", "dl", "m")
-    end
-    if is_plat("windows") then
-        add_cflags("/TC")
-        add_defines("LUNET_BUILDING_DLL")
-        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
-    end
-    if has_config("lunet_trace") then
-        add_defines("LUNET_TRACE")
-    end
-    if has_config("lunet_verbose_trace") then
-        add_defines("LUNET_TRACE_VERBOSE")
-    end
+    lunet_apply_asan_flags()
+    lunet_apply_trace_defines()
+    lunet_apply_platform_flags(true)
 target_end()
 
 -- PAXE Packet Encryption: require("lunet.paxe")
--- NOTE: PAXE requires libsodium and is only for secure peer-to-peer protocols
--- where the application can handle encryption/decryption details.
--- Depends on: libsodium (libsodium.so/libsodium.dylib/libsodium.dll)
--- Optional via: xmake build lunet-paxe
 target("lunet-paxe")
-    set_default(false)  -- Only build when explicitly requested
+    set_default(false)
     set_kind("shared")
     add_rules("lunet.c_safety_lint")
     set_prefixname("")
-    set_basename("paxe")  -- Output: lunet/paxe.so
+    set_basename("paxe")
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
+        add_defines("LUNET_BUILDING_MODULE")
     else
         set_extension(".so")
     end
 
-    add_files(core_sources)
+    add_deps("lunet")
     add_files("src/paxe.c")
     add_includedirs("include", {public = true})
 
-    -- CRITICAL: Fail fast if libsodium is not available
     add_packages("luajit", "libuv", {public = true})
-    add_packages("sodium")  -- Will fail at config time if not found (no optional = true)
+    add_packages("sodium")
 
-    add_defines("LUNET_NO_MAIN", "LUNET_PAXE")
+    add_defines("LUNET_PAXE")
 
-    if is_plat("macosx") then
-        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
-    end
-    if is_plat("linux") then
-        add_defines("_GNU_SOURCE")
-        add_cflags("-pthread")
-        add_ldflags("-pthread")
-        add_syslinks("pthread", "dl", "m")
-    end
-    if is_plat("windows") then
-        add_cflags("/TC")
-        add_defines("LUNET_BUILDING_DLL")
-        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
-    end
-    if has_config("lunet_trace") then
-        add_defines("LUNET_TRACE")
-    end
-    if has_config("lunet_verbose_trace") then
-        add_defines("LUNET_TRACE_VERBOSE")
-    end
+    lunet_apply_asan_flags()
+    lunet_apply_trace_defines()
+    lunet_apply_platform_flags(true)
 target_end()

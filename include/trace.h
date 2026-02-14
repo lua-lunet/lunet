@@ -2,6 +2,7 @@
 #define TRACE_H
 
 #include "lunet_lua.h"
+#include "lunet_exports.h"
 #include "co.h"  /* For _lunet_ensure_coroutine */
 
 /*
@@ -66,22 +67,25 @@ typedef struct {
 } lunet_trace_state_t;
 
 /* Global trace state - only exists when LUNET_TRACE defined */
-extern lunet_trace_state_t lunet_trace_state;
+extern LUNET_API lunet_trace_state_t lunet_trace_state;
 
 /* Initialize tracing (call once at startup) */
-void lunet_trace_init(void);
+LUNET_API void lunet_trace_init(void);
 
 /* Dump current trace statistics */
-void lunet_trace_dump(void);
+LUNET_API void lunet_trace_dump(void);
 
 /* Assert all refs are balanced (call at shutdown or checkpoints) */
-void lunet_trace_assert_balanced(const char *context);
+LUNET_API void lunet_trace_assert_balanced(const char *context);
 
 /* Internal tracking functions - called by macros */
-void lunet_trace_coref_add(const char *file, int line, int ref);
-void lunet_trace_coref_remove(const char *file, int line, int ref);
-void lunet_trace_stack_check(lua_State *L, int expected_base, int expected_delta,
+LUNET_API void lunet_trace_coref_add(const char *file, int line, int ref);
+LUNET_API void lunet_trace_coref_remove(const char *file, int line, int ref);
+LUNET_API void lunet_trace_stack_check(lua_State *L, int expected_base, int expected_delta,
                               const char *file, int line);
+
+/* Get the current trace state */
+LUNET_API lunet_trace_state_t* lunet_get_trace_state(void);
 
 /*
  * Stack depth checking - use at function entry/exit

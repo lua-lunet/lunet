@@ -1,4 +1,5 @@
 #include "co.h"
+#include "lunet_exports.h"
 
 #include <stdio.h>
 #include <assert.h>
@@ -54,7 +55,7 @@ static void lunet_co_anchor(lua_State *L) {
 }
 
 /* Release a coroutine anchor. co is the coroutine's lua_State. */
-void lunet_co_unanchor(lua_State *co) {
+LUNET_API void lunet_co_unanchor(lua_State *co) {
   lunet_co_get_anchor_table(co);    /* stack: anchortbl */
   lua_pushthread(co);               /* stack: anchortbl thread */
   lua_pushnil(co);                  /* stack: anchortbl thread nil */
@@ -62,7 +63,7 @@ void lunet_co_unanchor(lua_State *co) {
   lua_pop(co, 1);                   /* pop anchortbl */
 }
 
-int lunet_spawn(lua_State *L) {
+LUNET_API int lunet_spawn(lua_State *L) {
   luaL_checktype(L, 1, LUA_TFUNCTION);
   // create new coroutine
   lua_State *co = lua_newthread(L);
@@ -88,7 +89,7 @@ int lunet_spawn(lua_State *L) {
   return 0;
 }
 
-int lunet_co_resume(lua_State *co, int nargs) {
+LUNET_API int lunet_co_resume(lua_State *co, int nargs) {
 #ifdef LUNET_TRACE
   co_trace_resume_seq++;
 #endif
@@ -129,7 +130,7 @@ int lunet_co_resume(lua_State *co, int nargs) {
   return status;
 }
 
-int _lunet_ensure_coroutine(lua_State *L, const char *func_name) {
+LUNET_API int _lunet_ensure_coroutine(lua_State *L, const char *func_name) {
   if (lua_pushthread(L)) {
     lua_pop(L, 1);
     lua_pushfstring(L, "%s must be called from coroutine", func_name);

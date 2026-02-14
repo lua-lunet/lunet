@@ -38,7 +38,7 @@ void *lunet_mem_alloc_impl(size_t size, const char *file, int line) {
     return ptr;
 }
 
-void *lunet_mem_calloc_impl(size_t count, size_t size, const char *file, int line) {
+LUNET_API void *lunet_mem_calloc_impl(size_t count, size_t size, const char *file, int line) {
     size_t total = count * size;
     void *ptr = lunet_mem_alloc_impl(total, file, line);
     if (ptr) {
@@ -47,7 +47,7 @@ void *lunet_mem_calloc_impl(size_t count, size_t size, const char *file, int lin
     return ptr;
 }
 
-void *lunet_mem_realloc_impl(void *ptr, size_t size, const char *file, int line) {
+LUNET_API void *lunet_mem_realloc_impl(void *ptr, size_t size, const char *file, int line) {
     if (!ptr) {
         return lunet_mem_alloc_impl(size, file, line);
     }
@@ -122,7 +122,7 @@ void lunet_mem_free_impl(void *ptr, const char *file, int line) {
     free(header);
 }
 
-void lunet_mem_summary(void) {
+LUNET_API void lunet_mem_summary(void) {
     fprintf(stderr, "[MEM_TRACE] SUMMARY: allocs=%d frees=%d "
             "alloc_bytes=%lld free_bytes=%lld current=%lld peak=%lld\n",
             lunet_mem_state.alloc_count,
@@ -133,7 +133,7 @@ void lunet_mem_summary(void) {
             (long long)lunet_mem_state.peak_bytes);
 }
 
-void lunet_mem_assert_balanced(const char *context) {
+LUNET_API void lunet_mem_assert_balanced(const char *context) {
     if (lunet_mem_state.alloc_count != lunet_mem_state.free_count) {
         fprintf(stderr, "[MEM_TRACE] LEAK at %s: alloc_count=%d free_count=%d (delta=%d)\n",
                 context,

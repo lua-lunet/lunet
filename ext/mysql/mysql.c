@@ -1,11 +1,10 @@
-#include "lunet_db_mysql.h"
-
 #include <mysql.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "co.h"
+#include "rt.h"
 #include "trace.h"
 #include "uv.h"
 
@@ -102,7 +101,7 @@ static void db_open_after_cb(uv_work_t* req, int status) {
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
   }
-  int rc = lua_resume(co, 2);
+  int rc = lunet_co_resume(co, 2);
   if (rc != 0 && rc != LUA_YIELD) {
     const char* err = lua_tostring(co, -1);
     if (err) fprintf(stderr, "lua_resume error in db.open: %s\n", err);
@@ -629,7 +628,7 @@ static void db_query_after_cb(uv_work_t* req, int status) {
   if (ctx->err[0] != '\0') {
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
-    int rc = lua_resume(co, 2);
+    int rc = lunet_co_resume(co, 2);
     if (rc != 0 && rc != LUA_YIELD) {
       const char* err = lua_tostring(co, -1);
       if (err) fprintf(stderr, "lua_resume error in db.query: %s\n", err);
@@ -671,7 +670,7 @@ static void db_query_after_cb(uv_work_t* req, int status) {
       }
       
       lua_pushnil(co);
-      int rc = lua_resume(co, 2);
+      int rc = lunet_co_resume(co, 2);
       if (rc != 0 && rc != LUA_YIELD) {
           const char* err = lua_tostring(co, -1);
           if (err) fprintf(stderr, "lua_resume error in db.query: %s\n", err);
@@ -883,7 +882,7 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
   if (ctx->err[0] != '\0') {
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
-    int rc = lua_resume(co, 2);
+    int rc = lunet_co_resume(co, 2);
     if (rc != 0 && rc != LUA_YIELD) {
       const char* err = lua_tostring(co, -1);
       if (err) fprintf(stderr, "lua_resume error in db.exec: %s\n", err);
@@ -898,7 +897,7 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
     lua_pushinteger(co, ctx->insert_id);
     lua_settable(co, -3);
     lua_pushnil(co);
-    int rc = lua_resume(co, 2);
+    int rc = lunet_co_resume(co, 2);
     if (rc != 0 && rc != LUA_YIELD) {
       const char* err = lua_tostring(co, -1);
       if (err) fprintf(stderr, "lua_resume error in db.exec: %s\n", err);
@@ -1085,33 +1084,34 @@ int lunet_db_exec_params(lua_State* L) {
   if (lunet_ensure_coroutine(L, "db.exec")) {
     return lua_error(L);
   }
-  
+
   int n = lua_gettop(L);
   if (n < 2) {
     lua_pushnil(L);
     lua_pushstring(L, "db.exec requires connection and sql string");
     return 2;
   }
-  
+
   lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)luaL_testudata(L, 1, LUNET_MYSQL_CONN_MT);
   if (!wrapper) {
     lua_pushnil(L);
     lua_pushstring(L, "db.exec requires a valid connection");
     return 2;
   }
-  
+
   if (wrapper->closed || !wrapper->conn) {
     lua_pushnil(L);
     lua_pushstring(L, "connection is closed");
     return 2;
   }
-  
+
   const char* query = luaL_checkstring(L, 2);
-  
+
   db_exec_ctx_t* ctx = malloc(sizeof(db_exec_ctx_t));
   if (!ctx) {
+    lua_pushnil(L);
     lua_pushstring(L, "out of memory");
-    return lua_error(L);
+    return 2;
   }
   memset(ctx, 0, sizeof(*ctx));
   ctx->L = L;
@@ -1124,7 +1124,7 @@ int lunet_db_exec_params(lua_State* L) {
     lua_pushstring(L, "out of memory");
     return 2;
   }
-  
+
   ctx->params = collect_params(L, 3, &ctx->nparams);
   if (ctx->nparams < 0) {
       free(ctx->query);
@@ -1148,4 +1148,19 @@ int lunet_db_exec_params(lua_State* L) {
   }
 
   return lua_yield(L, 0);
+}
+
+LUNET_MODULE_API int luaopen_lunet_mysql(lua_State *L) {
+  lunet_init_core(L);
+  
+  luaL_Reg funcs[] = {{"open", lunet_db_open},
+                      {"close", lunet_db_close},
+                      {"query", lunet_db_query},
+                      {"exec", lunet_db_exec},
+                      {"escape", lunet_db_escape},
+                      {"query_params", lunet_db_query_params},
+                      {"exec_params", lunet_db_exec_params},
+                      {NULL, NULL}};
+  luaL_newlib(L, funcs);
+  return 1;
 }

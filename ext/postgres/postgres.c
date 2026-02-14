@@ -1,10 +1,9 @@
-#include "lunet_db_postgres.h"
-
 #include <libpq-fe.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "co.h"
+#include "rt.h"
 #include "trace.h"
 #include "uv.h"
 
@@ -202,7 +201,7 @@ static void db_open_after_cb(uv_work_t* req, int status) {
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
   }
-  int rc = lua_resume(co, 2);
+  int rc = lunet_co_resume(co, 2);
   if (rc != 0 && rc != LUA_YIELD) {
     const char* err = lua_tostring(co, -1);
     if (err) fprintf(stderr, "lua_resume error in db.open: %s\n", err);
@@ -433,7 +432,7 @@ static void db_query_after_cb(uv_work_t* req, int status) {
     ctx->result = NULL;
 
     lua_pushnil(co);
-    int rc = lua_resume(co, 2);
+    int rc = lunet_co_resume(co, 2);
     if (rc != 0 && rc != LUA_YIELD) {
       const char* err = lua_tostring(co, -1);
       if (err) fprintf(stderr, "lua_resume error in db.query: %s\n", err);
@@ -442,7 +441,7 @@ static void db_query_after_cb(uv_work_t* req, int status) {
   } else {
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
-    int rc = lua_resume(co, 2);
+    int rc = lunet_co_resume(co, 2);
     if (rc != 0 && rc != LUA_YIELD) {
       const char* err = lua_tostring(co, -1);
       if (err) fprintf(stderr, "lua_resume error in db.query: %s\n", err);
@@ -626,7 +625,7 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
   if (ctx->err[0] != '\0') {
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
-    int rc = lua_resume(co, 2);
+    int rc = lunet_co_resume(co, 2);
     if (rc != 0 && rc != LUA_YIELD) {
       const char* err = lua_tostring(co, -1);
       if (err) fprintf(stderr, "lua_resume error in db.exec: %s\n", err);
@@ -641,7 +640,7 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
     lua_pushinteger(co, ctx->insert_id);
     lua_settable(co, -3);
     lua_pushnil(co);
-    int rc = lua_resume(co, 2);
+    int rc = lunet_co_resume(co, 2);
     if (rc != 0 && rc != LUA_YIELD) {
       const char* err = lua_tostring(co, -1);
       if (err) fprintf(stderr, "lua_resume error in db.exec: %s\n", err);
@@ -881,4 +880,19 @@ int lunet_db_exec_params(lua_State* L) {
   }
 
   return lua_yield(L, 0);
+}
+
+LUNET_MODULE_API int luaopen_lunet_postgres(lua_State *L) {
+  lunet_init_core(L);
+  
+  luaL_Reg funcs[] = {{"open", lunet_db_open},
+                      {"close", lunet_db_close},
+                      {"query", lunet_db_query},
+                      {"exec", lunet_db_exec},
+                      {"escape", lunet_db_escape},
+                      {"query_params", lunet_db_query_params},
+                      {"exec_params", lunet_db_exec_params},
+                      {NULL, NULL}};
+  luaL_newlib(L, funcs);
+  return 1;
 }

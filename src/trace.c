@@ -8,6 +8,7 @@
 #ifdef LUNET_TRACE
 
 #include "trace.h"
+#include "lunet_exports.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,9 +16,13 @@
 #include <assert.h>
 
 /* Global trace state */
-lunet_trace_state_t lunet_trace_state;
+LUNET_API lunet_trace_state_t lunet_trace_state;
 
-void lunet_trace_init(void) {
+LUNET_API lunet_trace_state_t* lunet_get_trace_state(void) {
+    return &lunet_trace_state;
+}
+
+LUNET_API void lunet_trace_init(void) {
   memset(&lunet_trace_state, 0, sizeof(lunet_trace_state));
   /* Initialize ref_to_loc map to -1 (invalid) */
   for (int i = 0; i < LUNET_TRACE_MAX_REFS; i++) {
@@ -48,7 +53,7 @@ static int find_or_create_location(const char *file, int line) {
   return -1;
 }
 
-void lunet_trace_coref_add(const char *file, int line, int ref) {
+LUNET_API void lunet_trace_coref_add(const char *file, int line, int ref) {
   lunet_trace_state.coref_balance++;
   lunet_trace_state.coref_total_created++;
   
@@ -73,7 +78,7 @@ void lunet_trace_coref_add(const char *file, int line, int ref) {
           lunet_trace_state.coref_total_created);
 }
 
-void lunet_trace_coref_remove(const char *file, int line, int ref) {
+LUNET_API void lunet_trace_coref_remove(const char *file, int line, int ref) {
   lunet_trace_state.coref_balance--;
   lunet_trace_state.coref_total_released++;
   
@@ -139,7 +144,7 @@ void lunet_trace_stack_check(lua_State *L, int expected_base, int expected_delta
   }
 }
 
-void lunet_trace_dump(void) {
+LUNET_API void lunet_trace_dump(void) {
   fprintf(stderr, "\n");
   fprintf(stderr, "========================================\n");
   fprintf(stderr, "       LUNET TRACE SUMMARY\n");
@@ -177,7 +182,7 @@ void lunet_trace_dump(void) {
   fprintf(stderr, "========================================\n\n");
 }
 
-void lunet_trace_assert_balanced(const char *context) {
+LUNET_API void lunet_trace_assert_balanced(const char *context) {
   if (lunet_trace_state.coref_balance != 0) {
     fprintf(stderr, "[TRACE] ASSERTION FAILED at %s: coref_balance=%d (expected 0)\n",
             context, lunet_trace_state.coref_balance);

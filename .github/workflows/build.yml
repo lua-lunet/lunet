@@ -240,6 +240,46 @@ jobs:
         name: release-windows
         path: lunet-windows-amd64.zip
 
+  embed-scripts:
+    name: Embed scripts smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
+
+    - name: Install xmake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: latest
+
+    - name: Install Dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y pkg-config libuv1-dev luajit libluajit-5.1-dev zlib1g-dev
+
+    - name: Install Dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install pkg-config libuv luajit
+
+    - name: Configure embed scripts build
+      run: xmake f -c -m release --lunet_embed_scripts=y --lunet_embed_scripts_dir=examples -y
+
+    - name: Build embedded lunet-run
+      run: xmake build lunet-bin
+
+    - name: Verify generated embed header
+      shell: bash
+      run: test -f .tmp/generated/lunet_embed_scripts_blob.h
+
   easy-memory:
     name: EasyMem QA (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -423,7 +463,7 @@ jobs:
   publish-release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))
-    needs: [build, easy-memory]
+    needs: [build, embed-scripts, easy-memory]
     runs-on: ubuntu-latest
     steps:
     - name: Checkout

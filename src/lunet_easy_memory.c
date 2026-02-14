@@ -1,10 +1,14 @@
 /*
  * EasyMem/easy_memory integration implementation for Lunet
  *
- * Provides:
- *   - Global arena lifecycle (init / shutdown / summary)
- *   - Allocation wrappers that track statistics
- *   - Worker arena helpers for DB driver thread-pool callbacks
+ * This is the REAL allocation routing layer.  When LUNET_EASY_MEMORY is
+ * defined, lunet_alloc / lunet_free / lunet_calloc (in lunet_mem.h) are
+ * macros that expand to the lunet_em_* functions below.  Every allocation
+ * goes through the EasyMem global arena.
+ *
+ * We prepend a small size_t header to each allocation so that:
+ *   - lunet_em_free can track how many bytes were freed
+ *   - lunet_em_realloc can copy the right amount of data
  *
  * Only compiled when LUNET_EASY_MEMORY is defined.
  */
@@ -13,6 +17,33 @@
 
 #include "lunet_easy_memory.h"
 #include <string.h>
+
+/* =========================================================================
+ * Size header: we store the requested size before the returned pointer.
+ * Layout: [ size_t size ][ user data ... ]
+ *                         ^ returned to caller
+ * ========================================================================= */
+
+/* Align the header to at least the natural alignment so user data stays aligned */
+#define EM_HDR_SIZE  (sizeof(size_t) < 16 ? 16 : sizeof(size_t))
+
+static inline void *em_hdr_to_user(void *raw) {
+    return (char *)raw + EM_HDR_SIZE;
+}
+
+static inline void *em_user_to_hdr(void *user) {
+    return (char *)user - EM_HDR_SIZE;
+}
+
+static inline size_t em_get_size(void *user) {
+    size_t sz;
+    memcpy(&sz, em_user_to_hdr(user), sizeof(sz));
+    return sz;
+}
+
+static inline void em_set_size(void *raw, size_t sz) {
+    memcpy(raw, &sz, sizeof(sz));
+}
 
 /* =========================================================================
  * Global State
@@ -115,29 +146,36 @@ void lunet_em_assert_balanced(const char *context) {
 
 /* =========================================================================
  * Allocation API
+ *
+ * Every allocation stores a size_t header so we can track bytes on free
+ * and support realloc (alloc+copy+free).
  * ========================================================================= */
 
 void *lunet_em_alloc(size_t size, const char *file, int line) {
     if (!lunet_em_state.global_arena) return NULL;
+    if (size == 0) size = 1;  /* EasyMem may reject 0-size */
 
-    void *ptr = em_alloc(lunet_em_state.global_arena, size);
-    if (ptr) {
-        lunet_em_state.alloc_count++;
-        lunet_em_state.alloc_bytes += (int64_t)size;
-        lunet_em_state.current_bytes += (int64_t)size;
-        if (lunet_em_state.current_bytes > lunet_em_state.peak_bytes) {
-            lunet_em_state.peak_bytes = lunet_em_state.current_bytes;
-        }
+    void *raw = em_alloc(lunet_em_state.global_arena, EM_HDR_SIZE + size);
+    if (!raw) return NULL;
+
+    em_set_size(raw, size);
+    void *user = em_hdr_to_user(raw);
+
+    lunet_em_state.alloc_count++;
+    lunet_em_state.alloc_bytes += (int64_t)size;
+    lunet_em_state.current_bytes += (int64_t)size;
+    if (lunet_em_state.current_bytes > lunet_em_state.peak_bytes) {
+        lunet_em_state.peak_bytes = lunet_em_state.current_bytes;
     }
 
 #ifdef LUNET_TRACE_VERBOSE
     fprintf(stderr, "[EASY_MEMORY] ALLOC ptr=%p size=%zu at %s:%d\n",
-            ptr, size, file, line);
+            user, size, file, line);
 #else
     (void)file; (void)line;
 #endif
 
-    return ptr;
+    return user;
 }
 
 void *lunet_em_calloc(size_t count, size_t size, const char *file, int line) {
@@ -149,26 +187,46 @@ void *lunet_em_calloc(size_t count, size_t size, const char *file, int line) {
     return ptr;
 }
 
+void *lunet_em_realloc(void *ptr, size_t new_size, const char *file, int line) {
+    /* realloc(NULL, size) == malloc(size) */
+    if (!ptr) return lunet_em_alloc(new_size, file, line);
+
+    /* realloc(ptr, 0) == free(ptr) */
+    if (new_size == 0) {
+        lunet_em_free(ptr, file, line);
+        return NULL;
+    }
+
+    size_t old_size = em_get_size(ptr);
+    void *new_ptr = lunet_em_alloc(new_size, file, line);
+    if (!new_ptr) return NULL;
+
+    size_t copy_size = old_size < new_size ? old_size : new_size;
+    memcpy(new_ptr, ptr, copy_size);
+
+    lunet_em_free(ptr, file, line);
+    return new_ptr;
+}
+
 void lunet_em_free(void *ptr, const char *file, int line) {
     if (!ptr) return;
     if (!lunet_em_state.global_arena) return;
 
-    /*
-     * NOTE: easy_memory does not expose the size of a previously allocated
-     * block via its public API, so we cannot track exact freed byte counts
-     * the way our canary-based allocator does. We track the count only.
-     * The arena's internal integrity checks (XOR-magic headers, poisoning)
-     * provide the safety guarantees instead.
-     */
+    size_t size = em_get_size(ptr);
+    void *raw = em_user_to_hdr(ptr);
+
     lunet_em_state.free_count++;
+    lunet_em_state.free_bytes += (int64_t)size;
+    lunet_em_state.current_bytes -= (int64_t)size;
 
 #ifdef LUNET_TRACE_VERBOSE
-    fprintf(stderr, "[EASY_MEMORY] FREE ptr=%p at %s:%d\n", ptr, file, line);
+    fprintf(stderr, "[EASY_MEMORY] FREE ptr=%p size=%zu at %s:%d\n",
+            ptr, size, file, line);
 #else
     (void)file; (void)line;
 #endif
 
-    em_free(ptr);
+    em_free(raw);
 }
 
 /* =========================================================================

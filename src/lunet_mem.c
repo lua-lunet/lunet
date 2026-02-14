@@ -1,6 +1,9 @@
 #include "lunet_mem.h"
 
-#ifdef LUNET_TRACE
+/* When LUNET_EASY_MEMORY is active, it replaces the canary allocator.
+ * The lunet_mem_* functions/types are stubbed out in lunet_mem.h,
+ * so skip this entire implementation. */
+#if defined(LUNET_TRACE) && !defined(LUNET_EASY_MEMORY)
 
 #include <stdio.h>
 #include <assert.h>
@@ -148,4 +151,4 @@ void lunet_mem_assert_balanced(const char *context) {
     }
 }
 
-#endif /* LUNET_TRACE */
+#endif /* LUNET_TRACE && !LUNET_EASY_MEMORY */

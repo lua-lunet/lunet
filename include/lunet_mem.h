@@ -2,10 +2,10 @@
 #define LUNET_MEM_H
 
 /*
- * Centralized Memory Management with Two-Tier Diagnostics
- * ========================================================
+ * Centralized Memory Management with Three-Tier Diagnostics
+ * ==========================================================
  *
- * Release builds (default):
+ * Tier 0 - Release builds (default):
  *   lunet_alloc/lunet_free/lunet_calloc/lunet_realloc are thin #defines
  *   to malloc/free/calloc/realloc. Zero overhead.
  *
@@ -16,15 +16,54 @@
  *   On shutdown: lunet_mem_summary() prints stats, lunet_mem_assert_balanced() aborts
  *   if alloc_count != free_count.
  *
- * Tier 2 - LUNET_TRACE_VERBOSE (per-event stderr logging):
- *   Every alloc/free prints [MEM_TRACE] with pointer, size, and caller file:line.
- *   Only enable when actively debugging. Compile-time flag.
+ * Tier 2 - LUNET_EASY_MEMORY (arena allocator with XOR-magic integrity):
+ *   When LUNET_EASY_MEMORY is defined (via --easy_memory=y or --asan=y), all
+ *   lunet_alloc/lunet_free/lunet_calloc calls are routed through the EasyMem
+ *   global arena instead of the system heap.  EasyMem provides:
+ *     - XOR-magic block headers (address-dependent corruption detection)
+ *     - Memory poisoning on free (EM_POISONING)
+ *     - Arena-scoped bulk deallocation
+ *     - Profiling summary at shutdown
+ *   This tier REPLACES Tier 1 (canary allocator is bypassed) because EasyMem's
+ *   own integrity checks are more comprehensive.
+ *
+ * Tier 3 - LUNET_TRACE_VERBOSE (per-event stderr logging):
+ *   Every alloc/free prints [MEM_TRACE] or [EASY_MEMORY] with pointer, size,
+ *   and caller file:line.  Only enable when actively debugging.
  */
 
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef LUNET_TRACE
+/* =========================================================================
+ * TIER 2: EasyMem arena allocator (takes priority when enabled)
+ *
+ * When LUNET_EASY_MEMORY is defined, all lunet_alloc/free/calloc route
+ * through the EasyMem global arena.  The canary allocator is bypassed.
+ * ========================================================================= */
+#ifdef LUNET_EASY_MEMORY
+
+#include "lunet_easy_memory.h"
+
+#define lunet_alloc(size)          lunet_em_alloc((size), __FILE__, __LINE__)
+#define lunet_calloc(count, size)  lunet_em_calloc((count), (size), __FILE__, __LINE__)
+#define lunet_free(ptr)            do { lunet_em_free((ptr), __FILE__, __LINE__); (ptr) = NULL; } while(0)
+#define lunet_free_nonnull(ptr)    lunet_em_free((ptr), __FILE__, __LINE__)
+
+/* realloc: EasyMem has no realloc (by design: pointer stability).
+ * Provide alloc-copy-free fallback.  Only used if code actually calls it
+ * (currently nothing in lunet does). */
+#define lunet_realloc(ptr, size)   lunet_em_realloc((ptr), (size), __FILE__, __LINE__)
+
+/* lunet_mem lifecycle stubs -- the real lifecycle is in lunet_easy_memory */
+static inline void lunet_mem_init(void) {}
+static inline void lunet_mem_summary(void) {}
+static inline void lunet_mem_assert_balanced(const char *context) { (void)context; }
+
+/* =========================================================================
+ * TIER 1: Canary allocator (when LUNET_TRACE is on but EasyMem is not)
+ * ========================================================================= */
+#elif defined(LUNET_TRACE)
 
 #include <stdio.h>
 #include <assert.h>
@@ -72,7 +111,10 @@ void  lunet_mem_free_impl(void *ptr, const char *file, int line);
 /* Free without NULLing - for cases where ptr is a local about to go out of scope */
 #define lunet_free_nonnull(ptr)    lunet_mem_free_impl((ptr), __FILE__, __LINE__)
 
-#else /* !LUNET_TRACE */
+/* =========================================================================
+ * TIER 0: Release builds - direct to system allocator
+ * ========================================================================= */
+#else /* !LUNET_TRACE && !LUNET_EASY_MEMORY */
 
 /* Zero-cost: direct to system allocator */
 #define lunet_alloc(size)          malloc(size)
@@ -85,6 +127,6 @@ static inline void lunet_mem_init(void) {}
 static inline void lunet_mem_summary(void) {}
 static inline void lunet_mem_assert_balanced(const char *context) { (void)context; }
 
-#endif /* LUNET_TRACE */
+#endif /* LUNET_EASY_MEMORY / LUNET_TRACE */
 
 #endif /* LUNET_MEM_H */

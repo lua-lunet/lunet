@@ -75,6 +75,7 @@ void lunet_em_assert_balanced(const char *context);
 
 void *lunet_em_alloc(size_t size, const char *file, int line);
 void *lunet_em_calloc(size_t count, size_t size, const char *file, int line);
+void *lunet_em_realloc(void *ptr, size_t new_size, const char *file, int line);
 void  lunet_em_free(void *ptr, const char *file, int line);
 
 /* =========================================================================

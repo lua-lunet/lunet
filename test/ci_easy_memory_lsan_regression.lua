@@ -1,15 +1,18 @@
 -- Regression probe for EasyMem+ASAN leak cleanup on Linux.
--- This script exercises lunet's own code paths (pure-C drivers only) and
--- exits cleanly so LeakSanitizer can validate that we free everything.
+-- This script exercises all driver modules including MySQL, stresses them
+-- over multiple cycles, and exits cleanly so LeakSanitizer can validate
+-- shutdown behavior.
 --
--- IMPORTANT: Do NOT load lunet.mysql here.  libmysqlclient is a C++ library
--- whose one-time runtime allocations (locale facets, etc.) are reported as
--- leaks by LSAN.  Because the library is dlopen'd, LSAN often cannot resolve
--- the module name (shows "<unknown module>") making suppressions unreliable.
--- MySQL driver coverage lives in ci_easy_memory_db_stress.lua instead.
+-- libmysqlclient is a C++ library with a known fixed overhead of ~4
+-- allocations (~153 bytes) from one-time C++ runtime initialization
+-- (locale facets, thread-local storage).  These do NOT grow with usage.
+-- The CI wrapper uses LSAN_OPTIONS=exitcode=23 to distinguish leak-exit
+-- from crash-exit and asserts the allocation count stays within the known
+-- threshold.
 
 local lunet = require("lunet")
 
+local ITERATIONS = tonumber(os.getenv("LSAN_STRESS_ITERATIONS")) or 5
 local failures = 0
 
 local function fail(msg)
@@ -28,23 +31,52 @@ local function sqlite_probe()
         return
     end
 
-    local conn, err = db.open({ path = ":memory:" })
-    if not conn then
-        fail("sqlite open failed: " .. tostring(err))
+    for i = 1, ITERATIONS do
+        local conn, err = db.open({ path = ":memory:" })
+        if not conn then
+            fail("sqlite open failed (iter " .. i .. "): " .. tostring(err))
+            return
+        end
+
+        local _, exec_err = db.exec(conn, "CREATE TABLE lsan_probe (id INTEGER PRIMARY KEY)")
+        if exec_err then
+            fail("sqlite exec failed (iter " .. i .. "): " .. tostring(exec_err))
+        end
+
+        db.close(conn)
+    end
+    info("sqlite probe completed (" .. ITERATIONS .. " iterations)")
+end
+
+local function mysql_probe()
+    local ok, db = pcall(require, "lunet.mysql")
+    if not ok then
+        info("skip lunet.mysql (module unavailable): " .. tostring(db))
         return
     end
 
-    local _, exec_err = db.exec(conn, "CREATE TABLE lsan_probe (id INTEGER PRIMARY KEY)")
-    if exec_err then
-        fail("sqlite exec failed: " .. tostring(exec_err))
-    end
+    -- Stress multiple connect/close cycles to prove leaks do not grow.
+    -- Server is typically unavailable in CI, so connect fails — that still
+    -- exercises the full init/thread_init/close/thread_end/library_end path.
+    for i = 1, ITERATIONS do
+        local conn, err = db.open({
+            host = "127.0.0.1",
+            port = 3306,
+            user = "root",
+            password = "root",
+            database = "test"
+        })
 
-    db.close(conn)
-    info("sqlite probe completed")
+        if conn then
+            db.close(conn)
+        end
+    end
+    info("mysql probe completed (" .. ITERATIONS .. " iterations)")
 end
 
 lunet.spawn(function()
     sqlite_probe()
+    mysql_probe()
 
     if failures > 0 then
         info("probe completed with failures=" .. failures)

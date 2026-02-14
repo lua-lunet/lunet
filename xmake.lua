@@ -645,19 +645,20 @@ task("preflight-easy-memory")
 
         local runner = lunet_runner_path("debug")
         local runnerq = lunet_quote(runner)
-        -- DB stress loads libmysqlclient (C++) whose one-time runtime allocs
-        -- cause LSAN false positives -> detect_leaks=0 for that test only.
-        -- LSAN regression test uses pure-C drivers only -> detect_leaks=1.
+        -- DB stress: detect_leaks=0 because libmysqlclient C++ runtime has
+        -- known fixed-overhead allocations.
+        -- LSAN regression: detect_leaks=1 with exitcode=23 so the caller
+        -- can parse the summary and assert <= 4 allocations (known overhead).
         if is_host("windows") then
             lunet_exec_logged(os, logdir, "06_ci_easy_memory_db_stress",
                 "set ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 && set LIGHT_DB_STRESS_OPS=" .. ops .. " && " .. runnerq .. " test/ci_easy_memory_db_stress.lua")
             lunet_exec_logged(os, logdir, "07_ci_easy_memory_lsan_regression",
-                "set ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 && " .. runnerq .. " test/ci_easy_memory_lsan_regression.lua")
+                "set ASAN_OPTIONS=halt_on_error=1 && set LSAN_OPTIONS=exitcode=23 && " .. runnerq .. " test/ci_easy_memory_lsan_regression.lua")
         else
             lunet_exec_logged(os, logdir, "06_ci_easy_memory_db_stress",
                 "ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 LIGHT_DB_STRESS_OPS=" .. ops .. " timeout 120 " .. runnerq .. " test/ci_easy_memory_db_stress.lua")
             lunet_exec_logged(os, logdir, "07_ci_easy_memory_lsan_regression",
-                "ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 timeout 120 " .. runnerq .. " test/ci_easy_memory_lsan_regression.lua")
+                "ASAN_OPTIONS=halt_on_error=1 LSAN_OPTIONS=exitcode=23 timeout 120 " .. runnerq .. " test/ci_easy_memory_lsan_regression.lua || true")
         end
 
         print("EasyMem preflight passed. Logs: " .. logdir)

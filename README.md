@@ -42,11 +42,13 @@ If you use raw FFI database bindings inside a lunet application, you lose all th
 ## Build
 
 ```bash
-# Default SQLite build
-make build
+# Configure and build
+xmake f -m release -y
+xmake build
 
 # Build with tracing (debug mode)
-make build-debug
+xmake f -m debug --lunet_trace=y -y
+xmake build
 ```
 
 ## Example: MCP-SSE Server
@@ -83,7 +85,8 @@ echo "TAVILY_API_KEY=your_key" > .env
 First build the runner:
 
 ```bash
-make build
+xmake f -m release -y
+xmake build
 LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1)
 ```
 
@@ -227,7 +230,7 @@ db.close(conn)
 
 ## Safety: Zero-Cost Tracing
 
-Build with `make build-debug` to enable coroutine reference tracking and stack integrity checks. The runtime will assert and crash on leaks or stack pollution.
+Build with `xmake f -m debug --lunet_trace=y -y && xmake build` to enable coroutine reference tracking and stack integrity checks. The runtime will assert and crash on leaks or stack pollution.
 
 ## Debugging
 
@@ -266,9 +269,9 @@ xmake build lunet-bin
 
 ASan output goes to stderr. The process exits with `Abort trap: 6` instead of `Segmentation fault: 11`. Look for `ERROR: AddressSanitizer:` in the log.
 
-#### Full LuaJIT + Lunet ASan (Debian Trixie source)
+#### Full LuaJIT + Lunet ASan (Debian Trixie source, macOS)
 
-To instrument both Lunet and LuaJIT (not just Lunet C code), build the OpenResty LuaJIT source package used by Debian Trixie and link Lunet against it:
+To instrument both Lunet and LuaJIT (not just Lunet C code), build the OpenResty LuaJIT source package and link Lunet against it. These advanced targets remain in the Makefile:
 
 ```bash
 make luajit-asan
@@ -308,7 +311,7 @@ export MACOSX_DEPLOYMENT_TARGET="$(sw_vers -productVersion | awk -F. '{print $1 
 Do not rely only on edge tracing to infer the fault location. First try to make LuaJIT/Lunet crash immediately under ASan:
 
 ```bash
-make build-debug-asan-luajit
+make build-debug-asan-luajit   # macOS only
 make repro-50-asan-luajit
 ```
 
@@ -355,9 +358,22 @@ When `LUNET_TRACE` is enabled, all allocations through `lunet_alloc()` / `lunet_
 ## Testing
 
 ```bash
-make test    # Unit tests
-make stress  # Concurrent load test with tracing
+xmake init   # Install dev deps (luafilesystem, luacheck, busted) - run once
+xmake lint   # C safety lint
+xmake check  # Lua static analysis (luacheck)
+xmake test   # Unit tests
+xmake stress # Concurrent load test with tracing
 ```
+
+### Pre-commit hook
+
+To run lint and check before each commit:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Bypass when needed: `git commit --no-verify`
 
 ## Downstream Integration
 

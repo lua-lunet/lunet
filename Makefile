@@ -1,3 +1,8 @@
+# DEPRECATED: Main workflows (build, lint, test, stress, release) have migrated to xmake.
+# Use: xmake build, xmake lint, xmake check, xmake test, xmake stress, xmake release
+# This Makefile is retained for: luajit-asan, build-debug-asan-luajit, repro-50-asan-luajit (macOS)
+# and rock/rocks-validate/smoke/certs. See README.md for xmake usage.
+
 .PHONY: all build init test clean help
 .PHONY: lint build-debug stress release rock rocks-validate certs smoke socket-gc luajit-asan build-debug-asan-luajit repro-50-asan-luajit
 

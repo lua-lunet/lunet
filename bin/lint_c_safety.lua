@@ -1,7 +1,5 @@
 #!/usr/bin/env lua
 
-local lfs = require("lfs")
-
 -- ANSI Colors
 local RED = "\27[31m"
 local GREEN = "\27[32m"
@@ -10,22 +8,36 @@ local NC = "\27[0m"
 local violations_count = 0
 local files_with_violations = 0
 
--- Helper to recursively find files
+-- Helper to recursively find files (works with or without luafilesystem)
 local function find_files(dir, extension, files)
     files = files or {}
-    local mode = lfs.attributes(dir, "mode")
-    if mode ~= "directory" then return files end
-
-    for entry in lfs.dir(dir) do
-        if entry ~= "." and entry ~= ".." then
-            local path = dir .. "/" .. entry
-            local attr = lfs.attributes(path)
-            if attr.mode == "directory" then
-                find_files(path, extension, files)
-            elseif attr.mode == "file" and path:match("%." .. extension .. "$") then
-                table.insert(files, path)
+    local ok, lfs = pcall(require, "lfs")
+    if ok and lfs then
+        local mode = lfs.attributes(dir, "mode")
+        if mode ~= "directory" then return files end
+        for entry in lfs.dir(dir) do
+            if entry ~= "." and entry ~= ".." then
+                local path = dir .. "/" .. entry
+                local attr = lfs.attributes(path)
+                if attr.mode == "directory" then
+                    find_files(path, extension, files)
+                elseif attr.mode == "file" and path:match("%." .. extension .. "$") then
+                    table.insert(files, path)
+                end
             end
         end
+        return files
+    end
+    -- Fallback: use find (Unix, Git Bash on Windows)
+    local pattern = "*." .. extension
+    local escaped = dir:gsub('"', '\\"')
+    local cmd = string.format('find "%s" -type f -name "*.%s" 2>/dev/null', escaped, extension)
+    local h = io.popen(cmd)
+    if h then
+        for line in h:lines() do
+            table.insert(files, line)
+        end
+        h:close()
     end
     return files
 end

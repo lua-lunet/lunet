@@ -358,3 +358,111 @@ target("lunet-paxe")
         add_defines("LUNET_TRACE_VERBOSE")
     end
 target_end()
+
+-- =============================================================================
+-- Development Tasks (lint, check, test, stress, release)
+-- =============================================================================
+-- Run via: xmake lint, xmake check, xmake test, xmake stress, xmake release
+-- These replace the former Makefile entrypoints for mainline workflows.
+
+task("init")
+    set_category("plugin")
+    set_description("Install dev dependencies: luafilesystem, luacheck, busted")
+    on_run(function ()
+        print("Installing dev dependencies (luarocks)...")
+        os.execv("luarocks", {"install", "luafilesystem", "--local"})
+        os.execv("luarocks", {"install", "luacheck", "--local"})
+        os.execv("luarocks", {"install", "busted", "--local"})
+        print("Done. Run xmake lint, xmake check, xmake test as needed.")
+    end)
+task_end()
+
+task("lint")
+    set_category("plugin")
+    set_description("Check C code for unsafe _lunet_* calls (must use safe wrappers)")
+    on_run(function ()
+        local root = os.projectdir()
+        -- Use luajit (project standard) or lua if LUA env is set
+        local lua = os.getenv("LUA") or "luajit"
+        local ok = os.execv(lua, {path.join(root, "bin", "lint_c_safety.lua")}, {curdir = root})
+        if not ok then
+            os.raise("C safety lint failed")
+        end
+    end)
+task_end()
+
+task("check")
+    set_category("plugin")
+    set_description("Run luacheck static analysis on Lua code")
+    on_run(function ()
+        local root = os.projectdir()
+        local ok = os.execv("luacheck", {"test/", "spec/"}, {curdir = root})
+        if not ok then
+            os.raise("luacheck failed")
+        end
+    end)
+task_end()
+
+task("test")
+    set_category("plugin")
+    set_description("Run unit tests with busted")
+    on_run(function ()
+        local root = os.projectdir()
+        local ok = os.execv("busted", {"spec/"}, {curdir = root})
+        if not ok then
+            os.raise("Tests failed")
+        end
+    end)
+task_end()
+
+task("stress")
+    set_category("plugin")
+    set_description("Run concurrent stress test with tracing (builds debug first)")
+    on_run(function ()
+        local root = os.projectdir()
+        os.execv("xmake", {"f", "-m", "debug", "--lunet_trace=y", "--lunet_verbose_trace=n", "-y"}, {curdir = root})
+        os.execv("xmake", {"build"}, {curdir = root})
+        local workers = os.getenv("STRESS_WORKERS") or "50"
+        local ops = os.getenv("STRESS_OPS") or "100"
+        local found = nil
+        for _, p in ipairs(os.files(path.join(root, "build", "**", "lunet-run"))) do
+            found = p
+            break
+        end
+        if not found then
+            for _, p in ipairs(os.files(path.join(root, "build", "**", "lunet-run.exe"))) do
+                found = p
+                break
+            end
+        end
+        if not found then
+            os.raise("lunet-run binary not found. Build failed?")
+        end
+        os.setenv("STRESS_WORKERS", workers)
+        os.setenv("STRESS_OPS", ops)
+        local ok = os.execv(found, {"test/stress_test.lua"}, {curdir = root})
+        if not ok then
+            os.raise("Stress test failed")
+        end
+    end)
+task_end()
+
+task("release")
+    set_category("plugin")
+    set_description("Full release gate: lint + check + test + stress + optimized build")
+    on_run(function ()
+        local root = os.projectdir()
+        print("=== Release gate: lint ===")
+        os.execv("xmake", {"lint"}, {curdir = root})
+        print("=== Release gate: check ===")
+        os.execv("xmake", {"check"}, {curdir = root})
+        print("=== Release gate: test ===")
+        os.execv("xmake", {"test"}, {curdir = root})
+        print("=== Release gate: stress ===")
+        os.execv("xmake", {"stress"}, {curdir = root})
+        print("=== Release gate: build ===")
+        os.execv("xmake", {"f", "-m", "release", "--lunet_trace=n", "--lunet_verbose_trace=n", "-y"}, {curdir = root})
+        os.execv("xmake", {"build"}, {curdir = root})
+        print("=== Release gate complete ===")
+    end)
+task_end()

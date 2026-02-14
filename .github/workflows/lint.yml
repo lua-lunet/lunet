@@ -1,0 +1,51 @@
+name: Lint and Test
+
+on:
+  push:
+    branches: [ main, xmake ]
+  pull_request:
+    branches: [ main, xmake ]
+
+jobs:
+  lint:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libuv1-dev luajit libluajit-5.1-dev luarocks
+          eval $(luarocks path --bin)
+          echo "LUA_PATH=$(luarocks path)" >> $GITHUB_ENV
+          echo "LUA_CPATH=$(luarocks path --lr-cpath)" >> $GITHUB_ENV
+          echo "$(luarocks path --bin)" >> $GITHUB_PATH
+
+      - name: Install dev dependencies
+        run: |
+          luarocks install luafilesystem --local
+          luarocks install luacheck --local
+          luarocks install busted --local
+
+      - name: Build (for tests)
+        run: |
+          xmake f -m release -y
+          xmake build
+          LUNET_SO=$(find build -name 'lunet.so' -type f | head -1)
+          echo "LUA_CPATH=$(dirname $LUNET_SO)/?.so;;$(luarocks path --lr-cpath)" >> $GITHUB_ENV
+
+      - name: Run lint (C safety)
+        run: xmake lint
+
+      - name: Run check (luacheck)
+        run: xmake check
+
+      - name: Run tests
+        run: xmake test

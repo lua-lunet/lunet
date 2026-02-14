@@ -28,6 +28,8 @@ Lunet now supports these EasyMem paths:
 Logs are archived at:
 
 - `.tmp/logs/20260214_054129/`
+- `.tmp/logs/20260214_061022/` (zero-overhead audit)
+- `.tmp/logs/20260214_061820/` (post-migration extension allocator build/run validation)
 
 ### Build validation
 
@@ -56,9 +58,14 @@ Logs are archived at:
 2. **Allocator accounting is accurate for Lunet core allocations**
    - Stress runs show balanced alloc/free counts and stable low peaks.
 
-3. **DB and PAXE examples show zero Lunet allocator counts**
-   - `examples/03_db_sqlite3.lua` and `examples/06_paxe_encryption.lua` report `allocs=0 frees=0` in Lunet memory summary.
-   - This indicates those paths currently rely mostly on raw `malloc/free` in extension modules (`ext/*`, `src/paxe.c`) instead of `lunet_alloc/lunet_free`.
+3. **Source migration completed for extension allocations**
+   - Direct `malloc/calloc/realloc/free/strdup` usage was replaced with Lunet allocator wrappers in:
+     - `ext/sqlite3/sqlite3.c`
+     - `ext/mysql/mysql.c`
+     - `ext/postgres/postgres.c`
+     - `src/paxe.c`
+   - Build validation passed for all related targets: `lunet-sqlite3`, `lunet-mysql`, `lunet-postgres`, `lunet-paxe`.
+   - Note: top-level `lunet-run` memory summary for module-driven examples can still show `allocs=0` because driver modules currently compile their own copy of core allocator state; this requires a shared-core linkage follow-up to aggregate stats in one global state.
 
 4. **ASAN + EasyMem dual coverage works**
    - ASAN instrumentation and EasyMem diagnostics are active together in debug builds.
@@ -68,9 +75,9 @@ Logs are archived at:
 
 To fully exploit EasyMem (especially around DB worker/mutex paths), apply these next:
 
-1. **Migrate extension allocations to Lunet allocator wrappers**
-   - Replace direct `malloc/calloc/realloc/free` in `ext/sqlite3/sqlite3.c`, `ext/mysql/mysql.c`, `ext/postgres/postgres.c`, and `src/paxe.c` with Lunet allocator APIs.
-   - This makes those modules visible in EasyMem profiling and integrity checks.
+1. **Unify allocator state across module boundaries**
+   - Current driver modules embed core sources, so allocator counters are per-module.
+   - For fully unified profiling/integrity reporting, refactor to share one allocator state (e.g., link driver modules against a shared core allocator/runtime object instead of duplicating `src/lunet_mem.c` in each module target).
 
 2. **Per-operation arenas for DB worker tasks**
    - For each `uv_queue_work` DB operation, create a nested/scratch EasyMem scope.
@@ -86,4 +93,52 @@ To fully exploit EasyMem (especially around DB worker/mutex paths), apply these 
 
 ## Conclusion
 
-EasyMem is now integrated as an opt-in allocator backend with automatic activation in trace/ASAN modes and an explicit experimental release option. The profiling pipeline is operational, but extension modules must be migrated to Lunet allocator wrappers to realize full allocator diagnostics coverage across database and crypto paths.
+EasyMem is now integrated as an opt-in allocator backend with automatic activation in trace/ASAN modes and an explicit experimental release option. Extension allocation calls have been migrated to Lunet allocator wrappers in the DB/PAXE code paths. Remaining work is to unify allocator state across shared-module boundaries so all module allocations appear in one consolidated runtime summary.
+
+## Zero-Overhead Verification (Release, EasyMem Disabled)
+
+Audit log set: `.tmp/logs/20260214_061022/`
+
+### Method used
+
+Compared release artifacts across four configurations:
+
+1. default release (`--lunet_trace=n --lunet_verbose_trace=n`)
+2. explicit EasyMem-off release (`--easy_memory=n --easy_memory_experimental=n --asan=n`)
+3. EasyMem release (`--easy_memory=y`)
+4. EasyMem experimental release (`--easy_memory_experimental=y`)
+
+For each, captured:
+- `sha256sum` of `lunet-run` and `lunet.so`
+- file byte size (`wc -c`)
+- section sizes (`size`, text/data/bss)
+- dynamic symbol counts (`nm -D --defined-only`)
+- dynamic dependencies (`readelf -d` NEEDED entries)
+
+### Result
+
+Default release and explicit EasyMem-off release are **byte-for-byte identical**:
+- `lunet-run` hash: `7d7c248d32dfa132a84e850dadafca030c1d75814ba325298c45641f3a7a930b`
+- `lunet.so` hash: `ad16fe0cccad4eb41ef7bbc50f21234f6c7b0d9ba44f6d50c7f5d959362125e7`
+- same sizes/sections/dependencies
+- no EasyMem strings/symbol signatures detected
+
+This confirms **zero accidental release overhead** when EasyMem is disabled.
+
+## Top-Level Artifact Stats When Tracing/Diagnostics Are Enabled
+
+Baseline (release, EasyMem disabled):
+- `lunet-run`: 47,248 bytes
+- `lunet.so`: 47,968 bytes
+
+EasyMem release (`--easy_memory=y`):
+- `lunet-run`: 59,536 bytes (**+12,288**, +26.01%)
+- `lunet.so`: 60,384 bytes (**+12,416**, +25.88%)
+- Added exported allocator symbol family (`em_*`)
+
+EasyMem experimental diagnostics (`--easy_memory_experimental=y`):
+- `lunet-run`: 67,728 bytes (**+20,480**, +43.35%)
+- `lunet.so`: 68,608 bytes (**+20,640**, +43.03%)
+- Adds diagnostics symbols/output paths including `print_em` and `print_fancy`
+
+No extra shared-library dependencies were introduced in any variant (still `libluajit-5.1`, `libuv`, `libc` on Linux in this audit).

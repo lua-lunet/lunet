@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "lunet_mem.h"
 
 /* Constants */
 #define HEADER_LEN 8
@@ -463,7 +464,7 @@ static int l_paxe_try_decrypt(lua_State *L) {
     const char *input = luaL_checklstring(L, 1, &len);
 
     /* Make a mutable copy since paxe_try_decrypt modifies in-place */
-    uint8_t *buf = malloc(len);
+    uint8_t *buf = lunet_alloc(len);
     if (!buf) {
         lua_pushnil(L);
         lua_pushstring(L, "out of memory");
@@ -476,7 +477,7 @@ static int l_paxe_try_decrypt(lua_State *L) {
     ssize_t plaintext_len = paxe_try_decrypt(buf, len, &key_id, &flags);
 
     if (plaintext_len < 0) {
-        free(buf);
+        lunet_free_nonnull(buf);
         lua_pushnil(L);
         lua_pushstring(L, "decryption failed");
         return 2;
@@ -485,7 +486,7 @@ static int l_paxe_try_decrypt(lua_State *L) {
     lua_pushlstring(L, (const char *)buf, (size_t)plaintext_len);
     lua_pushinteger(L, (lua_Integer)key_id);
     lua_pushinteger(L, (lua_Integer)flags);
-    free(buf);
+    lunet_free_nonnull(buf);
     return 3;
 }
 
@@ -508,7 +509,7 @@ static int l_paxe_encrypt(lua_State *L) {
     /* Allocate output buffer: Header(8) + Nonce(12) + Ciphertext + Tag(16) */
     size_t ciphertext_len = plaintext_len + TAG_LEN;
     size_t total_len = HEADER_LEN + NONCE_LEN + ciphertext_len;
-    uint8_t *buf = malloc(total_len);
+    uint8_t *buf = lunet_alloc(total_len);
     if (!buf) {
         lua_pushnil(L);
         lua_pushstring(L, "out of memory");
@@ -542,14 +543,14 @@ static int l_paxe_encrypt(lua_State *L) {
     );
 
     if (ret != 0) {
-        free(buf);
+        lunet_free_nonnull(buf);
         lua_pushnil(L);
         lua_pushstring(L, "encryption failed");
         return 2;
     }
 
     lua_pushlstring(L, (const char *)buf, total_len);
-    free(buf);
+    lunet_free_nonnull(buf);
     return 1;
 }
 

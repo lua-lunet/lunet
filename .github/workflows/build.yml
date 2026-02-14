@@ -345,10 +345,29 @@ jobs:
           exit $rc
         fi
 
-    # Windows ASAN stress test skipped: MSVC ASAN + LuaJIT is unreliable
-    # on CI runners (silent crashes, missing runtime DLLs).  ASAN coverage
-    # is provided by Linux and macOS.  The EasyMem experimental release
-    # build (non-ASAN) still validates Windows compilation.
+    - name: Run light DB stress (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        # Add MSVC ASAN runtime DLL directory to PATH
+        $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath 2>$null
+        if ($vsPath) {
+          $asanDirs = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" -Recurse -Filter "clang_rt.asan_dynamic-x86_64.dll" -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.DirectoryName } | Select-Object -Unique
+          foreach ($dir in $asanDirs) {
+            Write-Host "Adding ASAN runtime dir to PATH: $dir"
+            $env:PATH = "$dir;$env:PATH"
+          }
+        }
+        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
+        if (-not $lunet) { throw "lunet-run.exe not found" }
+        Write-Host "Binary: $($lunet.FullName)"
+        $env:LIGHT_DB_STRESS_OPS = "20"
+        & $lunet.FullName test/ci_easy_memory_db_stress.lua 2>&1
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "::error::DB stress test failed with exit code $LASTEXITCODE"
+          exit $LASTEXITCODE
+        }
 
     - name: Configure EasyMem experimental release (Unix)
       if: runner.os != 'Windows'

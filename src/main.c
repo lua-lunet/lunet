@@ -18,6 +18,7 @@
 #include "trace.h"
 #include "runtime.h"
 #include "lunet_mem.h"
+#include "embed_scripts.h"
 #ifdef LUNET_PAXE
 #include "paxe.h"
 #endif
@@ -265,6 +266,12 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+#ifdef LUNET_EMBED_SCRIPTS
+  char embedded_root[LUNET_EMBED_PATH_MAX] = {0};
+  char embedded_script[LUNET_EMBED_PATH_MAX] = {0};
+  char embed_error[512] = {0};
+#endif
+
   /* Initialize tracing */
   lunet_init_once();
 
@@ -317,8 +324,38 @@ int main(int argc, char **argv) {
   cpath_done:;
   }
 
+  const char *script_to_run = argv[script_index];
+#ifdef LUNET_EMBED_SCRIPTS
+  if (lunet_embed_scripts_prepare(L,
+                                  embedded_root,
+                                  sizeof(embedded_root),
+                                  embed_error,
+                                  sizeof(embed_error)) != 0) {
+    fprintf(stderr, "Error: failed to prepare embedded scripts: %s\n", embed_error);
+    lua_close(L);
+    return 1;
+  }
+
+  {
+    int resolved = lunet_embed_scripts_resolve_script(embedded_root,
+                                                      script_to_run,
+                                                      embedded_script,
+                                                      sizeof(embedded_script),
+                                                      embed_error,
+                                                      sizeof(embed_error));
+    if (resolved < 0) {
+      fprintf(stderr, "Error: failed to resolve embedded script path: %s\n", embed_error);
+      lua_close(L);
+      return 1;
+    }
+    if (resolved > 0) {
+      script_to_run = embedded_script;
+    }
+  }
+#endif
+
   // run lua file
-  if (luaL_dofile(L, argv[script_index]) != LUA_OK) {
+  if (luaL_dofile(L, script_to_run) != LUA_OK) {
     const char *error = lua_tostring(L, -1);
     fprintf(stderr, "Error: %s\n", error);
     lua_pop(L, 1);

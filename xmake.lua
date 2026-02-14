@@ -313,7 +313,20 @@ target("lunet-bin")
             local output = path.join(generated_dir, "lunet_embed_scripts_blob.h")
 
             os.mkdir(generated_dir)
-            os.execv("xmake", {"lua", generator, "--source", source_dir, "--output", output, "--project-root", root}, {curdir = root})
+            -- xmake's CLI parser can consume --foo flags unless we force passthrough with "--".
+            -- We also provide env fallbacks for compatibility across xmake versions.
+            local generator_args = {
+                "lua", generator, "--",
+                "--source", source_dir,
+                "--output", output,
+                "--project-root", root
+            }
+            local generator_envs = {
+                LUNET_EMBED_SOURCE = source_dir,
+                LUNET_EMBED_OUTPUT = output,
+                LUNET_EMBED_PROJECT_ROOT = root
+            }
+            os.execv("xmake", generator_args, {curdir = root, envs = generator_envs})
         end)
     end
     

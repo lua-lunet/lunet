@@ -18,6 +18,7 @@
 #include "trace.h"
 #include "runtime.h"
 #include "lunet_mem.h"
+#include "lunet_easy_memory.h"
 #ifdef LUNET_PAXE
 #include "paxe.h"
 #endif
@@ -119,6 +120,7 @@ static void lunet_init_once(void) {
     if (initialized) return;
     initialized = 1;
     
+    lunet_em_init();       /* EasyMem arena (no-op if LUNET_EASY_MEMORY not defined) */
     lunet_mem_init();
     lunet_trace_init();
 }
@@ -224,6 +226,9 @@ static void lunet_trace_shutdown(void) {
     lunet_trace_assert_balanced("shutdown");
     lunet_mem_assert_balanced("shutdown");
 #endif
+    /* EasyMem profiling summary and arena teardown (no-op if not enabled) */
+    lunet_em_assert_balanced("shutdown");
+    lunet_em_shutdown();
 }
 
 #ifndef LUNET_NO_MAIN

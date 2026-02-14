@@ -26,6 +26,16 @@ option("lunet_verbose_trace")
     add_deps("lunet_trace") -- verbose trace implies trace
 option_end()
 
+-- EasyMem/easy_memory integration (experimental)
+-- Replaces system malloc with easy_memory arena allocator for richer
+-- diagnostics, integrity checks, arena-scoped allocation, and profiling.
+-- See: https://github.com/EasyMem/easy_memory
+option("easy_memory")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Enable EasyMem/easy_memory arena allocator (experimental, richer diagnostics)")
+option_end()
+
 -- LuaJIT source package pins for the ASan builder script.
 -- These are consumed by Makefile luajit-asan targets via xmake config.
 option("luajit_snapshot")
@@ -52,8 +62,35 @@ local core_sources = {
     "src/stl.c",
     "src/timer.c",
     "src/trace.c",
-    "src/lunet_mem.c"  -- New memory wrapper implementation
+    "src/lunet_mem.c",           -- Memory wrapper implementation
+    "src/lunet_easy_memory.c",   -- EasyMem/easy_memory adapter (compiles to nothing unless LUNET_EASY_MEMORY)
+    "ext/easy_memory/lunet_easy_memory.c"  -- easy_memory.h implementation TU (compiles to nothing unless LUNET_EASY_MEMORY)
 }
+
+-- Helper: apply EasyMem/easy_memory defines and includes to a target.
+-- Call inside each target() block after the basic setup.
+-- When --easy_memory=y:
+--   * LUNET_EASY_MEMORY is always defined
+--   * ext/easy_memory is added to include path
+--   * Trace builds get EM_ASSERT_STAYS + EM_POISONING + EM_SAFETY_POLICY=0
+--   * Release builds get EM_SAFETY_POLICY=1 (defensive)
+-- When --asan=y, easy_memory is also force-enabled with full diagnostics.
+function apply_easy_memory(is_asan)
+    local em_enabled = has_config("easy_memory") or is_asan
+    if em_enabled then
+        add_includedirs("ext/easy_memory", {public = false})
+        add_defines("LUNET_EASY_MEMORY")
+        if has_config("lunet_trace") or is_asan then
+            -- Full diagnostics: assertions always on, poisoning, contract mode
+            add_defines("EM_ASSERT_STAYS")
+            add_defines("EM_POISONING")
+            add_defines("EM_SAFETY_POLICY=0")
+        else
+            -- Release: defensive mode, graceful NULL on misuse
+            add_defines("EM_SAFETY_POLICY=1")
+        end
+    end
+end
 
 -- =============================================================================
 -- Package Requirements (MUST be at root scope, before any targets)
@@ -133,6 +170,9 @@ target("lunet")
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
     end
+    
+    -- EasyMem/easy_memory integration
+    apply_easy_memory(false)
 target_end()
 
 -- Address Sanitizer option for debugging memory bugs
@@ -178,6 +218,9 @@ target("lunet-bin")
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
     end
+    
+    -- EasyMem/easy_memory integration (auto-enabled when ASan is active)
+    apply_easy_memory(has_config("asan"))
 target_end()
 
 -- =============================================================================
@@ -226,6 +269,7 @@ target("lunet-sqlite3")
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
     end
+    apply_easy_memory(false)
 target_end()
 
 -- MySQL driver: require("lunet.mysql")
@@ -267,6 +311,7 @@ target("lunet-mysql")
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
     end
+    apply_easy_memory(false)
 target_end()
 
 -- PostgreSQL driver: require("lunet.postgres")
@@ -308,6 +353,7 @@ target("lunet-postgres")
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
     end
+    apply_easy_memory(false)
 target_end()
 
 -- PAXE Packet Encryption: require("lunet.paxe")
@@ -357,4 +403,5 @@ target("lunet-paxe")
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
     end
+    apply_easy_memory(false)
 target_end()

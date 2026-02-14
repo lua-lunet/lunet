@@ -1,5 +1,6 @@
 .PHONY: all build init test clean help
 .PHONY: lint build-debug stress release rock rocks-validate certs smoke socket-gc luajit-asan build-debug-asan-luajit repro-50-asan-luajit
+.PHONY: build-easy-memory build-debug-easy-memory
 
 all: build ## Build the project (default)
 
@@ -15,6 +16,25 @@ build: lint ## Build lunet shared library and executable with xmake
 	@echo "Build complete:"
 	@echo "  Module: $$(find build -path '*/release/lunet.so' -type f 2>/dev/null | head -1)"
 	@echo "  Binary: $$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1)"
+
+build-easy-memory: lint ## Build release binary with EasyMem/easy_memory arena allocator (experimental)
+	@echo "=== Building lunet with EasyMem/easy_memory (release mode, experimental) ==="
+	xmake f -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory=y -y
+	xmake build
+	@echo ""
+	@echo "Build complete (easy_memory enabled):"
+	@echo "  Module: $$(find build -path '*/release/lunet.so' -type f 2>/dev/null | head -1)"
+	@echo "  Binary: $$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1)"
+
+build-debug-easy-memory: lint ## Build debug with LUNET_TRACE + EasyMem/easy_memory (full diagnostics)
+	@echo "=== Building lunet with EasyMem/easy_memory (debug + trace + full diagnostics) ==="
+	@echo "EasyMem settings: EM_ASSERT_STAYS + EM_POISONING + EM_SAFETY_POLICY=0 (CONTRACT)"
+	xmake f -m debug --lunet_trace=y --lunet_verbose_trace=n --easy_memory=y -y
+	xmake build
+	@echo ""
+	@echo "Build complete (easy_memory + trace enabled):"
+	@echo "  Module: $$(find build -path '*/debug/lunet.so' -type f 2>/dev/null | head -1)"
+	@echo "  Binary: $$(find build -path '*/debug/lunet-run' -type f 2>/dev/null | head -1)"
 
 build-debug: lint ## Build with LUNET_TRACE=ON for debugging (enables safety assertions)
 	@echo "=== Building lunet with xmake (debug mode with tracing) ==="

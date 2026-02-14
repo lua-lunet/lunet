@@ -411,13 +411,12 @@ static void db_query_work_cb(uv_work_t* req) {
 
   uv_mutex_lock(&ctx->wrapper->mutex);
 
-  mysql_thread_init();
   if (ctx->wrapper->closed || !ctx->wrapper->conn) {
     snprintf(ctx->err, sizeof(ctx->err), "connection is closed");
-    mysql_thread_end();
     uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
+  mysql_thread_init();
 
   // Use prepared statement
   MYSQL_STMT* stmt = mysql_stmt_init(ctx->wrapper->conn);
@@ -445,34 +444,6 @@ static void db_query_work_cb(uv_work_t* req) {
     return;
   }
 
-  if (ctx->nparams > 0) {
-    MYSQL_BIND* bind = lunet_alloc(sizeof(MYSQL_BIND) * ctx->nparams);
-    if (!bind) {
-      snprintf(ctx->err, sizeof(ctx->err), "out of memory");
-      mysql_stmt_close(stmt);
-      mysql_thread_end();
-      uv_mutex_unlock(&ctx->wrapper->mutex);
-      return;
-    }
-    
-    if (bind_params(stmt, bind, ctx->params, ctx->nparams, ctx->err, sizeof(ctx->err))) {
-       lunet_free_nonnull(bind);
-       mysql_stmt_close(stmt);
-       mysql_thread_end();
-       uv_mutex_unlock(&ctx->wrapper->mutex);
-       return;
-    }
-    lunet_free_nonnull(bind); // bind_params calls mysql_stmt_bind_param which copies the structures? No, it uses the array. 
-    // Wait, mysql_stmt_bind_param documentation says "The array of MYSQL_BIND structures must remain valid until the statement is executed."
-    // But we are about to execute it.
-    // However, if we free 'bind' here, and then call mysql_stmt_execute, is it safe?
-    // mysql_stmt_bind_param documentation says: "The bind argument is an array of MYSQL_BIND structures. The library uses the information in this array to bind the buffers... "
-    // It usually doesn't copy the array, it uses the pointer. 
-    // BUT we are in the same function scope.
-    // Wait, I should free it AFTER execution.
-  }
-  
-  // Re-allocating bind for clarity and safety
   MYSQL_BIND* bind = NULL;
   if (ctx->nparams > 0) {
       bind = lunet_alloc(sizeof(MYSQL_BIND) * ctx->nparams);
@@ -839,13 +810,12 @@ static void db_exec_work_cb(uv_work_t* req) {
 
   uv_mutex_lock(&ctx->wrapper->mutex);
 
-  mysql_thread_init();
   if (ctx->wrapper->closed || !ctx->wrapper->conn) {
     snprintf(ctx->err, sizeof(ctx->err), "connection is closed");
-    mysql_thread_end();
     uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
+  mysql_thread_init();
 
   // Use prepared statement
   MYSQL_STMT* stmt = mysql_stmt_init(ctx->wrapper->conn);

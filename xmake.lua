@@ -701,8 +701,20 @@ task("smoke")
         os.exec("xmake build-release")
         local runner = lunet_runner_path("release")
         os.execv(runner, {"test/smoke_sqlite3.lua"})
-        pcall(function () os.execv(runner, {"test/smoke_mysql.lua"}) end)
-        pcall(function () os.execv(runner, {"test/smoke_postgres.lua"}) end)
+
+        local mysql_modules = os.files("build/**/release/lunet/mysql.*")
+        if #mysql_modules > 0 then
+            os.execv(runner, {"test/smoke_mysql.lua"})
+        else
+            print("[smoke] skip mysql: driver module not built")
+        end
+
+        local postgres_modules = os.files("build/**/release/lunet/postgres.*")
+        if #postgres_modules > 0 then
+            os.execv(runner, {"test/smoke_postgres.lua"})
+        else
+            print("[smoke] skip postgres: driver module not built")
+        end
     end)
 task_end()
 

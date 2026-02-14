@@ -13,7 +13,7 @@ jobs:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
@@ -148,10 +148,10 @@ jobs:
           elif [ $rc -eq 23 ]; then
             allocs=$(grep -oE '[0-9]+ allocation' lsan_stderr.txt | tail -1 | grep -oE '[0-9]+')
             echo "LSAN: $allocs allocation(s) leaked"
-            if [ -n "$allocs" ] && [ "$allocs" -le 4 ]; then
-              echo "LSAN: within known MySQL C++ runtime overhead (threshold: 4)"
+            if [ -n "$allocs" ] && [ "$allocs" -eq 4 ]; then
+              echo "LSAN: known fixed MySQL C++ runtime overhead confirmed (exactly 4 allocations)"
             else
-              echo "LSAN: EXCEEDS known threshold of 4 — possible real leak"
+              echo "LSAN: unexpected allocation count (expected exactly 4 when leaks are reported)"
               exit 1
             fi
           else

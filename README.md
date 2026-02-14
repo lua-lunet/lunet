@@ -372,6 +372,7 @@ When `LUNET_TRACE` is enabled, all allocations through `lunet_alloc()` / `lunet_
 ```bash
 xmake test    # Unit tests
 xmake stress  # Concurrent load test with tracing
+xmake preflight-easy-memory  # Local EasyMem+ASan smoke/regression gate (logs in .tmp/logs/)
 ```
 
 ## Downstream Integration

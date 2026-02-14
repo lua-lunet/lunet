@@ -342,6 +342,22 @@ int main(int argc, char **argv) {
   lunet_trace_shutdown();
   
   lua_close(L);
+
+  {
+    int loop_close_status = uv_loop_close(uv_default_loop());
+    if (loop_close_status != 0) {
+      fprintf(stderr, "[LUNET] uv_loop_close failed at shutdown: %s\n",
+              uv_strerror(loop_close_status));
+    }
+#if UV_VERSION_HEX >= ((1 << 16) | (38 << 8) | 0)
+    if (loop_close_status == 0) {
+      uv_library_shutdown();
+    }
+#endif
+  }
+#if defined(LUNET_TRACE) || defined(LUNET_EASY_MEMORY)
+  lunet_mem_shutdown();
+#endif
   if (lua_exit_code >= 0) {
     return lua_exit_code;
   }

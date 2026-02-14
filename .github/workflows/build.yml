@@ -268,7 +268,8 @@ jobs:
     - name: Install Dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        brew install pkg-config libuv luajit
+        brew install pkg-config libuv luajit zlib
+        echo "PKG_CONFIG_PATH=$(brew --prefix zlib)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
 
     - name: Configure embed scripts build
       run: xmake f -c -m release --lunet_embed_scripts=y --lunet_embed_scripts_dir=examples -y

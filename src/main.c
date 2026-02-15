@@ -23,6 +23,10 @@
 #include "paxe.h"
 #endif
 
+#ifdef LUNET_HTTPC
+#include "httpc.h"
+#endif
+
 static char *lunet_resolve_executable_path(const char *argv0) {
 #if defined(_WIN32)
   return _fullpath(NULL, argv0, 0);
@@ -155,6 +159,14 @@ LUNET_API int luaopen_lunet_paxe(lua_State *L) {
   set_default_luaL(L);
   lua_newtable(L);
   return lunet_open_paxe(L);
+}
+#endif
+
+#if defined(LUNET_HTTPC)
+LUNET_API int luaopen_lunet_httpc(lua_State *L) {
+  lunet_init_once();
+  set_default_luaL(L);
+  return lunet_open_httpc(L);
 }
 #endif
 

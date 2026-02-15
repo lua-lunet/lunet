@@ -1,4 +1,9 @@
 describe("HTTP Module", function()
+  if not package.searchpath("app.lib.http", package.path) then
+    pending("app.lib.http not present in lunet core", function() end)
+    return
+  end
+
   local http = require("app.lib.http")
 
   describe("parse_query_string", function()

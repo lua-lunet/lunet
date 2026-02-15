@@ -57,3 +57,15 @@ lunet 是协议无关的。您的边缘层转发什么，lunet 就处理什么�
 | 数据 | Redis 协议、Memcached 协议 |
 | 游戏 | Source RCON、Minecraft 协议、Photon、ENet |
 | 自定义 | 任何基于帧或长度前缀的二进制协议 |
+
+## 出站 TLS 客户端（可选）
+
+本文档中“在边缘终止 TLS”的建议针对的是**入站暴露面**，并不禁止出站 HTTPS 客户端流量。
+
+某些应用（例如调用 LLM 提供商的 MCP 服务器）需要出站 HTTPS，但不需要接收入站的公网 HTTPS 连接。
+此时应保持入站绑定仅限 Unix 套接字或 `127.0.0.1`，并通过出站客户端模块访问远程 API。
+
+Lunet 支持一个可选的**仅客户端** HTTPS 模块：
+- `lunet.httpc`（libcurl），用于出站 `https://...` 请求
+
+默认开启 TLS 校验。仅用于开发的逃生阀可通过 `LUNET_HTTPC_INSECURE=1` 启用（生产环境不要使用）。

@@ -1,4 +1,9 @@
 describe("JSON Module", function()
+  if not package.searchpath("app.lib.json", package.path) then
+    pending("app.lib.json not present in lunet core", function() end)
+    return
+  end
+
   local json = require("app.lib.json")
 
   it("encodes basic types", function()

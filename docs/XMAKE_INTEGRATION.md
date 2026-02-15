@@ -38,6 +38,22 @@ xmake build
 - `build/<platform>/<arch>/release/lunet.so` — the Lua module
 - `build/<platform>/<arch>/release/lunet-run` — standalone runner
 
+### 1b. Optional native modules
+
+Lunet ships optional native modules as separate xmake targets. Build only what you need.
+
+Examples:
+
+```bash
+# Database drivers
+xmake build lunet-sqlite3
+xmake build lunet-mysql
+xmake build lunet-postgres
+
+# Outbound HTTPS client (libcurl)
+xmake build lunet-httpc
+```
+
 ### 2. Run your app with lunet-run
 
 ```bash

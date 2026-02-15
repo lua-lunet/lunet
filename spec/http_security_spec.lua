@@ -1,4 +1,9 @@
 describe("HTTP Path Traversal Security", function()
+  if not package.searchpath("app.lib.http", package.path) then
+    pending("app.lib.http not present in lunet core", function() end)
+    return
+  end
+
   local http
   local mock_fs
   local handle_static_request

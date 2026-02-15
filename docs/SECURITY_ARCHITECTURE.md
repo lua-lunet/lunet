@@ -64,3 +64,19 @@ lunet is protocol-agnostic. Whatever your edge forwards, lunet handles:
 | Data | Redis protocol, Memcached protocol |
 | Gaming | Source RCON, Minecraft protocol, Photon, ENet |
 | Custom | Any framed or length-prefixed binary protocol |
+
+## Outbound TLS Clients (Optional)
+
+This document’s “terminate TLS at the edge” guidance is about **inbound exposure**.
+It does not prohibit outbound HTTPS client traffic.
+
+Some applications (e.g. MCP servers calling LLM providers) need outbound HTTPS but
+do not need to accept inbound public HTTPS connections. In that case, keep inbound
+binding restricted to Unix sockets or `127.0.0.1`, and use an outbound client module
+for remote APIs.
+
+Lunet supports an optional **client-only** HTTPS module:
+- `lunet.httpc` (libcurl) for outbound `https://...` requests
+
+TLS verification is enabled by default. A development-only escape hatch may be
+enabled via `LUNET_HTTPC_INSECURE=1` (do not use in production).

@@ -17,11 +17,14 @@ Lunet is **modular by design**. You build only what you need:
   - `lunet-sqlite3` - SQLite3 driver
   - `lunet-mysql` - MySQL/MariaDB driver
   - `lunet-postgres` - PostgreSQL driver
+- **Outbound HTTPS client** (optional xmake target):
+  - `lunet-httpc` - HTTPS client via libcurl (`require("lunet.httpc")`)
 
 Build one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
 
 Getting started (build flow, profiles, and integration details):
 - **[docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md)**
+- **[docs/HTTPC.md](docs/HTTPC.md)** (optional outbound HTTPS client)
 
 ### Why use lunet database drivers?
 

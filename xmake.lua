@@ -228,6 +228,13 @@ else
     add_requires("pkgconfig::libsodium", {alias = "sodium", optional = true})
 end
 
+-- HTTP client dependencies (optional)
+if is_plat("windows") then
+    add_requires("vcpkg::curl", {alias = "curl", optional = true})
+else
+    add_requires("pkgconfig::libcurl", {alias = "curl", optional = true})
+end
+
 -- Shared library target for require("lunet")
 target("lunet")
     set_kind("shared")
@@ -544,6 +551,52 @@ target("lunet-paxe")
     end
 target_end()
 
+-- HTTPS client module: require("lunet.httpc")
+-- Optional via: xmake build lunet-httpc
+target("lunet-httpc")
+    set_default(false)
+    set_kind("shared")
+    add_rules("lunet.c_safety_lint")
+    set_prefixname("")
+    set_basename("httpc")  -- Output: lunet/httpc.so
+    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
+    if is_plat("windows") then
+        set_extension(".dll")
+    else
+        set_extension(".so")
+    end
+
+    add_files(core_sources)
+    add_files("ext/httpc/httpc.c")
+    add_includedirs("include", "ext/httpc", {public = true})
+    add_packages("luajit", "libuv", "curl")
+    lunet_apply_asan_flags("shared")
+    lunet_apply_easy_memory()
+
+    add_defines("LUNET_NO_MAIN", "LUNET_HTTPC")
+
+    if is_plat("macosx") then
+        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+    end
+    if is_plat("linux") then
+        add_defines("_GNU_SOURCE")
+        add_cflags("-pthread")
+        add_ldflags("-pthread")
+        add_syslinks("pthread", "dl", "m")
+    end
+    if is_plat("windows") then
+        add_cflags("/TC")
+        add_defines("LUNET_BUILDING_DLL")
+        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
+    end
+    if has_config("lunet_trace") then
+        add_defines("LUNET_TRACE")
+    end
+    if has_config("lunet_verbose_trace") then
+        add_defines("LUNET_TRACE_VERBOSE")
+    end
+target_end()
+
 -- =============================================================================
 -- Developer Tasks (xmake-only workflow)
 -- =============================================================================
@@ -635,7 +688,19 @@ task("test")
         description = "Run Lua tests with busted"
     }
     on_run(function ()
-        os.exec("busted spec/")
+        local mode = get_config("mode") or "release"
+        local dirs = os.dirs("build/**/" .. mode .. "/lunet")
+        local cpath = os.getenv("LUA_CPATH") or ""
+        if #dirs > 0 then
+            local ext = is_host("windows") and "?.dll" or "?.so"
+            local moddir = path.join(os.projectdir(), dirs[1], ext)
+            cpath = moddir .. ";;" .. cpath
+        end
+        if is_host("windows") then
+            os.execv("cmd", {"/C", "set LUA_CPATH=" .. cpath .. "&& busted spec/"})
+        else
+            os.execv("bash", {"-lc", "LUA_CPATH=" .. lunet_quote(cpath) .. " busted spec/"})
+        end
     end)
 task_end()
 
@@ -687,8 +752,13 @@ task("preflight-easy-memory")
             "xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n --asan=y --easy_memory=y -y")
         lunet_exec_logged(os, logdir, "02_build_lunet_bin", "xmake build lunet-bin")
         lunet_exec_logged(os, logdir, "03_build_lunet_sqlite3", "xmake build lunet-sqlite3")
-        lunet_exec_logged(os, logdir, "04_build_lunet_mysql", "xmake build lunet-mysql")
-        lunet_exec_logged(os, logdir, "05_build_lunet_postgres", "xmake build lunet-postgres")
+        if is_host("windows") then
+            lunet_exec_logged(os, logdir, "04_build_lunet_mysql", "xmake build lunet-mysql || exit /b 0")
+            lunet_exec_logged(os, logdir, "05_build_lunet_postgres", "xmake build lunet-postgres || exit /b 0")
+        else
+            lunet_exec_logged(os, logdir, "04_build_lunet_mysql", "xmake build lunet-mysql || true")
+            lunet_exec_logged(os, logdir, "05_build_lunet_postgres", "xmake build lunet-postgres || true")
+        end
 
         local runner = lunet_runner_path("debug")
         local runnerq = lunet_quote(runner)

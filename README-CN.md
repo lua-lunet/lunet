@@ -15,11 +15,14 @@ Lunet 采用**模块化设计**。只构建你需要的：
   - `lunet-sqlite3` - SQLite3 驱动
   - `lunet-mysql` - MySQL/MariaDB 驱动
   - `lunet-postgres` - PostgreSQL 驱动
+- **出站 HTTPS 客户端**（可选 xmake 目标）：
+  - `lunet-httpc` - 基于 libcurl 的 HTTPS 客户端（`require("lunet.httpc")`）
 
 只构建一个数据库驱动，而不是全部。没有未使用的依赖。不需要为从未使用的库打安全补丁。
 
 入门（完整构建流程、配置档位、集成方式）：
 - **[docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md)**
+- **[docs/HTTPC-CN.md](docs/HTTPC-CN.md)**（可选出站 HTTPS 客户端）
 
 ### 为什么使用 lunet 数据库驱动？
 

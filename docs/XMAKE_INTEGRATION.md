@@ -171,6 +171,117 @@ xmake f --luajit_snapshot=2.1.0+openresty20250117 --luajit_debian_version=2.1.0+
 
 ---
 
+## Using Lunet as a Subproject
+
+If you're building a larger application with xmake, you can include lunet as a subproject instead of building it separately. This approach allows your project to manage lunet's build configuration and dependencies automatically.
+
+### Step 1: Add lunet to your project
+
+Clone or add lunet as a subdirectory in your project:
+
+```bash
+cd your-project/
+git submodule add https://github.com/lua-lunet/lunet.git lunet
+# Or simply clone it:
+# git clone https://github.com/lua-lunet/lunet.git lunet
+```
+
+### Step 2: Include lunet in your xmake.lua
+
+Add lunet to your project's `xmake.lua`:
+
+```lua
+-- Include lunet as a subproject
+includes("lunet")
+
+-- Your application target
+target("myapp")
+    set_kind("binary")
+    add_files("src/*.c")
+    
+    -- Link against lunet
+    add_deps("lunet")
+    add_packages("luajit", "libuv")
+    
+    -- Optional: also link database drivers
+    -- add_deps("lunet-sqlite3")
+    -- add_deps("lunet-mysql")
+    -- add_deps("lunet-postgres")
+target_end()
+```
+
+### Step 3: Configure and build
+
+```bash
+xmake f -m release -y
+xmake build
+```
+
+Your application will automatically build lunet and link against it. The lunet shared library will be available in your build output directory.
+
+### Using lunet targets from parent project
+
+When lunet is included as a subproject, you can build specific lunet targets from your parent project:
+
+```bash
+# Build just the core lunet library
+xmake build lunet
+
+# Build lunet with a database driver
+xmake build lunet-sqlite3
+
+# Build your app (automatically builds lunet if needed)
+xmake build myapp
+```
+
+### Example: Minimal parent project structure
+
+```
+your-project/
+├── lunet/              # Lunet subproject (git submodule or clone)
+│   ├── xmake.lua
+│   ├── src/
+│   └── include/
+├── src/
+│   └── main.c          # Your application code
+└── xmake.lua           # Your project's xmake.lua
+```
+
+**your-project/xmake.lua:**
+
+```lua
+set_project("myapp")
+set_version("1.0.0")
+set_languages("c99")
+
+add_rules("mode.debug", "mode.release")
+
+-- Include lunet
+includes("lunet")
+
+-- Package requirements (shared with lunet)
+if is_plat("windows") then
+    add_requires("vcpkg::luajit", {alias = "luajit"})
+    add_requires("vcpkg::libuv", {alias = "libuv"})
+else
+    add_requires("pkgconfig::luajit", {alias = "luajit"})
+    add_requires("pkgconfig::libuv", {alias = "libuv"})
+end
+
+target("myapp")
+    set_kind("binary")
+    add_files("src/*.c")
+    add_deps("lunet")
+    add_packages("luajit", "libuv")
+target_end()
+```
+
+### Note: Subproject path resolution
+
+As of this release, lunet's `xmake.lua` correctly uses `os.scriptdir()` instead of `os.projectdir()` for internal build scripts. This ensures that when included as a subproject, lunet can locate its `bin/` directory relative to its own location, not the parent project's root.
+
+---
+
 ## Troubleshooting
 
 | Problem | Solution |

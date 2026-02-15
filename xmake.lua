@@ -20,7 +20,7 @@ rule("lunet.c_safety_lint")
             return
         end
         c_safety_lint_ran = true
-        local root = os.projectdir()
+        local root = os.scriptdir()
         local lint_script = path.join(root, "bin", "lint_c_safety.lua")
         os.execv("xmake", {"lua", lint_script}, {curdir = root})
     end)
@@ -306,7 +306,7 @@ target("lunet-bin")
         add_includedirs(".tmp/generated")
 
         before_build(function ()
-            local root = os.projectdir()
+            local root = os.scriptdir()
             local generator = path.join(root, "bin", "generate_embed_scripts.lua")
             local source_dir = get_config("lunet_embed_scripts_dir") or "lua"
             local generated_dir = path.join(root, ".tmp", "generated")

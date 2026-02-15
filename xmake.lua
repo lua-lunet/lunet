@@ -367,7 +367,7 @@ target("lunet-sqlite3")
     add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("sqlite3")  -- Output: lunet/sqlite3.so
-    set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
+    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
     else
@@ -411,7 +411,7 @@ target("lunet-mysql")
     add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("mysql")  -- Output: lunet/mysql.so
-    set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
+    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
     else
@@ -455,7 +455,7 @@ target("lunet-postgres")
     add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("postgres")  -- Output: lunet/postgres.so
-    set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
+    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
     else
@@ -503,7 +503,7 @@ target("lunet-paxe")
     add_rules("lunet.c_safety_lint")
     set_prefixname("")
     set_basename("paxe")  -- Output: lunet/paxe.so
-    set_targetdir("$(buildir)/$(plat)/$(arch)/$(mode)/lunet")
+    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
     else

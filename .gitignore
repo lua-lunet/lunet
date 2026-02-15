@@ -5,11 +5,6 @@ build_*
 .vscode
 .tmp/
 .idea
-bench/*.log
-bench/.*.pid
-bench/django/*.pid
-bench/django/*.log
 .idea/
-conduit.db
 .xmake/
 tmp/

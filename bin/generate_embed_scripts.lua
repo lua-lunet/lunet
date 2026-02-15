@@ -3,24 +3,35 @@ import("lib.detect.find_tool")
 local MAGIC = "LUNETPK1"
 
 local function parse_args(argv)
-    local args = {source = "lua", project_root = "."}
+    local args = {
+        source = os.getenv("LUNET_EMBED_SOURCE") or "lua",
+        output = os.getenv("LUNET_EMBED_OUTPUT"),
+        project_root = os.getenv("LUNET_EMBED_PROJECT_ROOT") or "."
+    }
     local i = 1
+    if argv[i] == "--" then
+        i = i + 1
+    end
     while i <= #argv do
         local key = argv[i]
-        local val = argv[i + 1]
-        if not val then
-            raise("missing value for argument: %s", tostring(key))
-        end
-        if key == "--source" then
-            args.source = val
-        elseif key == "--output" then
-            args.output = val
-        elseif key == "--project-root" then
-            args.project_root = val
+        if key == "--" then
+            i = i + 1
         else
-            raise("unknown argument: %s", tostring(key))
+            local val = argv[i + 1]
+            if not val then
+                raise("missing value for argument: %s", tostring(key))
+            end
+            if key == "--source" then
+                args.source = val
+            elseif key == "--output" then
+                args.output = val
+            elseif key == "--project-root" then
+                args.project_root = val
+            else
+                raise("unknown argument: %s", tostring(key))
+            end
+            i = i + 2
         end
-        i = i + 2
     end
     if not args.output then
         raise("missing required --output argument")

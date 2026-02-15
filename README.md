@@ -361,12 +361,32 @@ If a crash happens inside `lua_rawgeti` from a libuv callback, it often means th
 
 When `LUNET_TRACE` is enabled, all allocations through `lunet_alloc()` / `lunet_free()` are tracked with canary headers and poison-on-free. EasyMem is also enabled automatically in trace builds, providing allocator-level integrity checks and memory usage visualization. At shutdown, `lunet_mem_assert_balanced()` checks for leaks. Use `lunet_alloc` / `lunet_free` instead of raw `malloc` / `free` in all lunet C code.
 
-## Testing
+## Developer Workflow
+
+xmake is the canonical build system. There is no Makefile. All tasks are defined in `xmake.lua`.
+
+| Task | Description |
+|------|-------------|
+| `xmake lint` | C safety lint checks |
+| `xmake check` | luacheck static analysis |
+| `xmake test` | Unit tests (busted) |
+| `xmake build-release` | Optimized release build |
+| `xmake build-debug` | Debug build with tracing |
+| `xmake examples-compile` | Examples compile/syntax check |
+| `xmake sqlite3-smoke` | SQLite3 example smoke test |
+| `xmake stress` | Concurrent load test with tracing |
+| `xmake ci` | Local CI parity (lint + build + examples + sqlite3 smoke) |
+| `xmake preflight-easy-memory` | EasyMem + ASan preflight gate |
+| `xmake release` | Full release gate (lint + test + stress + preflight + build) |
+
+For the complete task catalog and recommended workflows, see **[docs/WORKFLOW.md](docs/WORKFLOW.md)**.
+
+### Quick Testing
 
 ```bash
 xmake test    # Unit tests
 xmake stress  # Concurrent load test with tracing
-xmake preflight-easy-memory  # Local EasyMem+ASan smoke/regression gate (logs in .tmp/logs/)
+xmake ci      # Full local CI parity check
 ```
 
 ## Downstream Integration

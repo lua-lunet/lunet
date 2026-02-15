@@ -313,7 +313,20 @@ target("lunet-bin")
             local output = path.join(generated_dir, "lunet_embed_scripts_blob.h")
 
             os.mkdir(generated_dir)
-            os.execv("xmake", {"lua", generator, "--source", source_dir, "--output", output, "--project-root", root}, {curdir = root})
+            -- xmake's CLI parser can consume --foo flags unless we force passthrough with "--".
+            -- We also provide env fallbacks for compatibility across xmake versions.
+            local generator_args = {
+                "lua", generator, "--",
+                "--source", source_dir,
+                "--output", output,
+                "--project-root", root
+            }
+            local generator_envs = {
+                LUNET_EMBED_SOURCE = source_dir,
+                LUNET_EMBED_OUTPUT = output,
+                LUNET_EMBED_PROJECT_ROOT = root
+            }
+            os.execv("xmake", generator_args, {curdir = root, envs = generator_envs})
         end)
     end
     
@@ -803,6 +816,49 @@ task("repro-50-asan-luajit")
         local debver = lunet_trim(os.iorun("xmake l -c 'import(\"core.project.config\"); config.load(); io.write(config.get(\"luajit_debian_version\") or \"\")'"))
         local prefix = lunet_trim(os.iorun("LUAJIT_SNAPSHOT=\"" .. snapshot .. "\" LUAJIT_DEBIAN_VERSION=\"" .. debver .. "\" lua bin/build_luajit_asan.lua"))
         os.exec("DYLD_LIBRARY_PATH=\"" .. prefix .. "/lib:$DYLD_LIBRARY_PATH\" LUNET_BIN=\"$(pwd)/build/macosx/arm64/debug/lunet-run\" ITERATIONS=${ITERATIONS:-10} REQUESTS=${REQUESTS:-50} CONCURRENCY=${CONCURRENCY:-4} WORKERS=${WORKERS:-4} timeout 180 .tmp/repro-payload/scripts/repro.sh")
+    end)
+task_end()
+
+task("examples-compile")
+    set_menu {
+        usage = "xmake examples-compile",
+        description = "Run examples compile/syntax check"
+    }
+    on_run(function ()
+        os.exec("xmake build-release")
+        local runner = lunet_runner_path("release")
+        os.execv(runner, {"test/ci_examples_compile.lua"})
+    end)
+task_end()
+
+task("sqlite3-smoke")
+    set_menu {
+        usage = "xmake sqlite3-smoke",
+        description = "Build and run SQLite3 example smoke test"
+    }
+    on_run(function ()
+        os.exec("xmake build-release")
+        os.exec("xmake build lunet-sqlite3")
+        local runner = lunet_runner_path("release")
+        os.execv(runner, {"examples/03_db_sqlite3.lua"})
+    end)
+task_end()
+
+task("ci")
+    set_menu {
+        usage = "xmake ci",
+        description = "Run local CI parity sequence (lint, build, examples, sqlite3 smoke)"
+    }
+    on_run(function ()
+        os.exec("xmake lint")
+        os.exec("xmake build-release")
+        os.exec("xmake build lunet-sqlite3")
+
+        local runner = lunet_runner_path("release")
+        print("--- examples compile check ---")
+        os.execv(runner, {"test/ci_examples_compile.lua"})
+        print("--- sqlite3 example smoke ---")
+        os.execv(runner, {"examples/03_db_sqlite3.lua"})
     end)
 task_end()
 

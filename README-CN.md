@@ -19,7 +19,7 @@ Lunet 采用**模块化设计**。只构建你需要的：
 只构建一个数据库驱动，而不是全部。没有未使用的依赖。不需要为从未使用的库打安全补丁。
 
 入门（完整构建流程、配置档位、集成方式）：
-- **[docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md)**
+- **[docs/XMAKE_INTEGRATION-CN.md](docs/XMAKE_INTEGRATION-CN.md)**
 
 ### 为什么使用 lunet 数据库驱动？
 

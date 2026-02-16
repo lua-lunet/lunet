@@ -20,7 +20,7 @@ rule("lunet.c_safety_lint")
             return
         end
         c_safety_lint_ran = true
-        local root = os.projectdir()
+        local root = os.scriptdir()
         local lint_script = path.join(root, "bin", "lint_c_safety.lua")
         os.execv("xmake", {"lua", lint_script}, {curdir = root})
     end)
@@ -246,6 +246,20 @@ target("lunet")
         set_extension(".dll")
     else
         set_extension(".so")
+    end
+
+    -- Keep lunet.so for Lua require("lunet"), and also emit liblunet.so so
+    -- parent projects using add_deps("lunet") can link via -llunet.
+    if not is_plat("windows") then
+        after_build(function (target)
+            local targetfile = target:targetfile()
+            local compat_link_name = "lib" .. target:basename() .. ".so"
+            local compat_link_file = path.join(path.directory(targetfile), compat_link_name)
+            if compat_link_file ~= targetfile then
+                os.tryrm(compat_link_file)
+                os.cp(targetfile, compat_link_file)
+            end
+        end)
     end
     
     add_files(core_sources)

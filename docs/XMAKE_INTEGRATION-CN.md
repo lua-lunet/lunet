@@ -81,6 +81,31 @@ export LUA_CPATH="$(pwd)/build/$(xmake l print(os.host()))/$(xmake l print(os.ar
 luajit -e 'local lunet=require("lunet"); print(type(lunet))'
 ```
 
+### 4. 将 Lunet 作为 xmake 子项目使用
+
+如果您的应用有自己的 `xmake.lua`，可以把 Lunet 作为子项目引入，并通过
+`add_deps("lunet")` 链接：
+
+```lua
+set_project("myapp")
+set_languages("c99")
+add_rules("mode.debug", "mode.release")
+
+includes("lunet")
+
+add_requires("pkgconfig::luajit", "pkgconfig::libuv")
+
+target("myapp")
+    set_kind("binary")
+    add_files("src/*.c")
+    add_deps("lunet")
+    add_packages("luajit", "libuv")
+target_end()
+```
+
+Lunet 会继续输出用于 Lua `require` 的 `lunet.so`，并额外生成兼容链接用的
+`liblunet.so`（适配通过 `-l<name>` 进行依赖链接的工具链）。
+
 ---
 
 ## 构建配置（各场景使用指南）

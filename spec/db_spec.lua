@@ -1,4 +1,9 @@
 describe("DB Module (pure functions) #native", function()
+  if not package.searchpath("app.lib.db", package.path) then
+    pending("app.lib.db not present in lunet core", function() end)
+    return
+  end
+
   local db
 
   setup(function()

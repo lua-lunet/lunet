@@ -38,6 +38,22 @@ xmake build
 - `build/<platform>/<arch>/release/lunet.so` — Lua 模块
 - `build/<platform>/<arch>/release/lunet-run` — 独立运行器
 
+### 1b. 可选原生模块
+
+Lunet 将可选原生模块作为独立的 xmake 目标提供。只构建你需要的部分。
+
+示例：
+
+```bash
+# 数据库驱动
+xmake build lunet-sqlite3
+xmake build lunet-mysql
+xmake build lunet-postgres
+
+# 出站 HTTPS 客户端（libcurl）
+xmake build lunet-httpc
+```
+
 ### 2. 使用 lunet-run 运行应用
 
 ```bash

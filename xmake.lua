@@ -587,7 +587,10 @@ target("lunet-httpc")
     if is_plat("windows") then
         add_cflags("/TC")
         add_defines("LUNET_BUILDING_DLL")
-        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
+        -- libcurl on Windows (vcpkg/Schannel) needs crypto, security, and zlib libs
+        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp",
+                     "crypt32", "secur32")
+        add_packages("zlib")
     end
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")

@@ -81,6 +81,31 @@ export LUA_CPATH="$(pwd)/build/$(xmake l print(os.host()))/$(xmake l print(os.ar
 luajit -e 'local lunet=require("lunet"); print(type(lunet))'
 ```
 
+### 4. Use Lunet as an xmake subproject
+
+If your app has its own `xmake.lua`, include Lunet as a subproject and link it
+with `add_deps("lunet")`:
+
+```lua
+set_project("myapp")
+set_languages("c99")
+add_rules("mode.debug", "mode.release")
+
+includes("lunet")
+
+add_requires("pkgconfig::luajit", "pkgconfig::libuv")
+
+target("myapp")
+    set_kind("binary")
+    add_files("src/*.c")
+    add_deps("lunet")
+    add_packages("luajit", "libuv")
+target_end()
+```
+
+Lunet keeps the Lua module output as `lunet.so` and also emits a compatibility
+`liblunet.so` for toolchains that link dependencies via `-l<name>`.
+
 ---
 
 ## Build Profiles (When to Use Each)

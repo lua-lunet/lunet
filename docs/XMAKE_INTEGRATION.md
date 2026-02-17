@@ -106,6 +106,22 @@ target_end()
 Lunet keeps the Lua module output as `lunet.so` and also emits a compatibility
 `liblunet.so` for toolchains that link dependencies via `-l<name>`.
 
+## Downstream task patterns (`app-ci`, `app-release`, `app-preflight`)
+
+If you are integrating Lunet into an application repository, do not copy Lunet's
+upstream `xmake ci`/`xmake release` tasks directly. Those tasks assume this
+repository's internal tests and examples.
+
+For downstream projects, define app-scoped gates:
+
+- `xmake app-ci` for lint + build + app smoke/integration checks
+- `xmake app-preflight` for debug/ASan pre-release validation
+- `xmake app-release` for app-ci + app-preflight + packaging
+
+For a concrete scaffold (including shell-test wiring, logs, timeouts, and
+`os.scriptdir()` guidance for subproject paths), see
+[Downstream Project Workflow Alignment](DOWNSTREAM_WORKFLOW.md).
+
 ---
 
 ## Build Profiles (When to Use Each)

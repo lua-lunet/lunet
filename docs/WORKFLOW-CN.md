@@ -106,6 +106,25 @@ GitHub Actions 工作流（`.github/workflows/build.yml`）在每次推送到 `m
 
 `xmake ci` 任务在本地镜像此流水线，让你在推送前发现问题。
 
+## 下游项目工作流对齐
+
+本仓库中的 `xmake ci` 与 `xmake release` 是 Lunet 上游维护门控任务，默认依赖 Lunet 内部目录和测试资产（`test/`、`spec/`、`examples/`），大多数下游应用并不具备这些结构。
+
+下游项目应定义应用级门控任务，例如：
+
+- `xmake app-ci`
+- `xmake app-preflight`
+- `xmake app-release`
+
+这些任务应保持与上游一致的质量目标（lint/build/smoke/integration/preflight），但使用下游项目自己的脚本和测试资产。
+
+详见 [下游项目工作流对齐指南](DOWNSTREAM_WORKFLOW-CN.md)，其中包含：
+
+- 推荐的下游 `xmake.lua` 结构
+- `app-ci` / `app-release` 任务模式
+- 基于 shell 的测试集成（含日志与超时）
+- 子项目集成中的 `os.scriptdir()` 路径建议
+
 ## 迁移说明
 
 - **无 Makefile**：Lunet 从未提供过 Makefile。所有工作流使用 xmake。

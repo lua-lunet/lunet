@@ -187,16 +187,24 @@ xmake 是标准构建系统。没有 Makefile。所有任务定义在 `xmake.lua
 | 任务 | 描述 |
 |------|------|
 | `xmake lint` | C 安全代码检查 |
-| `xmake check` | luacheck 静态分析 |
+| `xmake check` | luacheck 静态分析（分阶段基线过滤） |
 | `xmake test` | 单元测试（busted） |
 | `xmake build-release` | 优化的发布构建 |
 | `xmake build-debug` | 启用追踪的调试构建 |
 | `xmake examples-compile` | 示例编译/语法检查 |
 | `xmake sqlite3-smoke` | SQLite3 示例冒烟测试 |
 | `xmake stress` | 带追踪的并发压力测试 |
-| `xmake ci` | 本地 CI 一致性检查（lint + 构建 + 示例 + sqlite3 冒烟） |
+| `xmake ci` | 本地 CI 一致性检查（lint + check + test + 构建 + 示例 + sqlite3 冒烟） |
 | `xmake preflight-easy-memory` | EasyMem + ASan 预检门控 |
 | `xmake release` | 完整发布门控（lint + test + stress + 预检 + 构建） |
+
+启用仓库内置 pre-commit 钩子：
+
+```bash
+./bin/install-hooks.sh
+```
+
+仅在紧急情况下使用 `git commit --no-verify` 跳过钩子。
 
 完整任务目录和推荐工作流请参见 **[docs/WORKFLOW-CN.md](docs/WORKFLOW-CN.md)**。
 

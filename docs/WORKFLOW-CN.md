@@ -32,7 +32,7 @@
 | 任务 | 描述 |
 |------|------|
 | `xmake lint` | 运行 C 安全代码检查（`bin/lint_c_safety.lua`） |
-| `xmake check` | 对 `test/` 和 `spec/` 运行 luacheck 静态分析 |
+| `xmake check` | 对 `test/` 和 `spec/` 运行 luacheck 静态分析（分阶段基线过滤） |
 | `xmake test` | 使用 busted 运行 Lua 单元测试（`spec/`） |
 
 ### 构建配置档位
@@ -57,7 +57,7 @@
 
 | 任务 | 描述 |
 |------|------|
-| `xmake ci` | 运行完整的本地 CI 一致性序列：lint、build-release、构建 lunet-sqlite3、示例编译检查、SQLite3 冒烟 |
+| `xmake ci` | 运行完整的本地 CI 一致性序列：lint、check、build-release、test、构建 lunet-sqlite3、示例编译检查、SQLite3 冒烟 |
 | `xmake preflight-easy-memory` | 运行 EasyMem + ASan 预检冒烟，输出日志（`.tmp/logs/`） |
 | `xmake release` | 完整发布门控：lint + test + stress + EasyMem 预检 + build-release |
 
@@ -102,12 +102,12 @@ xmake release         # lint + test + stress + 预检 + build-release
 
 ## CI 流水线
 
-GitHub Actions 工作流（`.github/workflows/build.yml`）在每次推送到 `main` 和每个 pull request 时运行。它在 Linux、macOS 和 Windows 上构建，然后运行示例编译检查和 SQLite3 冒烟测试。
+GitHub Actions 工作流（`.github/workflows/build.yml`）在每次推送到 `main` 和每个 pull request 时运行。它会先在 Ubuntu 上执行专门的 lint 门控（`xmake lint`、`xmake check`、`xmake test`），随后在 Linux、macOS 和 Windows 上执行跨平台构建，并运行示例编译检查与 SQLite3 冒烟测试。
 
 `xmake ci` 任务在本地镜像此流水线，让你在推送前发现问题。
 
 ## 迁移说明
 
 - **无 Makefile**：Lunet 从未提供过 Makefile。所有工作流使用 xmake。
-- **Pre-commit 钩子**：仓库包含一个 pre-commit 钩子，自动运行 `xmake lint`。通过 `bin/install-hooks.sh` 安装或将 `.githooks/pre-commit` 复制到 `.git/hooks/`。
+- **Pre-commit 钩子**：仓库提供 `.githooks/pre-commit`（运行 `xmake lint`，并在检测到 `luacheck` 时运行 `xmake check`）。建议用 `bin/install-hooks.sh` 安装，或执行 `git config core.hooksPath .githooks`。
 - **废弃策略**：如果未来需要构建系统迁移，xmake 任务将在过渡期间作为兼容层保留。

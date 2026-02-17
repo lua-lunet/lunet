@@ -15,7 +15,7 @@ describe("DB Connection Management", function()
       query_calls = {},
       exec_calls = {},
       escape_calls = {},
-      
+
       reset = function()
         mysql_mock.open_calls = {}
         mysql_mock.close_calls = {}
@@ -23,7 +23,7 @@ describe("DB Connection Management", function()
         mysql_mock.exec_calls = {}
         mysql_mock.escape_calls = {}
       end,
-      
+
       open = function(cfg)
         local conn = {
           conn_id = #mysql_mock.open_calls + 1,
@@ -34,30 +34,30 @@ describe("DB Connection Management", function()
         table.insert(mysql_mock.open_calls, conn)
         return conn
       end,
-      
+
       close = function(conn)
         conn.closed = true
         table.insert(mysql_mock.close_calls, conn)
       end,
-      
+
       query = function(conn, sql)
         table.insert(mysql_mock.query_calls, {conn = conn, sql = sql})
         if conn.closed then return nil, "connection closed" end
         return { { id = 1, name = "test" } }
       end,
-      
+
       exec = function(conn, sql)
         table.insert(mysql_mock.exec_calls, {conn = conn, sql = sql})
         if conn.closed then return nil, "connection closed" end
         return { affected_rows = 1 }
       end,
-      
+
       escape = function(s)
         table.insert(mysql_mock.escape_calls, s)
         return s:gsub("'", "''")
       end
     }
-    
+
     package.loaded["lunet.db"] = mysql_mock
     db = require("app.lib.db")
   end)
@@ -74,10 +74,12 @@ describe("DB Connection Management", function()
   it("opens new connection for each query", function()
     -- First query
     local result1 = db.query("SELECT * FROM users")
-    
+    assert.is_table(result1)
+
     -- Second query
     local result2 = db.query("SELECT * FROM posts")
-    
+    assert.is_table(result2)
+
     -- Should have opened two separate connections
     assert.is_equal(2, #mysql_mock.open_calls)
     assert.is_not_equal(mysql_mock.open_calls[1], mysql_mock.open_calls[2])
@@ -88,14 +90,14 @@ describe("DB Connection Management", function()
   it("opens new connection for each exec", function()
     db.exec("INSERT INTO users (name) VALUES ('test')")
     db.exec("UPDATE users SET name = 'updated'")
-    
+
     assert.is_equal(2, #mysql_mock.open_calls)
     assert.is_not_equal(mysql_mock.open_calls[1], mysql_mock.open_calls[2])
   end)
 
   it("closes connection after each query", function()
     db.query("SELECT * FROM users")
-    
+
     assert.is_equal(1, #mysql_mock.open_calls)
     assert.is_equal(1, #mysql_mock.close_calls)
     assert.is_equal(mysql_mock.open_calls[1], mysql_mock.close_calls[1])
@@ -104,7 +106,7 @@ describe("DB Connection Management", function()
 
   it("closes connection after each exec", function()
     db.exec("INSERT INTO users (name) VALUES ('test')")
-    
+
     assert.is_equal(1, #mysql_mock.open_calls)
     assert.is_equal(1, #mysql_mock.close_calls)
     assert.is_equal(mysql_mock.open_calls[1], mysql_mock.close_calls[1])
@@ -114,10 +116,10 @@ describe("DB Connection Management", function()
     -- Query then exec
     db.query("SELECT * FROM users")
     db.exec("INSERT INTO users (name) VALUES ('test')")
-    
+
     assert.is_equal(2, #mysql_mock.open_calls)
     assert.is_equal(2, #mysql_mock.close_calls)
-    
+
     -- All connections should be different
     for i = 1, #mysql_mock.open_calls do
       for j = i + 1, #mysql_mock.open_calls do
@@ -133,14 +135,14 @@ describe("DB Connection Management", function()
       table.insert(mysql_mock.query_calls, {conn = conn, sql = sql})
       return nil, "query failed"
     end
-    
+
     local result, err = db.query("SELECT * FROM invalid_table")
-    
+
     assert.is_nil(result)
     assert.is_equal("query failed", err)
     assert.is_equal(1, #mysql_mock.open_calls)
     assert.is_equal(1, #mysql_mock.close_calls) -- Should still close
-    
+
     db.query_raw = original_query_raw
   end)
 
@@ -151,14 +153,14 @@ describe("DB Connection Management", function()
       table.insert(mysql_mock.exec_calls, {conn = conn, sql = sql})
       return nil, "exec failed"
     end
-    
+
     local result, err = db.exec("INSERT INTO invalid_table VALUES (1)")
-    
+
     assert.is_nil(result)
     assert.is_equal("exec failed", err)
     assert.is_equal(1, #mysql_mock.open_calls)
     assert.is_equal(1, #mysql_mock.close_calls) -- Should still close
-    
+
     db.exec_raw = original_exec_raw
   end)
 
@@ -167,11 +169,11 @@ describe("DB Connection Management", function()
     for i = 1, 10 do
       db.query("SELECT * FROM users WHERE id = " .. i)
     end
-    
+
     -- Should have opened 10 separate connections
     assert.is_equal(10, #mysql_mock.open_calls)
     assert.is_equal(10, #mysql_mock.close_calls)
-    
+
     -- No connection should be reused
     local unique_conns = {}
     for _, conn in ipairs(mysql_mock.open_calls) do
@@ -185,16 +187,16 @@ describe("DB Connection Management", function()
 
   it("handles rapid connection cycling without leaks", function()
     -- Rapid open/close cycles
-    for i = 1, 20 do
+    for _ = 1, 20 do
       local conn = db.connect()
       assert.is_not_nil(conn)
       db.close(conn)
     end
-    
+
     -- All connections should be tracked and closed
     assert.is_equal(20, #mysql_mock.open_calls)
     assert.is_equal(20, #mysql_mock.close_calls)
-    
+
     -- Verify all are closed
     for _, conn in ipairs(mysql_mock.close_calls) do
       assert.is_true(conn.closed)
@@ -204,19 +206,19 @@ describe("DB Connection Management", function()
   it("connection objects are independent", function()
     local conn1 = db.connect()
     local conn2 = db.connect()
-    
+
     -- Different objects
     assert.is_not_equal(conn1, conn2)
     assert.is_not_equal(conn1.conn_id, conn2.conn_id)
-    
+
     -- Operations on one don't affect the other (use query_raw which takes connection)
     db.query_raw(conn1, "SELECT 1")
     db.query_raw(conn2, "SELECT 2")
-    
+
     assert.is_equal(2, #mysql_mock.query_calls)
     assert.is_equal(conn1, mysql_mock.query_calls[1].conn)
     assert.is_equal(conn2, mysql_mock.query_calls[2].conn)
-    
+
     -- Clean up connections
     db.close(conn1)
     db.close(conn2)

@@ -32,8 +32,10 @@
 | 任务 | 描述 |
 |------|------|
 | `xmake lint` | 运行 C 安全代码检查（`bin/lint_c_safety.lua`） |
-| `xmake check` | 对 `test/` 和 `spec/` 运行 luacheck 静态分析 |
+| `xmake check` | 使用 `.luacheckrc` 对 `test/` 和 `spec/` 运行严格 luacheck 静态分析 |
 | `xmake test` | 使用 busted 运行 Lua 单元测试（`spec/`） |
+
+luacheck 策略详情（范围、例外与 0-warning 门控）：**[docs/LUACHECK_POLICY-CN.md](LUACHECK_POLICY-CN.md)**。
 
 ### 构建配置档位
 
@@ -102,7 +104,7 @@ xmake release         # lint + test + stress + 预检 + build-release
 
 ## CI 流水线
 
-GitHub Actions 工作流（`.github/workflows/build.yml`）在每次推送到 `main` 和每个 pull request 时运行。它在 Linux、macOS 和 Windows 上构建，然后运行示例编译检查和 SQLite3 冒烟测试。
+GitHub Actions 工作流（`.github/workflows/build.yml`）在每次推送到 `main` 和每个 pull request 时运行。它在 Linux、macOS 和 Windows 上构建，并包含 **必需的 Linux luacheck 步骤**（`xmake check`，无 allow-fail）。随后运行示例编译检查和 SQLite3 冒烟测试。
 
 `xmake ci` 任务在本地镜像此流水线，让你在推送前发现问题。
 

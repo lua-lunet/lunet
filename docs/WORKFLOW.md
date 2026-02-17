@@ -32,8 +32,10 @@ Every task below is defined in `xmake.lua` and can be run with `xmake <task>`.
 | Task | Description |
 |------|-------------|
 | `xmake lint` | Run C safety lint checks (`bin/lint_c_safety.lua`) |
-| `xmake check` | Run luacheck static analysis on `test/` and `spec/` |
+| `xmake check` | Run strict luacheck static analysis on `test/` and `spec/` using `.luacheckrc` |
 | `xmake test` | Run Lua unit tests with busted (`spec/`) |
+
+Luacheck policy details (scope, exceptions, and zero-warning gate): **[docs/LUACHECK_POLICY.md](LUACHECK_POLICY.md)**.
 
 ### Build Profiles
 
@@ -102,7 +104,7 @@ xmake release         # lint + test + stress + preflight + build-release
 
 ## CI Pipeline
 
-The GitHub Actions workflow (`.github/workflows/build.yml`) runs on every push to `main` and every pull request. It builds on Linux, macOS, and Windows, then runs examples compile checks and SQLite3 smoke tests.
+The GitHub Actions workflow (`.github/workflows/build.yml`) runs on every push to `main` and every pull request. It builds on Linux, macOS, and Windows, and includes a **required Linux luacheck step** (`xmake check`) with no allow-fail behavior. It then runs examples compile checks and SQLite3 smoke tests.
 
 The `xmake ci` task mirrors this pipeline locally so you can catch failures before pushing.
 

@@ -19,20 +19,20 @@ describe("DB Module (param dispatch)", function()
       close = function() end,
       escape = function(s) return s end,
 
-      query = function(conn, sql)
+      query = function(_conn, sql)
         calls.query_raw = calls.query_raw + 1
         return { { sql = sql } }
       end,
-      exec = function(conn, sql)
+      exec = function(_conn, sql)
         calls.exec_raw = calls.exec_raw + 1
         return { affected_rows = 1, sql = sql }
       end,
 
-      query_params = function(conn, sql, ...)
+      query_params = function(_conn, sql, ...)
         calls.query_params = calls.query_params + 1
         return { { sql = sql, params = { ... } } }
       end,
-      exec_params = function(conn, sql, ...)
+      exec_params = function(_conn, sql, ...)
         calls.exec_params = calls.exec_params + 1
         return { affected_rows = 1, sql = sql, params = { ... } }
       end,

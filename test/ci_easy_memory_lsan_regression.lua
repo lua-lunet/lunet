@@ -58,8 +58,8 @@ local function mysql_probe()
     -- Stress multiple connect/close cycles to prove leaks do not grow.
     -- Server is typically unavailable in CI, so connect fails — that still
     -- exercises the full init/thread_init/close/thread_end/library_end path.
-    for i = 1, ITERATIONS do
-        local conn, err = db.open({
+    for _ = 1, ITERATIONS do
+        local conn = db.open({
             host = "127.0.0.1",
             port = 3306,
             user = "root",

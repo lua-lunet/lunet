@@ -4,14 +4,13 @@ describe("HTTP Path Traversal Security", function()
     return
   end
 
-  local http
   local mock_fs
   local handle_static_request
   local handle_static_request_secure
-  
+
   setup(function()
-    http = require("app.lib.http")
-    
+    require("app.lib.http")
+
     -- Mock filesystem for testing
     mock_fs = {
       files = {
@@ -21,11 +20,11 @@ describe("HTTP Path Traversal Security", function()
         ["www/images/logo.png"] = "PNG data",
         ["www/api/test.json"] = '{"test": "data"}',
       },
-      
+
       read_file = function(path)
         return mock_fs.files[path]
       end,
-      
+
       get_mime_type = function(path)
         if path:match("%.html$") then return "text/html" end
         if path:match("%.css$") then return "text/css" end
@@ -42,19 +41,18 @@ describe("HTTP Path Traversal Security", function()
       if request.path == "/" then
         file_path = "www/index.html"
       end
-      
+
       -- Basic directory traversal protection (current implementation)
       if file_path:find("%.%.") then
         return { status = 403, body = "Forbidden" }
       end
-      
+
       local content = mock_fs.read_file(file_path)
       if not content and not request.path:find("^/api/") then
         -- SPA fallback
         content = mock_fs.read_file("www/index.html")
-        file_path = "www/index.html"
       end
-      
+
       if content then
         return { status = 200, body = content }
       else
@@ -68,42 +66,41 @@ describe("HTTP Path Traversal Security", function()
       if request.path == "/" then
         file_path = "www/index.html"
       end
-      
+
       -- Enhanced directory traversal protection
       -- 1. Normalize path
       local normalized = file_path:gsub("/+", "/")
-      
+
       -- 2. Decode URL encoding
       normalized = normalized:gsub("%%(%x%x)", function(hex)
         return string.char(tonumber(hex, 16))
       end)
-      
+
       -- 3. Check for traversal patterns
-      if normalized:find("%.%.") or 
+      if normalized:find("%.%.") or
          normalized:find("%%%.%%%.") or
          normalized:find("%%2e%%2e") or
          normalized:find("%%252e%%252e") then
         return { status = 403, body = "Forbidden" }
       end
-      
+
       -- 4. Ensure path stays within www directory
       if not normalized:find("^www/") then
         return { status = 403, body = "Forbidden" }
       end
-      
+
       -- 5. Resolve to absolute path and verify
       local resolved = normalized
       if resolved:find("%.%.") then
         return { status = 403, body = "Forbidden" }
       end
-      
+
       local content = mock_fs.read_file(resolved)
       if not content and not request.path:find("^/api/") then
         -- SPA fallback
         content = mock_fs.read_file("www/index.html")
-        resolved = "www/index.html"
       end
-      
+
       if content then
         return { status = 200, body = content }
       else
@@ -196,33 +193,33 @@ describe("HTTP Path Traversal Security", function()
       -- Basic traversal
       { path = "/../etc/passwd", desc = "basic .. traversal" },
       { path = "/../../etc/passwd", desc = "multiple .. traversal" },
-      
+
       -- URL encoded
       { path = "/%2e%2e%2fetc%2fpasswd", desc = "URL encoded .. traversal" },
       { path = "/%2e%2e/etc/passwd", desc = "mixed encoded traversal" },
       { path = "/%252e%252e%252fetc%252fpasswd", desc = "double URL encoded" },
-      
+
       -- Unicode variations
       { path = "/..%u2215etc%u2215passwd", desc = "unicode path separator" },
       { path = "/..%ef%bc%8fetc%ef%bc%8fpasswd", desc = "full-width unicode" },
-      
+
       -- Null byte injection
       { path = "/../etc/passwd%00.html", desc = "null byte injection" },
       { path = "/../etc/passwd\0", desc = "null byte" },
-      
+
       -- Case variations
       { path = "/../EtC/PaSsWd", desc = "case variation" },
       { path = "/%2E%2E%2F%65%74%63%2F%70%61%73%73%77%64", desc = "full URL encoded" },
-      
+
       -- Mixed attacks
       { path = "/foo/../etc/passwd", desc = "mixed legitimate and traversal" },
       { path = "/./../etc/passwd", desc = "with current directory" },
       { path = "/../etc/./passwd", desc = "traversal with current dir" },
-      
+
       -- Windows-style
       { path = "/..\\etc\\passwd", desc = "Windows backslash" },
       { path = "/%2e%2e%5cetc%5cpasswd", desc = "Windows backslash encoded" },
-      
+
       -- Note: /etc/passwd and /usr/bin/id are NOT traversal attacks
       -- They map to www/etc/passwd which is within www/ and doesn't exist
       -- The handler correctly allows these (returning SPA fallback)

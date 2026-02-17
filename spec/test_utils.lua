@@ -12,7 +12,7 @@ function M.run_concurrent(tasks, options)
   local completed = 0
   local total = #tasks
   local start_time = lunet.time()
-  
+
   -- Launch all tasks
   for i, task in ipairs(tasks) do
     lunet.spawn(function()
@@ -28,7 +28,7 @@ function M.run_concurrent(tasks, options)
       completed = completed + 1
     end)
   end
-  
+
   -- Wait for completion or timeout
   while completed < total do
     lunet.sleep(0.01)
@@ -36,7 +36,7 @@ function M.run_concurrent(tasks, options)
       error("Concurrent tasks timed out after " .. timeout .. " seconds")
     end
   end
-  
+
   return {
     results = results,
     errors = errors,
@@ -53,11 +53,11 @@ function M.race_condition_simulator(options)
   local iterations = options.iterations or 100
   local shared_state = options.shared_state or {}
   local violations = {}
-  
+
   local function random_delay()
     lunet.sleep(delay_min + math.random() * (delay_max - delay_min))
   end
-  
+
   return {
     delay = random_delay,
     iterations = iterations,
@@ -80,7 +80,7 @@ function M.test_concurrent_access(options)
   local shared_resource = options.shared_resource or {}
   local access_log = {}
   local violations = {}
-  
+
   local tasks = {}
   for i = 1, thread_count do
     table.insert(tasks, {
@@ -93,7 +93,7 @@ function M.test_concurrent_access(options)
             operation = j,
             timestamp = lunet.time()
           })
-          
+
           -- Perform operation on shared resource
           if options.operation then
             local ok, err = pcall(options.operation, shared_resource, task.id, j)
@@ -101,7 +101,7 @@ function M.test_concurrent_access(options)
               table.insert(violations, "Thread " .. task.id .. " operation " .. j .. " failed: " .. err)
             end
           end
-          
+
           -- Small delay to increase chance of race conditions
           lunet.sleep(0.0001)
         end
@@ -109,9 +109,9 @@ function M.test_concurrent_access(options)
       end
     })
   end
-  
+
   local result = M.run_concurrent(tasks, options)
-  
+
   return {
     access_log = access_log,
     violations = violations,
@@ -127,14 +127,14 @@ function M.detect_deadlock(options)
   local timeout = options.timeout or 10.0  -- seconds
   local start_time = lunet.time()
   local lock_states = {}
-  
+
   return {
     acquire_lock = function(lock_id, thread_id)
       lock_states[lock_id] = lock_states[lock_id] or {}
       if lock_states[lock_id].holder then
         -- Check for deadlock (circular wait)
         if lunet.time() - start_time > timeout then
-          error("Potential deadlock detected on lock " .. lock_id .. 
+          error("Potential deadlock detected on lock " .. lock_id ..
                 " held by thread " .. lock_states[lock_id].holder)
         end
         return false  -- Lock not available
@@ -143,7 +143,7 @@ function M.detect_deadlock(options)
       lock_states[lock_id].acquired_at = lunet.time()
       return true
     end,
-    
+
     release_lock = function(lock_id, thread_id)
       if lock_states[lock_id] and lock_states[lock_id].holder == thread_id then
         lock_states[lock_id].holder = nil
@@ -152,7 +152,7 @@ function M.detect_deadlock(options)
       end
       return false
     end,
-    
+
     get_lock_state = function(lock_id)
       return lock_states[lock_id]
     end
@@ -160,12 +160,11 @@ function M.detect_deadlock(options)
 end
 
 -- Resource leak detector
-function M.detect_resource_leak(options)
-  options = options or {}
+function M.detect_resource_leak(_options)
   local resources = {}
   local allocations = {}
   local deallocations = {}
-  
+
   return {
     allocate = function(resource_id, resource_type, metadata)
       resources[resource_id] = {
@@ -175,7 +174,7 @@ function M.detect_resource_leak(options)
       }
       allocations[resource_type] = (allocations[resource_type] or 0) + 1
     end,
-    
+
     deallocate = function(resource_id, resource_type)
       if resources[resource_id] then
         resources[resource_id] = nil
@@ -184,7 +183,7 @@ function M.detect_resource_leak(options)
       end
       return false
     end,
-    
+
     get_leaks = function()
       local leaks = {}
       for id, resource in pairs(resources) do
@@ -197,7 +196,7 @@ function M.detect_resource_leak(options)
       end
       return leaks
     end,
-    
+
     get_stats = function()
       local stats = {}
       for resource_type, count in pairs(allocations) do
@@ -219,15 +218,15 @@ function M.benchmark_concurrent(options)
   local iterations = options.iterations or 1000
   local thread_counts = options.thread_counts or {1, 2, 4, 8}
   local results = {}
-  
+
   for _, thread_count in ipairs(thread_counts) do
     local start_time = lunet.time()
-    
+
     local tasks = {}
-    for i = 1, thread_count do
+    for _ = 1, thread_count do
       table.insert(tasks, {
         fn = function()
-          for j = 1, iterations // thread_count do
+          for _ = 1, iterations // thread_count do
             if options.operation then
               options.operation()
             end
@@ -236,10 +235,10 @@ function M.benchmark_concurrent(options)
         end
       })
     end
-    
+
     local result = M.run_concurrent(tasks, { timeout = options.timeout or 30 })
     local end_time = lunet.time()
-    
+
     table.insert(results, {
       thread_count = thread_count,
       total_time = end_time - start_time,
@@ -247,7 +246,7 @@ function M.benchmark_concurrent(options)
       errors = #result.errors
     })
   end
-  
+
   return results
 end
 

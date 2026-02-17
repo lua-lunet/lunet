@@ -1,18 +1,18 @@
 --[[
   Stress Test for Lunet Coroutine Safety
-  
+
   This test spawns many concurrent coroutines that perform async operations
   to stress-test the coroutine reference tracking and stack integrity checks.
-  
+
   Run with LUNET_TRACE=ON build to catch:
   - Stack pollution bugs
   - Coroutine reference leaks
   - Double-release bugs
   - Race conditions in reference counting
-  
+
   Usage:
     ./build/lunet test/stress_test.lua [num_workers] [ops_per_worker]
-    
+
   Default: 50 workers, 100 ops each = 5000 total operations
 ]]
 
@@ -31,13 +31,13 @@ local errors = 0
 local start_time = os.clock()
 
 -- Test operations that exercise coroutine yields
-local function test_sleep(id)
+local function test_sleep(_id)
     lunet.sleep(1)  -- Minimal sleep to yield
     return true
 end
 
-local function test_fs_stat(id)
-    local stat, err = fs.stat(".")
+local function test_fs_stat(_id)
+    local stat = fs.stat(".")
     if not stat then
         errors = errors + 1
         return false
@@ -45,8 +45,8 @@ local function test_fs_stat(id)
     return true
 end
 
-local function test_fs_scandir(id)
-    local entries, err = fs.scandir(".")
+local function test_fs_scandir(_id)
+    local entries = fs.scandir(".")
     if not entries then
         errors = errors + 1
         return false
@@ -67,22 +67,22 @@ local function worker(worker_id)
         -- Pick random operation
         local op_idx = (worker_id + i) % #operations + 1
         local op = operations[op_idx]
-        
+
         local ok, err = pcall(op, worker_id)
         if ok then
             completed_ops = completed_ops + 1
         else
             errors = errors + 1
-            io.stderr:write(string.format("[STRESS] Worker %d op %d error: %s\n", 
+            io.stderr:write(string.format("[STRESS] Worker %d op %d error: %s\n",
                 worker_id, i, tostring(err)))
         end
-        
+
         -- Occasional progress report
         if completed_ops % 500 == 0 then
             io.stderr:write(string.format("[STRESS] Progress: %d ops completed\n", completed_ops))
         end
     end
-    
+
     completed_workers = completed_workers + 1
 end
 
@@ -122,16 +122,16 @@ lunet.spawn(function()
     while completed_workers < NUM_WORKERS do
         lunet.sleep(100)
     end
-    
+
     local elapsed = os.clock() - start_time
-    
+
     print(string.format("\n[STRESS] COMPLETED"))
     print(string.format("[STRESS] Workers: %d/%d", completed_workers, NUM_WORKERS))
     print(string.format("[STRESS] Operations: %d", completed_ops))
     print(string.format("[STRESS] Errors: %d", errors))
     print(string.format("[STRESS] Time: %.3fs", elapsed))
     print(string.format("[STRESS] Ops/sec: %.0f", completed_ops / elapsed))
-    
+
     if errors > 0 then
         print("[STRESS] FAILED - errors detected")
         _G.__lunet_exit_code = 1

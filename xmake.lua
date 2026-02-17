@@ -327,7 +327,7 @@ target("lunet-bin")
         add_includedirs(".tmp/generated")
 
         before_build(function ()
-            local root = os.projectdir()
+            local root = os.scriptdir()
             local generator = path.join(root, "bin", "generate_embed_scripts.lua")
             local source_dir = get_config("lunet_embed_scripts_dir") or "lua"
             local generated_dir = path.join(root, ".tmp", "generated")

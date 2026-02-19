@@ -8,3 +8,4 @@ build_*
 .idea/
 .xmake/
 tmp/
+cmake-build-debug/

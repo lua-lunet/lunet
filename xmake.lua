@@ -83,6 +83,24 @@ option("easy_memory_arena_mb")
     set_description("EasyMem arena size in MB (default: 128)")
 option_end()
 
+option("httpc_worker_easy_memory")
+    set_default(false)
+    set_showmenu(true)
+    set_description("EXPERIMENTAL: use per-request EasyMem+Bump allocator in lunet.httpc")
+option_end()
+
+option("httpc_worker_easy_memory_arena_kb")
+    set_default("1024")
+    set_showmenu(true)
+    set_description("Arena size (KB) for lunet.httpc per-request EasyMem mode")
+option_end()
+
+option("httpc_worker_easy_memory_bump_kb")
+    set_default("768")
+    set_showmenu(true)
+    set_description("Bump size (KB) inside lunet.httpc per-request EasyMem mode")
+option_end()
+
 package("easy_memory")
     set_kind("library", {headeronly = true})
     set_homepage("https://github.com/EasyMem/easy_memory")
@@ -106,17 +124,30 @@ package("easy_memory")
     end)
 package_end()
 
+local function lunet_cfg_enabled(name)
+    local v = get_config(name)
+    if v == true or v == 1 then
+        return true
+    end
+    if type(v) == "string" then
+        local s = v:lower()
+        return s == "y" or s == "yes" or s == "true" or s == "on" or s == "1"
+    end
+    return false
+end
+
 local function lunet_easy_memory_enabled()
-    return has_config("easy_memory")
-        or has_config("easy_memory_experimental")
-        or has_config("lunet_trace")
-        or has_config("asan")
+    return lunet_cfg_enabled("easy_memory")
+        or lunet_cfg_enabled("easy_memory_experimental")
+        or lunet_cfg_enabled("lunet_trace")
+        or lunet_cfg_enabled("asan")
+        or lunet_cfg_enabled("httpc_worker_easy_memory")
 end
 
 local function lunet_easy_memory_diagnostics_enabled()
-    return has_config("lunet_trace")
-        or has_config("asan")
-        or has_config("easy_memory_experimental")
+    return lunet_cfg_enabled("lunet_trace")
+        or lunet_cfg_enabled("asan")
+        or lunet_cfg_enabled("easy_memory_experimental")
 end
 
 local function lunet_easy_memory_arena_bytes()
@@ -127,6 +158,22 @@ local function lunet_easy_memory_arena_bytes()
     return math.floor(arena_mb * 1024 * 1024)
 end
 
+local function lunet_httpc_worker_em_arena_bytes()
+    local kb = tonumber(get_config("httpc_worker_easy_memory_arena_kb") or "1024") or 1024
+    if kb < 256 then
+        kb = 256
+    end
+    return math.floor(kb * 1024)
+end
+
+local function lunet_httpc_worker_em_bump_bytes()
+    local kb = tonumber(get_config("httpc_worker_easy_memory_bump_kb") or "768") or 768
+    if kb < 64 then
+        kb = 64
+    end
+    return math.floor(kb * 1024)
+end
+
 -- target_kind: "binary" or "shared".
 -- On macOS, shared libraries are built as bundles with
 -- -undefined dynamic_lookup.  Modern Xcode/ld64 no longer defers ASAN
@@ -135,7 +182,7 @@ end
 -- ldflags) for macOS shared targets.  The host binary (lunet-bin) is still
 -- fully ASAN-instrumented, so memory errors in core code are still caught.
 local function lunet_apply_asan_flags(target_kind)
-    if not has_config("asan") then
+    if not lunet_cfg_enabled("asan") then
         return
     end
     -- macOS bundles: skip ASAN entirely — compiled .o files reference
@@ -296,10 +343,10 @@ target("lunet")
     end
     
     -- Enable tracing if requested
-    if has_config("lunet_trace") then
+    if lunet_cfg_enabled("lunet_trace") then
         add_defines("LUNET_TRACE")
     end
-    if has_config("lunet_verbose_trace") then
+    if lunet_cfg_enabled("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
     end
 target_end()
@@ -317,7 +364,7 @@ target("lunet-bin")
     lunet_apply_easy_memory()
     
     -- Embedded script packaging (release-only)
-    if has_config("lunet_embed_scripts") then
+    if lunet_cfg_enabled("lunet_embed_scripts") then
         if not is_mode("release") then
             raise("lunet_embed_scripts is release-only. Reconfigure with: xmake f -m release --lunet_embed_scripts=y")
         end
@@ -366,10 +413,10 @@ target("lunet-bin")
     end
     
     -- Enable tracing if requested
-    if has_config("lunet_trace") then
+    if lunet_cfg_enabled("lunet_trace") then
         add_defines("LUNET_TRACE")
     end
-    if has_config("lunet_verbose_trace") then
+    if lunet_cfg_enabled("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
     end
 target_end()
@@ -417,10 +464,10 @@ target("lunet-sqlite3")
         add_defines("LUNET_BUILDING_DLL")
         add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
     end
-    if has_config("lunet_trace") then
+    if lunet_cfg_enabled("lunet_trace") then
         add_defines("LUNET_TRACE")
     end
-    if has_config("lunet_verbose_trace") then
+    if lunet_cfg_enabled("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
     end
 target_end()
@@ -461,10 +508,10 @@ target("lunet-mysql")
         add_defines("LUNET_BUILDING_DLL")
         add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
     end
-    if has_config("lunet_trace") then
+    if lunet_cfg_enabled("lunet_trace") then
         add_defines("LUNET_TRACE")
     end
-    if has_config("lunet_verbose_trace") then
+    if lunet_cfg_enabled("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
     end
 target_end()
@@ -505,10 +552,10 @@ target("lunet-postgres")
         add_defines("LUNET_BUILDING_DLL")
         add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
     end
-    if has_config("lunet_trace") then
+    if lunet_cfg_enabled("lunet_trace") then
         add_defines("LUNET_TRACE")
     end
-    if has_config("lunet_verbose_trace") then
+    if lunet_cfg_enabled("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
     end
 target_end()
@@ -557,10 +604,10 @@ target("lunet-paxe")
         add_defines("LUNET_BUILDING_DLL")
         add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
     end
-    if has_config("lunet_trace") then
+    if lunet_cfg_enabled("lunet_trace") then
         add_defines("LUNET_TRACE")
     end
-    if has_config("lunet_verbose_trace") then
+    if lunet_cfg_enabled("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
     end
 target_end()
@@ -584,6 +631,7 @@ target("lunet-httpc")
     add_files("ext/httpc/httpc.c")
     add_includedirs("include", "ext/httpc", {public = true})
     add_packages("luajit", "libuv", "curl")
+    add_options("httpc_worker_easy_memory", "httpc_worker_easy_memory_arena_kb", "httpc_worker_easy_memory_bump_kb")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
 
@@ -603,11 +651,16 @@ target("lunet-httpc")
         add_defines("LUNET_BUILDING_DLL")
         add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
     end
-    if has_config("lunet_trace") then
+    if lunet_cfg_enabled("lunet_trace") then
         add_defines("LUNET_TRACE")
     end
-    if has_config("lunet_verbose_trace") then
+    if lunet_cfg_enabled("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
+    end
+    if get_config("httpc_worker_easy_memory") then
+        add_defines("LUNET_HTTPC_WORKER_EM")
+        add_defines(string.format("LUNET_HTTPC_WORKER_EM_ARENA_BYTES=%dULL", lunet_httpc_worker_em_arena_bytes()))
+        add_defines(string.format("LUNET_HTTPC_WORKER_EM_BUMP_BYTES=%dULL", lunet_httpc_worker_em_bump_bytes()))
     end
 target_end()
 
@@ -793,6 +846,54 @@ task("preflight-easy-memory")
         end
 
         print("EasyMem preflight passed. Logs: " .. logdir)
+    end)
+task_end()
+
+task("httpc-bench-matrix")
+    set_menu {
+        usage = "xmake httpc-bench-matrix",
+        description = "Run lunet.httpc benchmark across baseline/EasyMem and worker-local EasyMem profiles"
+    }
+    on_run(function ()
+        local requests = os.getenv("HTTPC_BENCH_REQUESTS") or "400"
+        local body_kb = os.getenv("HTTPC_BENCH_BODY_KB") or "256"
+        local timeout_ms = os.getenv("HTTPC_BENCH_TIMEOUT_MS") or "5000"
+        local worker_em_arena_kb = os.getenv("HTTPC_WORKER_EM_ARENA_KB") or "1024"
+        local worker_em_bump_kb = os.getenv("HTTPC_WORKER_EM_BUMP_KB") or "768"
+        local logdir = lunet_new_logdir(os, "httpc_alloc_matrix")
+        print("HTTPC benchmark logs: " .. logdir)
+
+        local function run_profile(prefix, config_flags)
+            lunet_exec_logged(os, logdir, prefix .. "_configure",
+                "xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --asan=n "
+                    .. config_flags .. " -y")
+            lunet_exec_logged(os, logdir, prefix .. "_build_lunet_bin", "xmake build lunet-bin")
+            lunet_exec_logged(os, logdir, prefix .. "_build_lunet_httpc", "xmake build lunet-httpc")
+
+            local runner = lunet_runner_path("release")
+            local runnerq = lunet_quote(runner)
+            if is_host("windows") then
+                lunet_exec_logged(os, logdir, prefix .. "_bench",
+                    "set HTTPC_BENCH_REQUESTS=" .. requests
+                        .. " && set HTTPC_BENCH_BODY_KB=" .. body_kb
+                        .. " && set HTTPC_BENCH_TIMEOUT_MS=" .. timeout_ms
+                        .. " && " .. runnerq .. " test/httpc_alloc_bench.lua")
+            else
+                lunet_exec_logged(os, logdir, prefix .. "_bench",
+                    "HTTPC_BENCH_REQUESTS=" .. requests
+                        .. " HTTPC_BENCH_BODY_KB=" .. body_kb
+                        .. " HTTPC_BENCH_TIMEOUT_MS=" .. timeout_ms
+                        .. " timeout 60 " .. runnerq .. " test/httpc_alloc_bench.lua")
+            end
+        end
+
+        run_profile("01_baseline", "--easy_memory=n --easy_memory_experimental=n")
+        run_profile("02_easy_memory", "--easy_memory=y --easy_memory_experimental=n")
+        run_profile("03_easy_memory_experimental", "--easy_memory=n --easy_memory_experimental=y")
+        run_profile("04_easy_memory_worker", "--easy_memory=y --easy_memory_experimental=n --httpc_worker_easy_memory=y --httpc_worker_easy_memory_arena_kb=" .. worker_em_arena_kb .. " --httpc_worker_easy_memory_bump_kb=" .. worker_em_bump_kb)
+        run_profile("05_easy_memory_experimental_worker", "--easy_memory=n --easy_memory_experimental=y --httpc_worker_easy_memory=y --httpc_worker_easy_memory_arena_kb=" .. worker_em_arena_kb .. " --httpc_worker_easy_memory_bump_kb=" .. worker_em_bump_kb)
+
+        print("HTTPC benchmark matrix finished. Logs: " .. logdir)
     end)
 task_end()
 

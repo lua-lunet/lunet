@@ -3,6 +3,7 @@
 #if defined(LUNET_TRACE) || defined(LUNET_EASY_MEMORY)
 
 #include <assert.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -107,7 +108,7 @@ void *lunet_mem_alloc_impl(size_t size, const char *file, int line) {
     }
 
     header->canary = LUNET_MEM_CANARY;
-    header->size = (uint32_t)size;
+    header->size = size;
 
     lunet_mem_state.alloc_count++;
     lunet_mem_state.alloc_bytes += (int64_t)size;
@@ -119,8 +120,8 @@ void *lunet_mem_alloc_impl(size_t size, const char *file, int line) {
     void *ptr = (void *)(header + 1);
 
 #ifdef LUNET_TRACE_VERBOSE
-    fprintf(stderr, "[MEM_TRACE] ALLOC ptr=%p size=%u at %s:%d\n",
-            ptr, (unsigned)size, file, line);
+    fprintf(stderr, "[MEM_TRACE] ALLOC ptr=%p size=%zu at %s:%d\n",
+            ptr, size, file, line);
 #else
     (void)file;
     (void)line;
@@ -130,6 +131,9 @@ void *lunet_mem_alloc_impl(size_t size, const char *file, int line) {
 }
 
 void *lunet_mem_calloc_impl(size_t count, size_t size, const char *file, int line) {
+    if (count != 0 && size > (SIZE_MAX / count)) {
+        return NULL;
+    }
     size_t total = count * size;
     void *ptr = lunet_mem_alloc_impl(total, file, line);
     if (ptr) {
@@ -152,19 +156,20 @@ void *lunet_mem_realloc_impl(void *ptr, size_t size, const char *file, int line)
     }
 
 #ifdef LUNET_EASY_MEMORY
-    uint32_t old_size = old_header->size;
+    size_t old_size = old_header->size;
     void *new_ptr = lunet_mem_alloc_impl(size, file, line);
     if (!new_ptr) {
         return NULL;
     }
     if (old_size > 0 && size > 0) {
-        size_t copy_size = old_size < size ? (size_t)old_size : size;
+        size_t copy_size = old_size < size ? old_size : size;
         memcpy(new_ptr, ptr, copy_size);
     }
     lunet_mem_free_impl(ptr, file, line);
     return new_ptr;
 #else
-    uint32_t old_size = old_header->size;
+    size_t old_size = old_header->size;
+
     lunet_mem_state.free_count++;
     lunet_mem_state.free_bytes += (int64_t)old_size;
     lunet_mem_state.current_bytes -= (int64_t)old_size;
@@ -176,7 +181,7 @@ void *lunet_mem_realloc_impl(void *ptr, size_t size, const char *file, int line)
     }
 
     new_header->canary = LUNET_MEM_CANARY;
-    new_header->size = (uint32_t)size;
+    new_header->size = size;
 
     lunet_mem_state.alloc_count++;
     lunet_mem_state.alloc_bytes += (int64_t)size;
@@ -209,14 +214,14 @@ void lunet_mem_free_impl(void *ptr, const char *file, int line) {
         return;
     }
 
-    uint32_t size = header->size;
+    size_t size = header->size;
     lunet_mem_state.free_count++;
     lunet_mem_state.free_bytes += (int64_t)size;
     lunet_mem_state.current_bytes -= (int64_t)size;
 
 #ifdef LUNET_TRACE_VERBOSE
-    fprintf(stderr, "[MEM_TRACE] FREE ptr=%p size=%u at %s:%d\n",
-            ptr, (unsigned)size, file, line);
+    fprintf(stderr, "[MEM_TRACE] FREE ptr=%p size=%zu at %s:%d\n",
+            ptr, size, file, line);
 #else
     (void)file;
     (void)line;

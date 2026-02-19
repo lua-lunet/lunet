@@ -47,7 +47,16 @@ Must be called from a yieldable coroutine spawned by `lunet.spawn`.
   - array form: `{{"Header","value"}, ...}`
 - `body` (string, optional)
 - `timeout_ms` (integer, optional, default `30000`)
+- `connect_timeout_ms` (integer, optional, default `timeout_ms`, must be `<= timeout_ms`)
 - `max_body_bytes` (integer, optional, default `10485760` = 10 MiB)
+- `max_header_bytes` (integer, optional, default `65536` = 64 KiB)
+- `max_header_lines` (integer, optional, default `256`)
+- `follow_redirects` (boolean, optional, default `true`)
+- `max_redirects` (integer, optional, default `8`)
+- `low_speed_limit_bps` (integer, optional, default `0`)
+- `low_speed_time_sec` (integer, optional, default `0`)
+  - must be set together with `low_speed_limit_bps` (or both `0`)
+- `allow_file_protocol` (boolean, optional, default `false`)
 - `insecure` (boolean, optional)
   - if omitted: inherits from `LUNET_HTTPC_INSECURE` environment variable (truthy enables insecure)
   - if provided: explicit override
@@ -68,6 +77,17 @@ TLS certificate verification is **enabled by default**.
 Development-only escape hatch:
 - Set `LUNET_HTTPC_INSECURE=1` to disable verification by default.
 - Prefer leaving this unset in production. Disabling verification defeats TLS security.
+
+## Response Size Hardening
+
+`lunet.httpc` enforces limits in two places:
+- libcurl options (timeouts, redirect cap, protocol restrictions, low-speed guard, max file size hint)
+- callback-time guards for both headers and body (`max_header_bytes`, `max_header_lines`, `max_body_bytes`)
+
+For bounded APIs (for example JMAP), set application-level limits explicitly:
+- choose `max_body_bytes` to match provider limits plus small parsing headroom
+- set `max_header_bytes`/`max_header_lines` for your threat model
+- keep redirects and allowed protocols minimal
 
 ## Notes
 

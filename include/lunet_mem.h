@@ -36,7 +36,7 @@
 /* Hidden header prepended to every allocation */
 typedef struct {
     uint32_t canary;
-    uint32_t size;
+    size_t size;
 } lunet_mem_header_t;
 
 /* Global memory statistics */

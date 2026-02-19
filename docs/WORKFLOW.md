@@ -41,7 +41,6 @@ Every task below is defined in `xmake.lua` and can be run with `xmake <task>`.
 |------|-------------|
 | `xmake build-release` | Configure and build optimized release profile |
 | `xmake build-debug` | Configure and build debug profile with `LUNET_TRACE` |
-| `xmake build-easy-memory-experimental` | Configure and build EasyMem experimental release profile |
 
 ### Functional Tests
 

@@ -47,14 +47,7 @@ xmake build-release
 xmake build-debug
 ```
 
-### Experimental release with EasyMem
-
-```bash
-xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y
-xmake build
-```
-
-`easy_memory_experimental` is opt-in and intended for diagnostics-heavy release experiments.
+Release profiles strip EasyMem by default. Use debug/ASan profiles for EasyMem diagnostics.
 
 ## Example: MCP-SSE Server
 

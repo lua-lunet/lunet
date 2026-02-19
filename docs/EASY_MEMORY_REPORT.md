@@ -6,7 +6,7 @@ This report replaces the older memory safety strategy write-up and documents the
 
 - optional EasyMem add-in support in `xmake.lua`
 - automatic EasyMem enablement in trace and ASAN builds
-- experimental release mode with EasyMem diagnostics
+- historical integration/profiling notes from earlier experiments
 - profiling output from example/demo runs
 
 ## Build/Profile Modes Added
@@ -18,10 +18,8 @@ Lunet now supports these EasyMem paths:
 2. **Automatic in ASAN builds**
    - `xmake f -c -m debug --lunet_trace=y --asan=y -y`
    - Windows uses `/fsanitize=address` when supported by the toolchain.
-3. **Experimental release with EasyMem**
-   - `xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y`
-4. **Manual opt-in**
-   - `xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory=y -y`
+3. **Manual opt-in (development profile)**
+   - `xmake f -c -m debug --lunet_trace=n --lunet_verbose_trace=n --easy_memory=y -y`
 
 ## Validation Runs
 
@@ -37,7 +35,6 @@ Logs are archived at:
 |---|---|---|
 | Debug + trace | PASS | EasyMem downloaded and enabled |
 | Debug + ASAN | PASS | `-fsanitize=address` + `LUNET_EASY_MEMORY_DIAGNOSTICS` confirmed |
-| Experimental release | PASS | `lunet-run`, `lunet`, `lunet-sqlite3`, `lunet-paxe` built |
 
 ### Example/demo validation
 
@@ -46,7 +43,6 @@ Logs are archived at:
 | `examples/03_db_sqlite3.lua` | PASS | Functional DB flow passed; EasyMem summary + ASCII visualization printed |
 | `examples/06_paxe_encryption.lua` | PASS | PAXE encryption/decryption flow passed; EasyMem summary + visualization printed |
 | `examples/07_paxe_stress.lua` (`ITERATIONS=200`) | PASS | Throughput output stable; script ends via `os.exit`, so Lunet shutdown summary is skipped |
-| `test/stress_test.lua` (`10x20`) in experimental release | PASS | `[MEM_TRACE] allocs=203 frees=203 peak=7032` |
 | `test/stress_test.lua` (`5x10`) in debug+ASAN | PASS | `[MEM_TRACE] allocs=53 frees=53 peak=3456`, trace summary balanced, no ASAN errors |
 
 ## Profiling Findings
@@ -93,7 +89,7 @@ To fully exploit EasyMem (especially around DB worker/mutex paths), apply these 
 
 ## Conclusion
 
-EasyMem is now integrated as an opt-in allocator backend with automatic activation in trace/ASAN modes and an explicit experimental release option. Extension allocation calls have been migrated to Lunet allocator wrappers in the DB/PAXE code paths. Remaining work is to unify allocator state across shared-module boundaries so all module allocations appear in one consolidated runtime summary.
+EasyMem is now integrated as an opt-in allocator backend with automatic activation in trace/ASAN modes. Extension allocation calls have been migrated to Lunet allocator wrappers in the DB/PAXE code paths. Remaining work is to unify allocator state across shared-module boundaries so all module allocations appear in one consolidated runtime summary.
 
 ## Zero-Overhead Verification (Release, EasyMem Disabled)
 
@@ -101,12 +97,11 @@ Audit log set: `.tmp/logs/20260214_061022/`
 
 ### Method used
 
-Compared release artifacts across four configurations:
+Compared release artifacts across three configurations:
 
 1. default release (`--lunet_trace=n --lunet_verbose_trace=n`)
-2. explicit EasyMem-off release (`--easy_memory=n --easy_memory_experimental=n --asan=n`)
-3. EasyMem release (`--easy_memory=y`)
-4. EasyMem experimental release (`--easy_memory_experimental=y`)
+2. explicit EasyMem-off release (`--easy_memory=n --asan=n`)
+3. historical EasyMem-enabled release artifact (legacy benchmark)
 
 For each, captured:
 - `sha256sum` of `lunet-run` and `lunet.so`
@@ -131,12 +126,12 @@ Baseline (release, EasyMem disabled):
 - `lunet-run`: 47,248 bytes
 - `lunet.so`: 47,968 bytes
 
-EasyMem release (`--easy_memory=y`):
+Historical EasyMem-enabled release artifact (legacy benchmark):
 - `lunet-run`: 59,536 bytes (**+12,288**, +26.01%)
 - `lunet.so`: 60,384 bytes (**+12,416**, +25.88%)
 - Added exported allocator symbol family (`em_*`)
 
-EasyMem experimental diagnostics (`--easy_memory_experimental=y`):
+Historical experimental diagnostics profile (now removed):
 - `lunet-run`: 67,728 bytes (**+20,480**, +43.35%)
 - `lunet.so`: 68,608 bytes (**+20,640**, +43.03%)
 - Adds diagnostics symbols/output paths including `print_em` and `print_fancy`

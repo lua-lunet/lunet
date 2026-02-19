@@ -6,7 +6,7 @@
 
 - `xmake.lua` 中的可选 EasyMem 附加支持
 - 在追踪和 ASAN 构建中自动启用 EasyMem
-- 带 EasyMem 诊断的实验性发布模式
+- 早期实验阶段的集成/性能分析记录
 - 示例/演示运行的性能分析输出
 
 ## 新增的构建/分析模式
@@ -18,10 +18,8 @@ Lunet 现在支持以下 EasyMem 路径：
 2. **在 ASAN 构建中自动启用**
    - `xmake f -c -m debug --lunet_trace=y --asan=y -y`
    - Windows 在工具链支持时使用 `/fsanitize=address`。
-3. **带 EasyMem 的实验性发布版**
-   - `xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y`
-4. **手动选择启用**
-   - `xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory=y -y`
+3. **手动选择启用（开发档位）**
+   - `xmake f -c -m debug --lunet_trace=n --lunet_verbose_trace=n --easy_memory=y -y`
 
 ## 验证运行
 
@@ -37,7 +35,6 @@ Lunet 现在支持以下 EasyMem 路径：
 |------|------|------|
 | Debug + 追踪 | 通过 | EasyMem 已下载并启用 |
 | Debug + ASAN | 通过 | 确认 `-fsanitize=address` + `LUNET_EASY_MEMORY_DIAGNOSTICS` |
-| 实验性发布版 | 通过 | `lunet-run`、`lunet`、`lunet-sqlite3`、`lunet-paxe` 构建成功 |
 
 ### 示例/演示验证
 
@@ -46,7 +43,6 @@ Lunet 现在支持以下 EasyMem 路径：
 | `examples/03_db_sqlite3.lua` | 通过 | 功能性数据库流程通过；打印了 EasyMem 摘要 + ASCII 可视化 |
 | `examples/06_paxe_encryption.lua` | 通过 | PAXE 加密/解密流程通过；打印了 EasyMem 摘要 + 可视化 |
 | `examples/07_paxe_stress.lua`（`ITERATIONS=200`） | 通过 | 吞吐量输出稳定；脚本通过 `os.exit` 结束，因此跳过了 Lunet 关闭摘要 |
-| `test/stress_test.lua`（`10x20`）实验性发布版 | 通过 | `[MEM_TRACE] allocs=203 frees=203 peak=7032` |
 | `test/stress_test.lua`（`5x10`）debug+ASAN | 通过 | `[MEM_TRACE] allocs=53 frees=53 peak=3456`，追踪摘要平衡，无 ASAN 错误 |
 
 ## 分析发现
@@ -93,7 +89,7 @@ Lunet 现在支持以下 EasyMem 路径：
 
 ## 结论
 
-EasyMem 现已作为可选的分配器后端集成，在追踪/ASAN 模式下自动激活，并提供显式的实验性发布选项。数据库/PAXE 代码路径中的扩展分配调用已迁移到 Lunet 分配器包装器。剩余工作是统一跨共享模块边界的分配器状态，使所有模块分配出现在一个合并的运行时摘要中。
+EasyMem 现已作为可选的分配器后端集成，并在追踪/ASAN 模式下自动激活。数据库/PAXE 代码路径中的扩展分配调用已迁移到 Lunet 分配器包装器。剩余工作是统一跨共享模块边界的分配器状态，使所有模块分配出现在一个合并的运行时摘要中。
 
 ## 零开销验证（发布版，EasyMem 禁用）
 
@@ -101,12 +97,11 @@ EasyMem 现已作为可选的分配器后端集成，在追踪/ASAN 模式下自
 
 ### 使用的方法
 
-对比了四种配置下的发布产物：
+对比了三种配置下的发布产物：
 
 1. 默认发布版（`--lunet_trace=n --lunet_verbose_trace=n`）
-2. 显式禁用 EasyMem 的发布版（`--easy_memory=n --easy_memory_experimental=n --asan=n`）
-3. EasyMem 发布版（`--easy_memory=y`）
-4. EasyMem 实验性发布版（`--easy_memory_experimental=y`）
+2. 显式禁用 EasyMem 的发布版（`--easy_memory=n --asan=n`）
+3. 历史 EasyMem 启用发布产物（遗留基准）
 
 对每种配置，捕获了：
 - `lunet-run` 和 `lunet.so` 的 `sha256sum`
@@ -131,12 +126,12 @@ EasyMem 现已作为可选的分配器后端集成，在追踪/ASAN 模式下自
 - `lunet-run`：47,248 字节
 - `lunet.so`：47,968 字节
 
-EasyMem 发布版（`--easy_memory=y`）：
+历史 EasyMem 启用发布产物（遗留基准）：
 - `lunet-run`：59,536 字节（**+12,288**，+26.01%）
 - `lunet.so`：60,384 字节（**+12,416**，+25.88%）
 - 新增导出分配器符号族（`em_*`）
 
-EasyMem 实验性诊断（`--easy_memory_experimental=y`）：
+历史实验诊断配置（现已移除）：
 - `lunet-run`：67,728 字节（**+20,480**，+43.35%）
 - `lunet.so`：68,608 字节（**+20,640**，+43.03%）
 - 新增诊断符号/输出路径，包括 `print_em` 和 `print_fancy`

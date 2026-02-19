@@ -116,7 +116,6 @@ Lunet 会继续输出用于 Lua `require` 的 `lunet.so`，并额外生成兼容
 | **调试 + 追踪** | 开发环境，捕获 bug | `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n -y` |
 | **详细追踪** | 详细调试，记录每个事件 | `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=y -y` |
 | **ASan + EasyMem** | 内存 bug（ASan + 分配器完整性诊断） | `xmake f -c -m debug --lunet_trace=y --asan=y -y` |
-| **实验性 EasyMem 发布版** | 带分配器诊断的发布二进制 | `xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y` |
 
 **提示：** 切换配置时使用 `-c` 强制重新配置。
 
@@ -164,21 +163,14 @@ Lunet 支持 [EasyMem/easy_memory](https://github.com/EasyMem/easy_memory) 作�
 
 ### 手动选择启用
 
-在不启用追踪的情况下显式启用 EasyMem：
+在不启用追踪的开发档位下显式启用 EasyMem：
 
 ```bash
-xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory=y -y
+xmake f -c -m debug --lunet_trace=n --lunet_verbose_trace=n --easy_memory=y -y
 xmake build
 ```
 
-### 实验性发布模式
-
-在发布版中启用完整诊断用于分配器分析：
-
-```bash
-xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y
-xmake build
-```
+发布档位应默认保持 EasyMem 被剥离。
 
 ### 内存区大小调整
 

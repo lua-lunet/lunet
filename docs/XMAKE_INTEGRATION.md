@@ -116,7 +116,6 @@ Lunet keeps the Lua module output as `lunet.so` and also emits a compatibility
 | **Debug + trace** | Development, catches bugs | `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n -y` |
 | **Verbose trace** | Detailed debugging, logs every event | `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=y -y` |
 | **ASan + EasyMem** | Memory bugs (ASan + allocator integrity diagnostics) | `xmake f -c -m debug --lunet_trace=y --asan=y -y` |
-| **Experimental EasyMem Release** | Release binary with allocator diagnostics | `xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y` |
 
 **Tip:** Use `-c` to force a clean reconfigure when switching profiles.
 
@@ -164,21 +163,14 @@ EasyMem is enabled automatically when either of these is enabled:
 
 ### Manual opt-in
 
-Enable EasyMem explicitly without enabling trace:
+Enable EasyMem explicitly in a development profile without enabling trace:
 
 ```bash
-xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory=y -y
+xmake f -c -m debug --lunet_trace=n --lunet_verbose_trace=n --easy_memory=y -y
 xmake build
 ```
 
-### Experimental release mode
-
-Enable full diagnostics in release for allocator analysis:
-
-```bash
-xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y
-xmake build
-```
+Release builds should keep EasyMem stripped by default.
 
 ### Arena sizing
 

@@ -71,12 +71,6 @@ option("easy_memory")
     set_description("Enable EasyMem allocator backend (optional add-in)")
 option_end()
 
-option("easy_memory_experimental")
-    set_default(false)
-    set_showmenu(true)
-    set_description("EXPERIMENTAL: Enable EasyMem in release builds with full diagnostics")
-option_end()
-
 option("easy_memory_arena_mb")
     set_default("128")
     set_showmenu(true)
@@ -108,7 +102,6 @@ package_end()
 
 local function lunet_easy_memory_enabled()
     return has_config("easy_memory")
-        or has_config("easy_memory_experimental")
         or has_config("lunet_trace")
         or has_config("asan")
 end
@@ -116,7 +109,6 @@ end
 local function lunet_easy_memory_diagnostics_enabled()
     return has_config("lunet_trace")
         or has_config("asan")
-        or has_config("easy_memory_experimental")
 end
 
 local function lunet_easy_memory_arena_bytes()
@@ -736,18 +728,6 @@ task("build-debug")
     }
     on_run(function ()
         os.exec("xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n -y")
-        os.exec("xmake build")
-    end)
-task_end()
-
-task("build-easy-memory-experimental")
-    set_menu {
-        usage = "xmake build-easy-memory-experimental",
-        description = "Configure and build EasyMem experimental release profile"
-    }
-    on_run(function ()
-        local arena_mb = os.getenv("EASY_MEMORY_ARENA_MB") or "128"
-        os.exec("xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=" .. arena_mb .. " -y")
         os.exec("xmake build")
     end)
 task_end()

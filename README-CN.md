@@ -45,6 +45,8 @@ xmake build-release
 xmake build-debug
 ```
 
+发布档位默认会剥离 EasyMem。若需 EasyMem 诊断，请使用 debug/ASan 档位。
+
 ## 示例应用
 
 完整的 RealWorld "Conduit" API 实现请参见 [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app)。

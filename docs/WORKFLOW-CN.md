@@ -41,7 +41,6 @@
 |------|------|
 | `xmake build-release` | 配置并构建优化的发布档位 |
 | `xmake build-debug` | 配置并构建启用 `LUNET_TRACE` 的调试档位 |
-| `xmake build-easy-memory-experimental` | 配置并构建 EasyMem 实验性发布档位 |
 
 ### 功能测试
 

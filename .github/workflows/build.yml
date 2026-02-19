@@ -433,34 +433,6 @@ jobs:
           exit $LASTEXITCODE
         }
 
-    - name: Configure EasyMem experimental release (Unix)
-      if: runner.os != 'Windows'
-      run: xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y
-
-    - name: Configure EasyMem experimental release (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        $env:VCPKG_ROOT = "${{ github.workspace }}/vcpkg"
-        $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
-        $env:CL = "/MP"
-        $env:CI = "true"
-        xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n --easy_memory_experimental=y --easy_memory_arena_mb=128 -y
-
-    - name: Build Core + DB Drivers (EasyMem experimental, Unix)
-      if: runner.os != 'Windows'
-      run: |
-        xmake build lunet-bin
-        xmake build lunet-sqlite3
-        xmake build lunet-mysql
-        xmake build lunet-postgres
-
-    - name: Build Core + SQLite Driver (EasyMem experimental, Windows)
-      if: runner.os == 'Windows'
-      run: |
-        xmake build lunet-bin
-        xmake build lunet-sqlite3
-
   publish-release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))

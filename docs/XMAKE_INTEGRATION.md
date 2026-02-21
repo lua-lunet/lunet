@@ -52,7 +52,15 @@ xmake build lunet-postgres
 
 # Outbound HTTPS client (libcurl)
 xmake build lunet-httpc
+
+# Optional source-vendored module (GraphLite)
+xmake opt-graphlite
+xmake opt-graphlite-example
 ```
+
+`xmake opt-graphlite` fetches GraphLite at a pinned commit, builds its Rust FFI
+shared library with a pinned toolchain, then builds `lunet-graphlite`.
+This optional module is CI-tested but not included in official release archives.
 
 ### 2. Run your app with lunet-run
 

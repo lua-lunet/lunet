@@ -52,7 +52,15 @@ xmake build lunet-postgres
 
 # 出站 HTTPS 客户端（libcurl）
 xmake build lunet-httpc
+
+# 可选源码内建模块（GraphLite）
+xmake opt-graphlite
+xmake opt-graphlite-example
 ```
+
+`xmake opt-graphlite` 会按固定提交拉取 GraphLite，使用固定 Rust 工具链
+构建其 FFI 共享库，然后构建 `lunet-graphlite`。
+该可选模块会在 CI 中验证，但不会打入官方发布归档。
 
 ### 2. 使用 lunet-run 运行应用
 

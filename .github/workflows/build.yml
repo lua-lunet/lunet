@@ -52,6 +52,11 @@ jobs:
       with:
         xmake-version: latest
 
+    - name: Install Rust toolchain (GraphLite opt module)
+      uses: dtolnay/rust-toolchain@1
+      with:
+        toolchain: 1.87.0
+
     - name: Install Dependencies (Linux)
       if: runner.os == 'Linux'
       run: |
@@ -149,6 +154,12 @@ jobs:
         if (-not $lunet) { throw "lunet-run.exe not found" }
         & $lunet.FullName examples/03_db_sqlite3.lua
 
+    - name: Build optional GraphLite module
+      run: xmake opt-graphlite
+
+    - name: Run optional GraphLite example
+      run: xmake opt-graphlite-example
+
     - name: Package release archive (Linux)
       if: runner.os == 'Linux'
       run: |
@@ -159,7 +170,7 @@ jobs:
         cp "$(find build -type f -name 'lunet.so' | head -n 1)" "$DIST_DIR/lunet.so"
         while IFS= read -r mod; do
           cp "$mod" "$DIST_DIR/lunet/"
-        done < <(find build -type f -path '*/lunet/*.so')
+        done < <(find build -type f -path '*/lunet/*.so' ! -path '*/opt/*')
         tar -C "$DIST_DIR" -czf lunet-linux-amd64.tar.gz .
 
     - name: Package release archive (macOS)
@@ -172,7 +183,7 @@ jobs:
         cp "$(find build -type f -name 'lunet.so' | head -n 1)" "$DIST_DIR/lunet.so"
         while IFS= read -r mod; do
           cp "$mod" "$DIST_DIR/lunet/"
-        done < <(find build -type f -path '*/lunet/*.so')
+        done < <(find build -type f -path '*/lunet/*.so' ! -path '*/opt/*')
         tar -C "$DIST_DIR" -czf lunet-macos.tar.gz .
 
     - name: Package release archive (Windows)
@@ -184,7 +195,7 @@ jobs:
         New-Item -ItemType Directory -Path (Join-Path $dist "lunet") -Force | Out-Null
         Copy-Item (Get-ChildItem -Path build -Recurse -Filter lunet-run.exe | Select-Object -First 1).FullName (Join-Path $dist "lunet-run.exe")
         Copy-Item (Get-ChildItem -Path build -Recurse -Filter lunet.dll | Select-Object -First 1).FullName (Join-Path $dist "lunet.dll")
-        Get-ChildItem -Path build -Recurse -Filter *.dll | Where-Object { $_.FullName -match '\\lunet\\' } | ForEach-Object {
+        Get-ChildItem -Path build -Recurse -Filter *.dll | Where-Object { $_.FullName -match '\\lunet\\' -and $_.FullName -notmatch '\\opt\\' } | ForEach-Object {
           Copy-Item $_.FullName (Join-Path $dist "lunet")
         }
         Compress-Archive -Path (Join-Path $dist "*") -DestinationPath lunet-windows-amd64.zip -Force
@@ -195,9 +206,9 @@ jobs:
       with:
         name: lunet-linux-amd64
         path: |
-          build/**/lunet-run
-          build/**/lunet.so
-          build/**/lunet/*.so
+          build/**/release/lunet-run
+          build/**/release/lunet.so
+          build/**/release/lunet/*.so
 
     - name: Upload artifact (macOS)
       if: runner.os == 'macOS'
@@ -205,9 +216,9 @@ jobs:
       with:
         name: lunet-macos
         path: |
-          build/**/lunet-run
-          build/**/lunet.so
-          build/**/lunet/*.so
+          build/**/release/lunet-run
+          build/**/release/lunet.so
+          build/**/release/lunet/*.so
 
     - name: Upload artifact (Windows)
       if: runner.os == 'Windows'
@@ -215,9 +226,9 @@ jobs:
       with:
         name: lunet-windows-amd64
         path: |
-          build/**/lunet-run.exe
-          build/**/lunet.dll
-          build/**/lunet/*.dll
+          build/**/release/lunet-run.exe
+          build/**/release/lunet.dll
+          build/**/release/lunet/*.dll
 
     - name: Upload release archive (Linux)
       if: runner.os == 'Linux'

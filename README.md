@@ -17,6 +17,8 @@ Lunet is **modular by design**. You build only what you need:
   - `lunet-sqlite3` - SQLite3 driver
   - `lunet-mysql` - MySQL/MariaDB driver
   - `lunet-postgres` - PostgreSQL driver
+- **Optional source-vendored modules** (`opt/`, explicit tasks):
+  - `lunet-graphlite` - GraphLite GQL driver (built from pinned Rust source via `xmake opt-graphlite`)
 - **Outbound HTTPS client** (optional xmake target):
   - `lunet-httpc` - HTTPS client via libcurl (`require("lunet.httpc")`)
 
@@ -25,6 +27,7 @@ Build one database driver, not all three. No unused dependencies. No security pa
 Getting started (build flow, profiles, and integration details):
 - **[docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md)**
 - **[docs/HTTPC.md](docs/HTTPC.md)** (optional outbound HTTPS client)
+- **[docs/GRAPHLITE.md](docs/GRAPHLITE.md)** (optional source-vendored GraphLite module)
 
 ### Why use lunet database drivers?
 
@@ -94,6 +97,7 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1
 | 03 | [`examples/03_db_sqlite3.lua`](examples/03_db_sqlite3.lua) | SQLite3 CRUD + `query_params` / `exec_params` | `xmake build lunet-sqlite3` | `"$LUNET_BIN" examples/03_db_sqlite3.lua` |
 | 04 | [`examples/04_db_mysql.lua`](examples/04_db_mysql.lua) | MySQL CRUD + prepared statements (`?`) | `xmake build lunet-mysql` + MySQL server | `"$LUNET_BIN" examples/04_db_mysql.lua` |
 | 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + prepared statements (`$1`) | `xmake build lunet-postgres` + Postgres server | `"$LUNET_BIN" examples/05_db_postgres.lua` |
+| 08 | [`examples/08_opt_graphlite.lua`](examples/08_opt_graphlite.lua) | GraphLite drug-discovery demo (optional `opt/` module) | `xmake opt-graphlite` | `xmake opt-graphlite-example` |
 
 See also [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app) for a complete RealWorld "Conduit" API implementation.
 
@@ -142,6 +146,13 @@ Database drivers are **optional build targets**. Build only what you need:
 xmake build lunet-sqlite3   # SQLite3
 xmake build lunet-mysql     # MySQL/MariaDB
 xmake build lunet-postgres  # PostgreSQL
+```
+
+Optional source-vendored modules in `opt/` are built via dedicated tasks:
+
+```bash
+xmake opt-graphlite         # build pinned GraphLite FFI + lunet-graphlite
+xmake opt-graphlite-example # run GraphLite smoke/demo script
 ```
 
 ### SQLite3 (`lunet.sqlite3`)
@@ -370,6 +381,8 @@ xmake is the canonical build system. There is no Makefile. All tasks are defined
 | `xmake build-debug` | Debug build with tracing |
 | `xmake examples-compile` | Examples compile/syntax check |
 | `xmake sqlite3-smoke` | SQLite3 example smoke test |
+| `xmake opt-graphlite` | Build optional GraphLite FFI + module (`opt/graphlite`) |
+| `xmake opt-graphlite-example` | Run optional GraphLite smoke/demo script |
 | `xmake stress` | Concurrent load test with tracing |
 | `xmake ci` | Local CI parity (lint + build + examples + sqlite3 smoke) |
 | `xmake preflight-easy-memory` | EasyMem + ASan preflight gate |

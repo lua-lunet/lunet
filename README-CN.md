@@ -17,6 +17,8 @@ Lunet 采用**模块化设计**。只构建你需要的：
   - `lunet-sqlite3` - SQLite3 驱动
   - `lunet-mysql` - MySQL/MariaDB 驱动
   - `lunet-postgres` - PostgreSQL 驱动
+- **可选源码内建模块**（`opt/`，需显式任务）：
+  - `lunet-graphlite` - GraphLite GQL 驱动（通过 `xmake opt-graphlite` 从固定 Rust 源码构建）
 - **出站 HTTPS 客户端**（可选 xmake 目标）：
   - `lunet-httpc` - 基于 libcurl 的 HTTPS 客户端（`require("lunet.httpc")`）
 
@@ -25,6 +27,7 @@ Lunet 采用**模块化设计**。只构建你需要的：
 入门（完整构建流程、配置档位、集成方式）：
 - **[docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md)**
 - **[docs/HTTPC-CN.md](docs/HTTPC-CN.md)**（可选出站 HTTPS 客户端）
+- **[docs/GRAPHLITE-CN.md](docs/GRAPHLITE-CN.md)**（可选源码内建 GraphLite 模块）
 
 ### 为什么使用 lunet 数据库驱动？
 
@@ -98,6 +101,13 @@ udp.close(h)
 xmake build lunet-sqlite3   # SQLite3
 xmake build lunet-mysql     # MySQL/MariaDB
 xmake build lunet-postgres  # PostgreSQL
+```
+
+`opt/` 下的可选源码内建模块通过专用任务构建：
+
+```bash
+xmake opt-graphlite         # 构建固定版本 GraphLite FFI + lunet-graphlite
+xmake opt-graphlite-example # 运行 GraphLite 冒烟/演示脚本
 ```
 
 ### SQLite3 (`lunet.sqlite3`)
@@ -197,6 +207,8 @@ xmake 是标准构建系统。没有 Makefile。所有任务定义在 `xmake.lua
 | `xmake build-debug` | 启用追踪的调试构建 |
 | `xmake examples-compile` | 示例编译/语法检查 |
 | `xmake sqlite3-smoke` | SQLite3 示例冒烟测试 |
+| `xmake opt-graphlite` | 构建可选 GraphLite FFI + 模块（`opt/graphlite`） |
+| `xmake opt-graphlite-example` | 运行可选 GraphLite 冒烟/演示脚本 |
 | `xmake stress` | 带追踪的并发压力测试 |
 | `xmake ci` | 本地 CI 一致性检查（lint + 构建 + 示例 + sqlite3 冒烟） |
 | `xmake preflight-easy-memory` | EasyMem + ASan 预检门控 |

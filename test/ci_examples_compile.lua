@@ -4,6 +4,7 @@ local examples = {
   "examples/03_db_sqlite3.lua",
   "examples/04_db_mysql.lua",
   "examples/05_db_postgres.lua",
+  "examples/08_opt_graphlite.lua",
 }
 
 local ok_count = 0

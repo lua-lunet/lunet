@@ -157,6 +157,36 @@ local function lunet_apply_easy_memory()
         add_defines("LUNET_EASY_MEMORY_DIAGNOSTICS")
     end
 end
+
+-- Optional GraphLite integration (opt/graphlite)
+-- Pinned to the current GraphLite main commit and a pinned Rust toolchain.
+local GRAPHLITE_REPO_URL = "https://github.com/GraphLite-AI/GraphLite.git"
+local GRAPHLITE_PINNED_COMMIT = "a370a1c909642688130eccfd57c74b6508dcaea5"
+local GRAPHLITE_RUST_TOOLCHAIN = "1.87.0"
+
+local function lunet_graphlite_shared_name()
+    if is_host("windows") then
+        return "graphlite_ffi.dll"
+    elseif is_host("macosx") then
+        return "libgraphlite_ffi.dylib"
+    end
+    return "libgraphlite_ffi.so"
+end
+
+local function lunet_graphlite_paths()
+    local root = path.join(os.projectdir(), ".tmp", "opt", "graphlite")
+    local repo = path.join(root, "GraphLite")
+    local install = path.join(root, "install")
+    return {
+        root = root,
+        repo = repo,
+        install = install,
+        libdir = path.join(install, "lib"),
+        includedir = path.join(install, "include"),
+        libfile = path.join(install, "lib", lunet_graphlite_shared_name()),
+        header = path.join(install, "include", "graphlite.h")
+    }
+end
 -- Embedded Lua scripts option (release-only, opt-in)
 option("lunet_embed_scripts")
     set_default(false)
@@ -505,6 +535,52 @@ target("lunet-postgres")
     end
 target_end()
 
+-- GraphLite driver (optional, experimental): require("lunet.graphlite")
+-- NOTE: This lives in opt/ (not ext/) because GraphLite is vendored from source
+-- and not distributed as a first-class Lunet release artifact.
+target("lunet-graphlite")
+    set_default(false)
+    set_kind("shared")
+    add_rules("lunet.c_safety_lint")
+    set_prefixname("")
+    set_basename("graphlite")  -- Output: opt/lunet/graphlite.so (load as lunet.graphlite)
+    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/opt/lunet")
+    if is_plat("windows") then
+        set_extension(".dll")
+    else
+        set_extension(".so")
+    end
+
+    add_files(core_sources)
+    add_files("opt/graphlite/graphlite.c")
+    add_includedirs("include", "opt/graphlite", {public = true})
+    add_packages("luajit", "libuv")
+    lunet_apply_asan_flags("shared")
+    lunet_apply_easy_memory()
+    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_GRAPHLITE")
+
+    if is_plat("macosx") then
+        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+    end
+    if is_plat("linux") then
+        add_defines("_GNU_SOURCE")
+        add_cflags("-pthread")
+        add_ldflags("-pthread")
+        add_syslinks("pthread", "dl", "m")
+    end
+    if is_plat("windows") then
+        add_cflags("/TC")
+        add_defines("LUNET_BUILDING_DLL")
+        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
+    end
+    if has_config("lunet_trace") then
+        add_defines("LUNET_TRACE")
+    end
+    if has_config("lunet_verbose_trace") then
+        add_defines("LUNET_TRACE_VERBOSE")
+    end
+target_end()
+
 -- PAXE Packet Encryption: require("lunet.paxe")
 -- NOTE: PAXE requires libsodium and is only for secure peer-to-peer protocols
 -- where the application can handle encryption/decryption details.
@@ -653,6 +729,37 @@ local function lunet_exec_logged(osmod, logdir, name, command)
     else
         osmod.execv("bash", {"-lc", wrapped})
     end
+end
+
+local function lunet_graphlite_prepare_vendor(osmod)
+    local paths = lunet_graphlite_paths()
+    osmod.mkdir(paths.root)
+
+    if not osmod.isdir(paths.repo) then
+        osmod.execv("git", {"clone", GRAPHLITE_REPO_URL, paths.repo})
+    end
+
+    osmod.execv("git", {"fetch", "origin", GRAPHLITE_PINNED_COMMIT, "--depth=1"}, {curdir = paths.repo})
+    osmod.execv("git", {"checkout", "--detach", GRAPHLITE_PINNED_COMMIT}, {curdir = paths.repo})
+
+    -- Pin the Rust toolchain so GraphLite builds reproducibly across CI matrix hosts.
+    osmod.execv("rustup", {"toolchain", "install", GRAPHLITE_RUST_TOOLCHAIN, "--profile", "minimal"}, {curdir = paths.repo})
+    osmod.execv("cargo", {"+" .. GRAPHLITE_RUST_TOOLCHAIN, "build", "--release", "-p", "graphlite-ffi"}, {curdir = paths.repo})
+
+    local built_lib = path.join(paths.repo, "target", "release", lunet_graphlite_shared_name())
+    local built_header = path.join(paths.repo, "graphlite-ffi", "graphlite.h")
+    if not osmod.isfile(built_lib) then
+        raise("GraphLite FFI shared library not found: " .. built_lib)
+    end
+    if not osmod.isfile(built_header) then
+        raise("GraphLite FFI header not found: " .. built_header)
+    end
+
+    osmod.mkdir(paths.libdir)
+    osmod.mkdir(paths.includedir)
+    osmod.cp(built_lib, paths.libfile)
+    osmod.cp(built_header, paths.header)
+    return paths
 end
 
 task("init")
@@ -905,6 +1012,87 @@ task("sqlite3-smoke")
         os.exec("xmake build lunet-sqlite3")
         local runner = lunet_runner_path("release")
         os.execv(runner, {"examples/03_db_sqlite3.lua"})
+    end)
+task_end()
+
+task("opt-graphlite")
+    set_menu {
+        usage = "xmake opt-graphlite",
+        description = "Build optional GraphLite FFI + Lunet graphlite module"
+    }
+    on_run(function ()
+        print("Preparing GraphLite from pinned commit: " .. GRAPHLITE_PINNED_COMMIT)
+        print("Pinned Rust toolchain: " .. GRAPHLITE_RUST_TOOLCHAIN)
+
+        os.exec("xmake build-release")
+        local paths = lunet_graphlite_prepare_vendor(os)
+        os.exec("xmake build lunet-graphlite")
+
+        print("GraphLite shared library staged at: " .. paths.libfile)
+        print("GraphLite header staged at: " .. paths.header)
+    end)
+task_end()
+
+task("opt-graphlite-example")
+    set_menu {
+        usage = "xmake opt-graphlite-example",
+        description = "Run optional GraphLite Lua example with timeout"
+    }
+    on_run(function ()
+        local paths = lunet_graphlite_paths()
+        if not os.isfile(paths.libfile) then
+            os.exec("xmake opt-graphlite")
+        end
+
+        local module_files = os.files("build/**/release/opt/lunet/graphlite.*")
+        if #module_files == 0 then
+            os.exec("xmake build lunet-graphlite")
+            module_files = os.files("build/**/release/opt/lunet/graphlite.*")
+        end
+        if #module_files == 0 then
+            raise("graphlite module binary not found after build")
+        end
+
+        local module_file = nil
+        for _, f in ipairs(module_files) do
+            if not f:find("/.deps/", 1, true) and not f:find("\\.deps\\", 1, true) then
+                module_file = f
+                break
+            end
+        end
+        if not module_file then
+            module_file = module_files[1]
+        end
+
+        local opt_root = path.directory(path.directory(module_file)) -- .../release/opt
+        if not opt_root:match("^/") and not opt_root:match("^[A-Za-z]:[\\/]") then
+            opt_root = path.join(os.projectdir(), opt_root)
+        end
+
+        local ext = is_host("windows") and "?.dll" or "?.so"
+        local opt_cpath = path.join(opt_root, ext)
+        local cpath = opt_cpath .. ";;" .. (os.getenv("LUA_CPATH") or "")
+        local runner = lunet_runner_path("release")
+
+        if is_host("windows") then
+            os.execv(runner, {"test/opt_graphlite_example.lua"}, {
+                envs = {
+                    LUA_CPATH = cpath,
+                    LUNET_GRAPHLITE_LIB = paths.libfile
+                }
+            })
+        else
+            os.execv("bash", {
+                "-lc",
+                "if command -v gtimeout >/dev/null 2>&1; then TMO=gtimeout; else TMO=timeout; fi; $TMO 120 " ..
+                    lunet_quote(runner) .. " test/opt_graphlite_example.lua"
+            }, {
+                envs = {
+                    LUA_CPATH = cpath,
+                    LUNET_GRAPHLITE_LIB = paths.libfile
+                }
+            })
+        end
     end)
 task_end()
 

@@ -48,6 +48,8 @@
 |------|------|
 | `xmake examples-compile` | 运行示例编译/语法检查（`test/ci_examples_compile.lua`） |
 | `xmake sqlite3-smoke` | 构建并运行 SQLite3 示例冒烟测试（`examples/03_db_sqlite3.lua`） |
+| `xmake opt-graphlite` | 构建可选 GraphLite FFI + 模块（`opt/graphlite`，固定提交/工具链） |
+| `xmake opt-graphlite-example` | 运行可选 GraphLite 冒烟/演示脚本（`test/opt_graphlite_example.lua`） |
 | `xmake smoke` | 运行所有数据库冒烟测试（SQLite3 + MySQL + Postgres，如可用） |
 | `xmake stress` | 使用调试追踪档位运行并发压力测试 |
 | `xmake socket-gc` | 运行套接字监听器 GC 回归测试 |
@@ -101,7 +103,9 @@ xmake release         # lint + test + stress + 预检 + build-release
 
 ## CI 流水线
 
-GitHub Actions 工作流（`.github/workflows/build.yml`）在每次推送到 `main` 和每个 pull request 时运行。它在 Linux、macOS 和 Windows 上构建，然后运行示例编译检查和 SQLite3 冒烟测试。
+GitHub Actions 工作流（`.github/workflows/build.yml`）在每次推送到 `main` 和每个 pull request 时运行。它在 Linux、macOS 和 Windows 上构建，运行示例编译检查与 SQLite3 冒烟测试，然后在每个矩阵主机执行 `xmake opt-graphlite` 与 `xmake opt-graphlite-example`。
+
+GraphLite 产物会在 CI 中验证，但会有意排除在 Lunet 官方发布归档之外。
 
 `xmake ci` 任务在本地镜像此流水线，让你在推送前发现问题。
 

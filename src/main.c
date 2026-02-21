@@ -89,7 +89,7 @@ int lunet_open_fs(lua_State *L) {
 // =============================================================================
 // Database Driver Support
 // =============================================================================
-// Each driver defines LUNET_DB_DRIVER to its name (sqlite3, mysql, postgres).
+// Each driver defines LUNET_DB_DRIVER to its name (sqlite3, mysql, postgres, graphlite).
 // The driver module registers as lunet.<driver> and exports luaopen_lunet_<driver>.
 
 #ifdef LUNET_HAS_DB
@@ -147,6 +147,14 @@ LUNET_API int luaopen_lunet_mysql(lua_State *L) {
 
 #if defined(LUNET_DB_POSTGRES)
 LUNET_API int luaopen_lunet_postgres(lua_State *L) {
+  lunet_init_once();
+  set_default_luaL(L);
+  return lunet_open_db(L);
+}
+#endif
+
+#if defined(LUNET_DB_GRAPHLITE)
+LUNET_API int luaopen_lunet_graphlite(lua_State *L) {
   lunet_init_once();
   set_default_luaL(L);
   return lunet_open_db(L);

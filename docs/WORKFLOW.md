@@ -48,6 +48,8 @@ Every task below is defined in `xmake.lua` and can be run with `xmake <task>`.
 |------|-------------|
 | `xmake examples-compile` | Run examples compile/syntax check (`test/ci_examples_compile.lua`) |
 | `xmake sqlite3-smoke` | Build and run SQLite3 example smoke test (`examples/03_db_sqlite3.lua`) |
+| `xmake opt-graphlite` | Build optional GraphLite FFI + module (`opt/graphlite`, pinned commit/toolchain) |
+| `xmake opt-graphlite-example` | Run optional GraphLite smoke/demo script (`test/opt_graphlite_example.lua`) |
 | `xmake smoke` | Run all database smoke tests (SQLite3 + MySQL + Postgres if available) |
 | `xmake stress` | Run concurrent stress test with debug trace profile |
 | `xmake socket-gc` | Run socket listener GC regression test |
@@ -101,7 +103,9 @@ xmake release         # lint + test + stress + preflight + build-release
 
 ## CI Pipeline
 
-The GitHub Actions workflow (`.github/workflows/build.yml`) runs on every push to `main` and every pull request. It builds on Linux, macOS, and Windows, then runs examples compile checks and SQLite3 smoke tests.
+The GitHub Actions workflow (`.github/workflows/build.yml`) runs on every push to `main` and every pull request. It builds on Linux, macOS, and Windows, runs examples compile checks and SQLite3 smoke tests, then executes `xmake opt-graphlite` and `xmake opt-graphlite-example` on each matrix host.
+
+GraphLite artifacts are CI-validated but intentionally excluded from official Lunet release archives.
 
 The `xmake ci` task mirrors this pipeline locally so you can catch failures before pushing.
 

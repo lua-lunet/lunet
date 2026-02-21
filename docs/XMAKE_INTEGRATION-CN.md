@@ -106,6 +106,21 @@ target_end()
 Lunet 会继续输出用于 Lua `require` 的 `lunet.so`，并额外生成兼容链接用的
 `liblunet.so`（适配通过 `-l<name>` 进行依赖链接的工具链）。
 
+## 下游任务模式（`app-ci`、`app-release`、`app-preflight`）
+
+当你在应用仓库中集成 Lunet 时，不要直接复制 Lunet 上游的
+`xmake ci`/`xmake release` 任务。它们依赖本仓库内部测试与示例结构。
+
+对于下游项目，建议定义应用级门控：
+
+- `xmake app-ci`：lint + build + 应用 smoke/集成检查
+- `xmake app-preflight`：发布前 debug/ASan 验证
+- `xmake app-release`：app-ci + app-preflight + 打包
+
+完整模板（包含 shell 测试接入、日志、超时和子项目 `os.scriptdir()`
+路径建议）请参考
+[下游项目工作流对齐指南](DOWNSTREAM_WORKFLOW-CN.md)。
+
 ---
 
 ## 构建配置（各场景使用指南）

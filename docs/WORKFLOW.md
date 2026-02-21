@@ -105,6 +105,25 @@ The GitHub Actions workflow (`.github/workflows/build.yml`) runs on every push t
 
 The `xmake ci` task mirrors this pipeline locally so you can catch failures before pushing.
 
+## Downstream project workflow alignment
+
+`xmake ci` and `xmake release` in this repository are upstream-maintainer gates for Lunet itself. They assume Lunet's internal directories and tests (`test/`, `spec/`, `examples/`), which most downstream applications do not have.
+
+Downstream projects should define app-scoped gates such as:
+
+- `xmake app-ci`
+- `xmake app-preflight`
+- `xmake app-release`
+
+These tasks should keep the same quality intent (lint/build/smoke/integration/preflight) while using downstream-owned scripts and test assets.
+
+See [Downstream Project Workflow Alignment](DOWNSTREAM_WORKFLOW.md) for:
+
+- recommended downstream `xmake.lua` structure
+- `app-ci` / `app-release` task patterns
+- shell-based test integration with logging/timeouts
+- `os.scriptdir()` path guidance for subproject integrations
+
 ## Migration Notes
 
 - **No Makefile**: Lunet has never shipped a Makefile. All workflows use xmake.

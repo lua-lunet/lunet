@@ -151,10 +151,12 @@ local root_dir = bin_dir .. "../"
 local c_files = {}
 find_files(root_dir .. "src", "c", c_files)
 find_files(root_dir .. "ext", "c", c_files)
+find_files(root_dir .. "opt", "c", c_files)
 
 local h_files = {}
 find_files(root_dir .. "include", "h", h_files)
 find_files(root_dir .. "ext", "h", h_files)
+find_files(root_dir .. "opt", "h", h_files)
 
 -- Process files
 for _, path in ipairs(c_files) do check_file(path) end

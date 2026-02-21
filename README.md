@@ -19,6 +19,8 @@ Lunet is **modular by design**. You build only what you need:
   - `lunet-postgres` - PostgreSQL driver
 - **Outbound HTTPS client** (optional xmake target):
   - `lunet-httpc` - HTTPS client via libcurl (`require("lunet.httpc")`)
+- **Experimental/opt modules** (built from source, not in release archives):
+  - `lunet-graphlite` - [GraphLite](https://github.com/GraphLite-AI/GraphLite) ISO GQL graph database (`require("lunet.graphlite")`) — see [opt/README.md](opt/README.md)
 
 Build one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
 

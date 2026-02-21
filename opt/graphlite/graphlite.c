@@ -86,7 +86,8 @@ static int gl_load_library(const char* lib_path, char* err, size_t errsize) {
 
   g_gl.handle = GL_DLOPEN(lib_path);
   if (!g_gl.handle) {
-    snprintf(err, errsize, "dlopen(%s): %s", lib_path, gl_dlerror());
+    const char* dle = gl_dlerror();
+    snprintf(err, errsize, "dlopen: %.200s", dle ? dle : "unknown error");
     return -1;
   }
 

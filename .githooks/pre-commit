@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$repo_root"
+
+if ! command -v xmake >/dev/null 2>&1; then
+  echo "[pre-commit] xmake is not installed. Install xmake to run repo hooks." >&2
+  exit 1
+fi
+
+echo "[pre-commit] running xmake lint"
+xmake lint
+
+if command -v luacheck >/dev/null 2>&1; then
+  echo "[pre-commit] running xmake check"
+  xmake check
+else
+  echo "[pre-commit] luacheck not found; skipping xmake check." >&2
+  echo "[pre-commit] run 'xmake init' to install local QA tooling." >&2
+fi

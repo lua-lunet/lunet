@@ -32,7 +32,7 @@ Every task below is defined in `xmake.lua` and can be run with `xmake <task>`.
 | Task | Description |
 |------|-------------|
 | `xmake lint` | Run C safety lint checks (`bin/lint_c_safety.lua`) |
-| `xmake check` | Run luacheck static analysis on `test/` and `spec/` |
+| `xmake check` | Run luacheck static analysis on `test/` and `spec/` using a staged baseline filter |
 | `xmake test` | Run Lua unit tests with busted (`spec/`) |
 
 ### Build Profiles
@@ -56,7 +56,7 @@ Every task below is defined in `xmake.lua` and can be run with `xmake <task>`.
 
 | Task | Description |
 |------|-------------|
-| `xmake ci` | Run full local CI parity sequence: lint, build-release, build lunet-sqlite3, examples compile check, SQLite3 smoke |
+| `xmake ci` | Run full local CI parity sequence: lint, check, build-release, test, build lunet-sqlite3, examples compile check, SQLite3 smoke |
 | `xmake preflight-easy-memory` | Run EasyMem + ASan preflight smoke with logged output (`.tmp/logs/`) |
 | `xmake release` | Full release gate: lint + test + stress + EasyMem preflight + build-release |
 
@@ -101,12 +101,12 @@ xmake release         # lint + test + stress + preflight + build-release
 
 ## CI Pipeline
 
-The GitHub Actions workflow (`.github/workflows/build.yml`) runs on every push to `main` and every pull request. It builds on Linux, macOS, and Windows, then runs examples compile checks and SQLite3 smoke tests.
+The GitHub Actions workflow (`.github/workflows/build.yml`) runs on every push to `main` and every pull request. It first enforces a dedicated Ubuntu lint gate (`xmake lint`, `xmake check`, `xmake test`), then runs cross-platform build jobs on Linux, macOS, and Windows with examples compile checks and SQLite3 smoke tests.
 
 The `xmake ci` task mirrors this pipeline locally so you can catch failures before pushing.
 
 ## Migration Notes
 
 - **No Makefile**: Lunet has never shipped a Makefile. All workflows use xmake.
-- **Pre-commit hook**: The repo includes a pre-commit hook that runs `xmake lint` automatically. Install it via `bin/install-hooks.sh` or copy `.githooks/pre-commit` to `.git/hooks/`.
+- **Pre-commit hook**: The repo includes `.githooks/pre-commit` (runs `xmake lint` and `xmake check` when `luacheck` is available). Install it via `bin/install-hooks.sh` (recommended) or `git config core.hooksPath .githooks`.
 - **Deprecation policy**: If a future build system migration is needed, xmake tasks will be preserved as compatibility shims during the transition period.

@@ -364,16 +364,24 @@ xmake is the canonical build system. There is no Makefile. All tasks are defined
 | Task | Description |
 |------|-------------|
 | `xmake lint` | C safety lint checks |
-| `xmake check` | luacheck static analysis |
+| `xmake check` | luacheck static analysis (staged baseline filter) |
 | `xmake test` | Unit tests (busted) |
 | `xmake build-release` | Optimized release build |
 | `xmake build-debug` | Debug build with tracing |
 | `xmake examples-compile` | Examples compile/syntax check |
 | `xmake sqlite3-smoke` | SQLite3 example smoke test |
 | `xmake stress` | Concurrent load test with tracing |
-| `xmake ci` | Local CI parity (lint + build + examples + sqlite3 smoke) |
+| `xmake ci` | Local CI parity (lint + check + test + build + examples + sqlite3 smoke) |
 | `xmake preflight-easy-memory` | EasyMem + ASan preflight gate |
 | `xmake release` | Full release gate (lint + test + stress + preflight + build) |
+
+Enable the repo-managed pre-commit hook:
+
+```bash
+./bin/install-hooks.sh
+```
+
+Use `git commit --no-verify` only for emergency bypasses.
 
 For the complete task catalog and recommended workflows, see **[docs/WORKFLOW.md](docs/WORKFLOW.md)**.
 

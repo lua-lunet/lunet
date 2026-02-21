@@ -949,7 +949,7 @@ task_end()
 -- Pinned upstream commit for GraphLite
 local GRAPHLITE_COMMIT = "a370a1c909642688130eccfd57c74b6508dcaea5"
 local GRAPHLITE_REPO   = "https://github.com/GraphLite-AI/GraphLite.git"
-local GRAPHLITE_RUST_TOOLCHAIN = "1.82.0"
+local GRAPHLITE_RUST_TOOLCHAIN = "1.87.0"
 
 -- GraphLite GQL driver: require("lunet.graphlite")
 target("lunet-graphlite")
@@ -1018,7 +1018,7 @@ task("opt-graphlite")
     on_run(function ()
         local vendor = graphlite_vendor_dir()
         local src_dir = path.join(vendor, "GraphLite")
-        local logdir = lunet_new_logdir(os, "opt_graphlite")
+        local logdir = path.join(os.projectdir(), lunet_new_logdir(os, "opt_graphlite"))
         print("GraphLite opt build logs: " .. logdir)
 
         -- Step 1: Clone or update GraphLite repo at pinned commit
@@ -1086,7 +1086,7 @@ task("opt-graphlite")
 
         -- Step 5: Build the lunet-graphlite C module
         print("Building lunet-graphlite C module...")
-        os.exec("xmake build lunet-graphlite")
+        os.exec("xmake build -y lunet-graphlite")
 
         print("opt-graphlite build complete!")
     end)

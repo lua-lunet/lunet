@@ -684,7 +684,7 @@ task("check")
         description = "Run luacheck static analysis"
     }
     on_run(function ()
-        os.exec("luacheck test/ spec/")
+        os.exec("luacheck --config .luacheckrc test/ spec/")
     end)
 task_end()
 

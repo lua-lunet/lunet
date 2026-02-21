@@ -1,6 +1,5 @@
 local socket = require("lunet.socket")
 local lunet = require("lunet")
-local fs = require("lunet.fs")
 
 local SOCKET_PATH = ".tmp/lunet_test.sock"
 
@@ -9,9 +8,9 @@ lunet.spawn(function()
   os.remove(SOCKET_PATH)
 
   print("Testing Unix socket listen on " .. SOCKET_PATH)
-  local listener, err = socket.listen("unix", SOCKET_PATH, 0)
+  local listener, listen_err = socket.listen("unix", SOCKET_PATH, 0)
   if not listener then
-    print("FAIL: Failed to listen on Unix socket: " .. (err or "unknown"))
+    print("FAIL: Failed to listen on Unix socket: " .. (listen_err or "unknown"))
     os.exit(1)
   end
   print("PASS: Listening on Unix socket")
@@ -30,20 +29,20 @@ lunet.spawn(function()
       -- Existing API is connect(host, port).
       -- If I pass path as host, how does it know?
       -- Maybe if it contains '/'? Or if port is 0?
-      
+
       -- Wait, socket.connect signature in socket.c takes (host, port).
       -- I should probably overload it: if port is 0 and host looks like path?
       -- Or require "unix" prefix in host string? e.g. "unix:/tmp/s.sock"
-      
+
       -- Let's check my plan: "API: socket.listen("unix", "/path/to/socket") - no port needed"
       -- "connect(host, port): ... (tcp host/port, or unix path)"
-      
+
       print("FAIL: Failed to connect: " .. (err or "unknown"))
       socket.close(listener)
       os.exit(1)
     end
     print("PASS: Connected to Unix socket")
-    
+
     socket.write(client, "ping")
     local data = socket.read(client)
     if data ~= "pong" then
@@ -51,7 +50,7 @@ lunet.spawn(function()
        os.exit(1)
     end
     print("PASS: Read/Write verified")
-    
+
     socket.close(client)
     socket.close(listener)
     print("All Unix socket tests passed!")

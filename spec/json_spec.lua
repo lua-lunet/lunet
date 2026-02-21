@@ -51,7 +51,7 @@ describe("JSON Module", function()
     -- Expect \u0000
     assert.are.equal('"\\u0000"', encoded)
   end)
-  
+
   it("handles control characters", function()
     local s = "\001\031"
     local encoded = json.encode(s)

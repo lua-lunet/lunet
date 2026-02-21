@@ -14,22 +14,22 @@ describe("DB SQL Injection Prevention", function()
         -- Simulate MySQL-style escaping: ' -> '' and \ -> \\
         return s:gsub("\\", "\\\\"):gsub("'", "''")
       end,
-      
+
       open = function()
         return { conn_id = 1 }
       end,
-      
+
       close = function() end,
-      
-      query = function(conn, sql)
+
+      query = function(_conn, _sql)
         return { { result = "ok" } }
       end,
-      
-      exec = function(conn, sql)
+
+      exec = function(_conn, _sql)
         return { affected_rows = 1 }
       end
     }
-    
+
     package.loaded["lunet.db"] = native_mock
     db = require("app.lib.db")
   end)
@@ -96,7 +96,7 @@ describe("DB SQL Injection Prevention", function()
     end)
 
     it("prevents union injection through interpolation", function()
-      local sql = db.interpolate("SELECT * FROM users WHERE id = ? AND name = ?", 
+      local sql = db.interpolate("SELECT * FROM users WHERE id = ? AND name = ?",
         1, "' UNION SELECT * FROM passwords --")
       -- First param should be a number
       assert.truthy(sql:find("id = 1"), "Number should be unquoted")
@@ -132,16 +132,20 @@ describe("DB SQL Injection Prevention", function()
     it("uses interpolation for all user input", function()
       -- Test interpolation directly since db.query uses it internally
       local sql = db.interpolate("SELECT * FROM users WHERE name = ? AND age > ?", "'; DROP TABLE users; --", 18)
-      
+
       -- The value should be quoted and injection text preserved but escaped
       assert.truthy(sql:find("DROP TABLE users"), "Should contain the injection text")
       assert.truthy(sql:find("age > 18"), "Should have numeric parameter")
     end)
 
     it("escapes all parameters in exec operations", function()
-      -- Test interpolation directly since db.exec uses it internally  
-      local sql = db.interpolate("DELETE FROM users WHERE name = ? OR email = ?", "'; DELETE FROM passwords; --", "evil@hack.com")
-      
+      -- Test interpolation directly since db.exec uses it internally
+      local sql = db.interpolate(
+        "DELETE FROM users WHERE name = ? OR email = ?",
+        "'; DELETE FROM passwords; --",
+        "evil@hack.com"
+      )
+
       -- The values should be quoted
       assert.truthy(sql:find("DELETE FROM passwords"), "Should contain the injection text")
       assert.truthy(sql:find("evil@hack.com"), "Should contain email")
@@ -153,7 +157,7 @@ describe("DB SQL Injection Prevention", function()
       -- Test the escape function directly for the values that would be used in insert
       local name_val = db.escape("'; DROP TABLE users; --")
       local active_val = db.escape(true)
-      
+
       -- Verify the value is wrapped in quotes
       assert.truthy(name_val:match("^'"), "Should start with quote")
       assert.truthy(name_val:match("'$"), "Should end with quote")
@@ -164,7 +168,7 @@ describe("DB SQL Injection Prevention", function()
     it("escapes values in update operations", function()
       -- Test the escape function for update values
       local name_val = db.escape("'; UPDATE passwords SET password='hacked'; --")
-      
+
       assert.truthy(name_val:match("^'"), "Should start with quote")
       assert.truthy(name_val:match("'$"), "Should end with quote")
       assert.truthy(name_val:find("UPDATE passwords"), "Should contain the text")
@@ -173,7 +177,7 @@ describe("DB SQL Injection Prevention", function()
     it("escapes values in delete operations", function()
       -- Test interpolation for delete WHERE clause
       local sql = db.interpolate("name = ? OR email = ?", "'; DROP TABLE passwords; --", "admin@evil.com")
-      
+
       assert.truthy(sql:find("DROP TABLE passwords"), "Should contain the text")
       assert.truthy(sql:find("admin@evil.com"), "Should contain email")
     end)
@@ -201,7 +205,10 @@ describe("DB SQL Injection Prevention", function()
     end)
 
     it("handles union-based injection", function()
-      local sql = db.interpolate("SELECT * FROM users WHERE id = ?", "1 UNION SELECT * FROM information_schema.tables--")
+      local sql = db.interpolate(
+        "SELECT * FROM users WHERE id = ?",
+        "1 UNION SELECT * FROM information_schema.tables--"
+      )
       -- No quotes in input, value is simply wrapped in quotes for safety
       assert.truthy(sql:find("'1 UNION"), "Value should be wrapped in quotes")
     end)

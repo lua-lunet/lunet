@@ -13,26 +13,26 @@ describe("DB Thread Safety", function()
       open = function()
         return { conn_id = math.random(1000), closed = false }
       end,
-      
-      close = function(conn) 
-        conn.closed = true 
+
+      close = function(conn)
+        conn.closed = true
       end,
-      
-      query = function(conn, sql)
+
+      query = function(conn, _sql)
         if conn.closed then return nil, "connection closed" end
         -- Simulate some work
-        for i=1,1000 do end
+        for _ = 1, 1000 do end
         return { { id = 1, name = "test" } }
       end,
-      
-      exec = function(conn, sql)
+
+      exec = function(conn, _sql)
         if conn.closed then return nil, "connection closed" end
         -- Simulate some work
-        for i=1,1000 do end
+        for _ = 1, 1000 do end
         return { affected_rows = 1 }
       end
     }
-    
+
     package.loaded["lunet.db"] = mysql_mock
     db = require("app.lib.db")
   end)
@@ -83,10 +83,10 @@ describe("DB Thread Safety", function()
     for i = 1, total do
       local co = coroutine.create(function()
         if i % 2 == 0 then
-          local result, err = db.exec("INSERT INTO users (name) VALUES ('user" .. i .. "')")
+          local result = db.exec("INSERT INTO users (name) VALUES ('user" .. i .. "')")
           insert_results[i] = result
         else
-          local result, err = db.query("SELECT * FROM users WHERE name = 'user" .. i .. "'")
+          local result = db.query("SELECT * FROM users WHERE name = 'user" .. i .. "'")
           select_results[i] = result
         end
         completed = completed + 1
@@ -101,13 +101,13 @@ describe("DB Thread Safety", function()
 
     -- All operations should succeed
     assert.is_equal(total, completed)
-    
+
     -- Check that we got expected results
     local insert_count = 0
     for _, result in pairs(insert_results) do
       if result then insert_count = insert_count + 1 end
     end
-    
+
     local select_count = 0
     for _, result in pairs(select_results) do
       if result then select_count = select_count + 1 end
@@ -150,13 +150,15 @@ describe("DB Thread Safety", function()
     -- Should have mostly successful operations
     local success_count = 0
     for _ in pairs(results) do success_count = success_count + 1 end
-    
+    local error_count = 0
+    for _ in pairs(errors) do error_count = error_count + 1 end
+
     -- Allow for some failures due to resource limits, but most should succeed
     assert.is_true(success_count > total * 0.8, "Should have mostly successful operations")
+    assert.is_true(error_count < total * 0.2, "Should have relatively few failures")
   end)
 
   it("maintains data consistency under concurrent load", function()
-    local counter = 0
     local results = {}
     local completed = 0
     local total = 100
@@ -167,11 +169,11 @@ describe("DB Thread Safety", function()
         -- Read current value (mock)
         local result = db.query("SELECT counter FROM counters WHERE id = 1")
         local current = result and result[1] and result[1].counter or 0
-        
+
         -- Increment and update (mock)
         local new_val = current + 1
         db.exec("UPDATE counters SET counter = " .. new_val .. " WHERE id = 1")
-        
+
         results[i] = new_val
         completed = completed + 1
       end)
@@ -184,6 +186,9 @@ describe("DB Thread Safety", function()
 
     -- In a real database with proper locking, this would be exactly total
     -- But with our mock, we just verify no crashes occurred
+    local result_count = 0
+    for _ in pairs(results) do result_count = result_count + 1 end
     assert.is_equal(total, completed)
+    assert.is_equal(total, result_count)
   end)
 end)

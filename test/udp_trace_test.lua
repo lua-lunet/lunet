@@ -1,12 +1,12 @@
 --[[
   UDP Trace Test
-  
+
   Verifies basic UDP tracing: BIND, TX, and CLOSE statistics.
   Tests that closing a handle correctly reports local and global tx/rx counts.
-  
+
   Usage:
     ./build/lunet test/udp_trace_test.lua
-    
+
   Expected Trace Output (LUNET_TRACE=ON):
     [UDP_TRACE] BIND #1 127.0.0.1:<port>
     [UDP_TRACE] TX #1 -> 127.0.0.1:20001 (4 bytes)
@@ -23,12 +23,12 @@ lunet.spawn(function()
         return
     end
     print("Test bound")
-    
+
     local ok, serr = udp.send(h, "127.0.0.1", 20001, "ping")
     if not ok then
         print("Send failed: " .. tostring(serr))
     end
-    
+
     print("Closing handle")
     udp.close(h)
     print("Handle closed")

@@ -8,3 +8,7 @@ build_*
 .idea/
 .xmake/
 tmp/
+
+# Vendored opt/ build artifacts (Rust cargo output, cloned repos)
+# The source files in opt/ are tracked; the build products are not.
+opt/graphlite/target/

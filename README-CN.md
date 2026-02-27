@@ -19,6 +19,8 @@ Lunet 采用**模块化设计**。只构建你需要的：
   - `lunet-postgres` - PostgreSQL 驱动
 - **出站 HTTPS 客户端**（可选 xmake 目标）：
   - `lunet-httpc` - 基于 libcurl 的 HTTPS 客户端（`require("lunet.httpc")`）
+- **实验性/opt 模块**（从源码构建，不包含在发布归档中）：
+  - `lunet-graphlite` - [GraphLite](https://github.com/GraphLite-AI/GraphLite) ISO GQL 图数据库（`require("lunet.graphlite")`）— 详见 [opt/README-CN.md](opt/README-CN.md)
 
 只构建一个数据库驱动，而不是全部。没有未使用的依赖。不需要为从未使用的库打安全补丁。
 

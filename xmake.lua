@@ -1052,7 +1052,7 @@ task("opt-graphlite")
                 "cd " .. lunet_quote(src_dir) .. " && cargo build --release -p graphlite-ffi")
         else
             lunet_exec_logged(os, logdir, "04_cargo_build",
-                "export PATH=\"$HOME/.cargo/bin:$PATH\" && cd " .. lunet_quote(src_dir) .. " && cargo build --release -p graphlite-ffi")
+                "export PATH=\"$(dirname $(rustup which rustc)):$PATH\" && cd " .. lunet_quote(src_dir) .. " && cargo build --release -p graphlite-ffi")
         end
 
         -- Step 4: Copy the FFI shared library to the lunet build output dir

@@ -21,6 +21,8 @@ Lunet 采用**模块化设计**。只构建你需要的：
   - `lunet-httpc` - 基于 libcurl 的 HTTPS 客户端（`require("lunet.httpc")`）
 - **共享字典**（可选 Rust 扩展，Linux/macOS）：
   - `lunet.ngx_shared` - 受 nginx 启发的共享字典，通过 Rust FFI 实现（`xmake build-ngx-shared`）
+- **JSON**（可选 Rust 扩展，Linux/macOS）：
+  - `lunet.jsonic` - dkjson 风格的编解码；解码通过 Rust FFI 封装 [jsonic](https://github.com/g1mv/jsonic)（`xmake build-jsonic`）
 
 只构建一个数据库驱动，而不是全部。没有未使用的依赖。不需要为从未使用的库打安全补丁。
 
@@ -221,6 +223,31 @@ cache:close()
 所有状态均在该区域内（无堆分配持久数据）；FNV-1a 开放地址哈希表；
 bump 分配器；单自旋锁。同一进程内以相同名称打开的多个句柄共享同一区域。
 
+### JSON（`lunet.jsonic`）— Linux / macOS
+
+dkjson 兼容的 `encode`/`decode`/`null` API。解码由 Rust FFI 封装
+[jsonic](https://github.com/g1mv/jsonic)（MIT / Apache-2.0，无运行时依赖）
+实现——完整署名见 `ext/jsonic/NOTICE.md`。`jsonic` 本身只做解析；`encode()`
+是纯 Lua 实现，无任何依赖。
+
+**构建**（需要 Rust 1.85+ / 2024 edition）：
+```bash
+xmake build-jsonic   # 等同于: cd ext/jsonic && cargo build --release
+```
+
+**使用示例**：
+```lua
+local json = loadfile("ext/jsonic/jsonic.lua")()
+
+local value, pos, err = json.decode('{"a":1,"b":[true,null]}')
+-- value = { a = 1, b = { true, json.null } }
+
+local str = json.encode({ a = 1, b = { true, json.null } })
+-- str = '{"a":1,"b":[true,null]}'
+
+json.encode({ a = 1 }, { indent = true, sorted_keys = true })
+```
+
 ## 安全性：零开销追踪
 
 使用 `xmake build-debug` 构建可启用协程引用追踪和栈完整性检查。运行时会在检测到泄漏或栈污染时触发断言并崩溃。
@@ -240,6 +267,8 @@ xmake 是标准构建系统。没有 Makefile。所有任务定义在 `xmake.lua
 | `xmake sqlite3-smoke` | SQLite3 示例冒烟测试 |
 | `xmake build-ngx-shared` | 构建 ngx_shared Rust 扩展 |
 | `xmake ngx-shared-smoke` | 构建 ngx_shared 并运行冒烟测试 |
+| `xmake build-jsonic` | 构建 jsonic Rust 扩展 |
+| `xmake jsonic-smoke` | 构建 jsonic 并运行冒烟测试 |
 | `xmake stress` | 带追踪的并发压力测试 |
 | `xmake ci` | 本地 CI 一致性检查（lint + 构建 + 示例 + sqlite3 冒烟） |
 | `xmake preflight-easy-memory` | EasyMem + ASan 预检门控 |

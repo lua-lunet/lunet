@@ -1,0 +1,30 @@
+[package]
+name = "lunet-jsonic"
+version = "0.1.0"
+edition = "2024"
+description = """
+LuaJIT FFI C-ABI wrapper around the `jsonic` crate (fast, dependency-free
+JSON parser for Rust). Decode only: encoding is implemented in pure Lua
+(ext/jsonic/jsonic.lua), mirroring dkjson's API. Pure opt-in extension for
+lunet - not linked into lunet-run.
+"""
+license = "MIT"
+authors = []
+
+[lib]
+name = "lunet_jsonic"
+crate-type = ["cdylib"]
+
+# Single dependency: jsonic itself has zero runtime dependencies (see
+# https://github.com/g1mv/jsonic). We convert its parse tree into our own
+# arena immediately, so no lifetime/unsafe complexity crosses the FFI.
+[dependencies]
+jsonic = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+# Never unwind through an FFI boundary.
+panic = "abort"
+strip = "symbols"

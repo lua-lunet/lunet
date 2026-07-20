@@ -990,3 +990,38 @@ task("ngx-shared-smoke")
         os.execv(runner, {"test/smoke_ngx_shared.lua"})
     end)
 task_end()
+
+-- =============================================================================
+-- jsonic extension (Rust, optional) - dkjson-style JSON decode via FFI
+-- =============================================================================
+-- Build:   xmake build-jsonic
+-- Smoke:   xmake jsonic-smoke
+-- Wraps https://github.com/g1mv/jsonic (MIT/Apache-2.0, zero deps). Lives
+-- entirely in ext/jsonic/ and is loaded at runtime by lunet.jsonic via
+-- LuaJIT FFI. Does not need to be linked into lunet-run.
+
+task("build-jsonic")
+    set_menu {
+        usage = "xmake build-jsonic",
+        description = "Build the jsonic Rust extension (ext/jsonic)"
+    }
+    on_run(function ()
+        local crate_dir = path.join(os.scriptdir(), "ext", "jsonic")
+        print("[jsonic] cargo build --release ...")
+        os.execv("cargo", {"build", "--release"}, {curdir = crate_dir})
+        print("[jsonic] built: " .. path.join(crate_dir, "target", "release"))
+    end)
+task_end()
+
+task("jsonic-smoke")
+    set_menu {
+        usage = "xmake jsonic-smoke",
+        description = "Build jsonic then run the smoke test"
+    }
+    on_run(function ()
+        os.exec("xmake build-jsonic")
+        os.exec("xmake build-release")
+        local runner = lunet_runner_path("release")
+        os.execv(runner, {"test/smoke_jsonic.lua"})
+    end)
+task_end()

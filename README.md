@@ -21,6 +21,8 @@ Lunet is **modular by design**. You build only what you need:
   - `lunet-httpc` - HTTPS client via libcurl (`require("lunet.httpc")`)
 - **Shared dictionary** (optional Rust extension, Linux/macOS):
   - `lunet.ngx_shared` - nginx-inspired shared dict via Rust FFI (`xmake build-ngx-shared`)
+- **JSON** (optional Rust extension, Linux/macOS):
+  - `lunet.jsonic` - dkjson-style encode/decode; decode via Rust FFI wrapping [jsonic](https://github.com/g1mv/jsonic) (`xmake build-jsonic`)
 
 Build one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
 
@@ -97,6 +99,7 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1
 | 04 | [`examples/04_db_mysql.lua`](examples/04_db_mysql.lua) | MySQL CRUD + prepared statements (`?`) | `xmake build lunet-mysql` + MySQL server | `"$LUNET_BIN" examples/04_db_mysql.lua` |
 | 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + prepared statements (`$1`) | `xmake build lunet-postgres` + Postgres server | `"$LUNET_BIN" examples/05_db_postgres.lua` |
 | 08 | [`examples/08_ngx_shared.lua`](examples/08_ngx_shared.lua) | nginx-style shared dictionary via Rust FFI | `xmake build-ngx-shared` | `"$LUNET_BIN" examples/08_ngx_shared.lua` |
+| 09 | [`examples/09_jsonic_demo.lua`](examples/09_jsonic_demo.lua) | dkjson-style JSON encode/decode via Rust FFI | `xmake build-jsonic` | `"$LUNET_BIN" examples/09_jsonic_demo.lua` |
 
 See also [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app) for a complete RealWorld "Conduit" API implementation.
 
@@ -282,6 +285,33 @@ dictionary; all state lives in the region (no heap for persistent data);
 FNV-1a open-address hash table; bump allocator; single spinlock.  Multiple
 handles opened with the same name share the same region within a process.
 
+### JSON (`lunet.jsonic`) — Linux / macOS
+
+A dkjson-compatible `encode`/`decode`/`null` API. Decoding is backed by a
+Rust FFI wrapper around [jsonic](https://github.com/g1mv/jsonic) (MIT /
+Apache-2.0, zero runtime dependencies) — see `ext/jsonic/NOTICE.md` for full
+attribution. `jsonic` itself only parses; `encode()` is plain, dependency-free
+Lua.
+
+**Build** (requires Rust 1.85+ / 2024 edition):
+```bash
+xmake build-jsonic   # runs: cargo build --release in ext/jsonic/
+```
+
+**Usage**:
+```lua
+local script_dir = debug.getinfo(1,"S").source:match("^@(.+)/[^/]+$") or "."
+local json = loadfile(script_dir .. "/../ext/jsonic/jsonic.lua")()
+
+local value, pos, err = json.decode('{"a":1,"b":[true,null]}')
+-- value = { a = 1, b = { true, json.null } }
+
+local str = json.encode({ a = 1, b = { true, json.null } })
+-- str = '{"a":1,"b":[true,null]}'
+
+json.encode({ a = 1 }, { indent = true, sorted_keys = true })
+```
+
 ## Safety: Zero-Cost Tracing
 
 Build with `xmake build-debug` to enable coroutine reference tracking and stack integrity checks. The runtime will assert and crash on leaks or stack pollution.
@@ -428,6 +458,8 @@ xmake is the canonical build system. There is no Makefile. All tasks are defined
 | `xmake sqlite3-smoke` | SQLite3 example smoke test |
 | `xmake build-ngx-shared` | Build the ngx_shared Rust extension |
 | `xmake ngx-shared-smoke` | Build ngx_shared then run its smoke test |
+| `xmake build-jsonic` | Build the jsonic Rust extension |
+| `xmake jsonic-smoke` | Build jsonic then run its smoke test |
 | `xmake stress` | Concurrent load test with tracing |
 | `xmake ci` | Local CI parity (lint + build + examples + sqlite3 smoke) |
 | `xmake preflight-easy-memory` | EasyMem + ASan preflight gate |

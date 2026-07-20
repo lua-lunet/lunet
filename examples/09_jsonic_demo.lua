@@ -69,10 +69,10 @@ lunet.spawn(function()
 
   -- ── Encoding ───────────────────────────────────────────────────────────────
   print("-- Encode --")
-  local compact = json.encode({ a = 1, b = { 1, 2, 3 }, c = "hi", d = json.null }, { sorted_keys = true })
+  local compact = json.encode({ a = 1, b = { 1, 2, 3 }, c = "hi", d = json.null }, { keyorder = { "a", "b", "c", "d" } })
   print("compact: " .. compact)
 
-  local pretty = json.encode({ a = 1, nested = { b = 2 } }, { indent = true, sorted_keys = true })
+  local pretty = json.encode({ a = 1, nested = { b = 2 } }, { indent = true, keyorder = { "a", "nested" } })
   print("indented:")
   print(pretty)
   print()
@@ -80,7 +80,7 @@ lunet.spawn(function()
   -- ── Round-trip ─────────────────────────────────────────────────────────────
   print("-- Round-trip --")
   local original = { numbers = { 1, 2, 3 }, flag = true, note = "quotes \"work\" too" }
-  local encoded = json.encode(original, { sorted_keys = true })
+  local encoded = json.encode(original, { keyorder = { "name", "values" } })
   local decoded = json.decode(encoded)
   print("original.note == decoded.note: " .. tostring(original.note == decoded.note))
   print("original.numbers[3] == decoded.numbers[3]: " .. tostring(original.numbers[3] == decoded.numbers[3]))

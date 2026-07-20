@@ -144,7 +144,7 @@ local function test_jsonic()
 
   -- ── Encode ─────────────────────────────────────────────────────────────────
   do
-    local s = json.encode({ a = 1 }, { sorted_keys = true })
+    local s = json.encode({ a = 1 }, { keyorder = { "a" } })
     check(s == '{"a":1}', "encode simple object, got " .. s)
   end
   ok_step("encode simple object")
@@ -156,7 +156,7 @@ local function test_jsonic()
   ok_step("encode simple array")
 
   do
-    local s = json.encode({ a = 1, b = "two", c = true, d = json.null }, { sorted_keys = true })
+    local s = json.encode({ a = 1, b = "two", c = true, d = json.null }, { keyorder = { "a", "b", "c", "d" } })
     check(s == '{"a":1,"b":"two","c":true,"d":null}', "encode mixed types, got " .. s)
   end
   ok_step("encode mixed scalar types with sorted keys")
@@ -178,7 +178,7 @@ local function test_jsonic()
     local t = {}
     t[1] = "a"
     t[3] = "c"
-    local s = json.encode(t, { sorted_keys = true })
+    local s = json.encode(t)
     check(s == '["a",null,"c"]', "sparse table must encode as array with null hole, got " .. s)
   end
   ok_step("encode sparse table as array with null hole")

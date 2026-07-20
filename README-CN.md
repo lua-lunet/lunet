@@ -245,7 +245,7 @@ local value, pos, err = json.decode('{"a":1,"b":[true,null]}')
 local str = json.encode({ a = 1, b = { true, json.null } })
 -- str = '{"a":1,"b":[true,null]}'
 
-json.encode({ a = 1 }, { indent = true, sorted_keys = true })
+json.encode({ a = 1 }, { indent = true, keyorder = { "a" } })
 ```
 
 ## 安全性：零开销追踪

@@ -211,6 +211,10 @@ cache:flush_all()
 local evicted = cache:flush_expired()
 
 print(cache:capacity(), cache:free_space())
+
+-- 句柄由 GC 自动管理（ffi.gc 终结器）；如需立即释放可显式关闭。
+-- 共享区域本身的生命周期不受单个句柄关闭影响。
+cache:close()
 ```
 
 **架构**：每个命名字典使用一个 `mmap(MAP_ANONYMOUS|MAP_SHARED)` 匿名映射区域；

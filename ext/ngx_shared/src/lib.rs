@@ -36,7 +36,7 @@ mod dict;
 mod region;
 mod time;
 
-use dict::{Dict, NGX_SHARED_NOT_FOUND, NGX_SHARED_OK};
+use dict::{Dict, NGX_SHARED_ERR_INVAL, NGX_SHARED_NOT_FOUND, NGX_SHARED_OK, lens_valid};
 
 use std::collections::HashMap;
 use std::ffi::CStr;
@@ -73,6 +73,51 @@ unsafe fn handle<'a>(h: *mut c_void) -> Option<&'a NgxSharedHandle> {
     }
 }
 
+/// Get the `Dict` for a handle, or return the `Err` given to the caller.
+macro_rules! dict_of {
+    ($h:expr) => {
+        match handle($h) {
+            Some(hnd) => &hnd.dict,
+            None => return NGX_SHARED_NOT_FOUND,
+        }
+    };
+}
+
+/// Materialise the key slice for read-only ops.
+/// Validates length *before* slicing (an oversized klen over a small buffer
+/// would otherwise be instant UB).
+#[inline]
+unsafe fn kslice<'a>(key: *const u8, klen: usize) -> Result<&'a [u8], i32> {
+    if key.is_null() {
+        return Err(NGX_SHARED_NOT_FOUND);
+    }
+    if !lens_valid(klen, 0) {
+        return Err(NGX_SHARED_ERR_INVAL);
+    }
+    Ok(std::slice::from_raw_parts(key, klen))
+}
+
+/// Materialise (key, val) slices for mutating ops.  A null/empty val maps to
+/// an empty slice (setting an empty value is legal).
+#[inline]
+unsafe fn kvslices<'a>(
+    key: *const u8,
+    klen: usize,
+    val: *const u8,
+    vlen: usize,
+) -> Result<(&'a [u8], &'a [u8]), i32> {
+    let k = kslice(key, klen)?;
+    if !lens_valid(0, vlen) {
+        return Err(NGX_SHARED_ERR_INVAL);
+    }
+    let v = if val.is_null() || vlen == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(val, vlen)
+    };
+    Ok((k, v))
+}
+
 // ── FFI exports ───────────────────────────────────────────────────────────────
 
 /// Open (or create) a named dictionary of at least `size_bytes` bytes.
@@ -103,14 +148,19 @@ pub unsafe extern "C" fn ngx_shared_open(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let dict = reg
-        .entry(name_str)
-        .or_insert_with(|| {
+    // NB: never panic here — unwinding out of an `extern "C"` export aborts
+    // the host process.  A failed mmap must yield a NULL handle instead.
+    let dict = match reg.entry(name_str) {
+        std::collections::hash_map::Entry::Occupied(e) => e.get().clone(),
+        std::collections::hash_map::Entry::Vacant(e) => {
             // Minimum 64 KiB; use caller's size if larger.
             let sz = (size_bytes as usize).max(65536);
-            Arc::new(Dict::new(sz).expect("ngx_shared: mmap failed"))
-        })
-        .clone();
+            match Dict::new(sz) {
+                Some(d) => e.insert(Arc::new(d)).clone(),
+                None => return std::ptr::null_mut(),
+            }
+        }
+    };
 
     let handle = Box::new(NgxSharedHandle { dict });
     Box::into_raw(handle) as *mut c_void
@@ -154,19 +204,22 @@ pub unsafe extern "C" fn ngx_shared_get(
     out_len: *mut usize,
     out_type: *mut c_int,
 ) -> c_int {
-    let dict = match handle(h) {
-        Some(hnd) => &hnd.dict,
-        None => return NGX_SHARED_NOT_FOUND,
-    };
-    if key.is_null() || out_val.is_null() || out_len.is_null() || out_type.is_null() {
+    let dict = dict_of!(h);
+    if out_val.is_null() || out_len.is_null() || out_type.is_null() {
         return NGX_SHARED_NOT_FOUND;
     }
-    let key_slice = std::slice::from_raw_parts(key, klen);
+    let key_slice = match kslice(key, klen) {
+        Ok(k) => k,
+        Err(e) => return e,
+    };
     match dict.get(key_slice) {
         Err(e) => e,
         Ok((val, vtype)) => {
             let len = val.len();
-            let ptr = val.leak().as_mut_ptr();
+            // Hand ownership across the FFI as a boxed slice: unlike Vec,
+            // Box<[u8]> carries no capacity, so reconstructing it in
+            // ngx_shared_free_bytes from (ptr, len) alone is unambiguous.
+            let ptr = Box::into_raw(val.into_boxed_slice()) as *mut u8;
             *out_val = ptr;
             *out_len = len;
             *out_type = vtype as c_int;
@@ -185,7 +238,7 @@ pub unsafe extern "C" fn ngx_shared_free_bytes(p: *mut u8, len: usize) {
     if p.is_null() {
         return;
     }
-    drop(Vec::from_raw_parts(p, len, len));
+    drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(p, len)));
 }
 
 /// Set `key` to the given value, overwriting any existing entry.
@@ -207,20 +260,11 @@ pub unsafe extern "C" fn ngx_shared_set(
     val_type: c_int,
     ttl_secs: f64,
 ) -> c_int {
-    let dict = match handle(h) {
-        Some(hnd) => &hnd.dict,
-        None => return NGX_SHARED_NOT_FOUND,
-    };
-    if key.is_null() {
-        return NGX_SHARED_NOT_FOUND;
+    let dict = dict_of!(h);
+    match kvslices(key, klen, val, vlen) {
+        Err(e) => e,
+        Ok((k, v)) => dict.set(k, v, val_type as u8, ttl_secs),
     }
-    let key_slice = std::slice::from_raw_parts(key, klen);
-    let val_slice = if val.is_null() || vlen == 0 {
-        &[][..]
-    } else {
-        std::slice::from_raw_parts(val, vlen)
-    };
-    dict.set(key_slice, val_slice, val_type as u8, ttl_secs)
 }
 
 /// Set `key` only if it does not already exist.
@@ -240,20 +284,11 @@ pub unsafe extern "C" fn ngx_shared_add(
     val_type: c_int,
     ttl_secs: f64,
 ) -> c_int {
-    let dict = match handle(h) {
-        Some(hnd) => &hnd.dict,
-        None => return NGX_SHARED_NOT_FOUND,
-    };
-    if key.is_null() {
-        return NGX_SHARED_NOT_FOUND;
+    let dict = dict_of!(h);
+    match kvslices(key, klen, val, vlen) {
+        Err(e) => e,
+        Ok((k, v)) => dict.add(k, v, val_type as u8, ttl_secs),
     }
-    let key_slice = std::slice::from_raw_parts(key, klen);
-    let val_slice = if val.is_null() || vlen == 0 {
-        &[][..]
-    } else {
-        std::slice::from_raw_parts(val, vlen)
-    };
-    dict.add(key_slice, val_slice, val_type as u8, ttl_secs)
 }
 
 /// Set `key` only if it already exists.
@@ -273,20 +308,11 @@ pub unsafe extern "C" fn ngx_shared_replace(
     val_type: c_int,
     ttl_secs: f64,
 ) -> c_int {
-    let dict = match handle(h) {
-        Some(hnd) => &hnd.dict,
-        None => return NGX_SHARED_NOT_FOUND,
-    };
-    if key.is_null() {
-        return NGX_SHARED_NOT_FOUND;
+    let dict = dict_of!(h);
+    match kvslices(key, klen, val, vlen) {
+        Err(e) => e,
+        Ok((k, v)) => dict.replace(k, v, val_type as u8, ttl_secs),
     }
-    let key_slice = std::slice::from_raw_parts(key, klen);
-    let val_slice = if val.is_null() || vlen == 0 {
-        &[][..]
-    } else {
-        std::slice::from_raw_parts(val, vlen)
-    };
-    dict.replace(key_slice, val_slice, val_type as u8, ttl_secs)
 }
 
 /// Delete `key` from the dictionary.
@@ -301,15 +327,11 @@ pub unsafe extern "C" fn ngx_shared_delete(
     key: *const u8,
     klen: usize,
 ) -> c_int {
-    let dict = match handle(h) {
-        Some(hnd) => &hnd.dict,
-        None => return NGX_SHARED_NOT_FOUND,
-    };
-    if key.is_null() {
-        return NGX_SHARED_NOT_FOUND;
+    let dict = dict_of!(h);
+    match kslice(key, klen) {
+        Err(e) => e,
+        Ok(k) => dict.delete(k),
     }
-    let key_slice = std::slice::from_raw_parts(key, klen);
-    dict.delete(key_slice)
 }
 
 /// Atomically increment a numeric key.
@@ -337,14 +359,14 @@ pub unsafe extern "C" fn ngx_shared_incr(
     ttl_secs: f64,
     result: *mut f64,
 ) -> c_int {
-    let dict = match handle(h) {
-        Some(hnd) => &hnd.dict,
-        None => return NGX_SHARED_NOT_FOUND,
-    };
-    if key.is_null() || result.is_null() {
+    let dict = dict_of!(h);
+    if result.is_null() {
         return NGX_SHARED_NOT_FOUND;
     }
-    let key_slice = std::slice::from_raw_parts(key, klen);
+    let key_slice = match kslice(key, klen) {
+        Ok(k) => k,
+        Err(e) => return e,
+    };
     let mut out: f64 = 0.0;
     let rc = dict.incr(key_slice, delta, init, has_init != 0, ttl_secs, &mut out);
     if rc == NGX_SHARED_OK {
@@ -368,15 +390,11 @@ pub unsafe extern "C" fn ngx_shared_expire(
     klen: usize,
     ttl_secs: f64,
 ) -> c_int {
-    let dict = match handle(h) {
-        Some(hnd) => &hnd.dict,
-        None => return NGX_SHARED_NOT_FOUND,
-    };
-    if key.is_null() {
-        return NGX_SHARED_NOT_FOUND;
+    let dict = dict_of!(h);
+    match kslice(key, klen) {
+        Err(e) => e,
+        Ok(k) => dict.expire(k, ttl_secs),
     }
-    let key_slice = std::slice::from_raw_parts(key, klen);
-    dict.expire(key_slice, ttl_secs)
 }
 
 /// Get the remaining TTL in seconds for `key`.
@@ -395,14 +413,14 @@ pub unsafe extern "C" fn ngx_shared_ttl(
     klen: usize,
     out_ttl: *mut f64,
 ) -> c_int {
-    let dict = match handle(h) {
-        Some(hnd) => &hnd.dict,
-        None => return NGX_SHARED_NOT_FOUND,
-    };
-    if key.is_null() || out_ttl.is_null() {
+    let dict = dict_of!(h);
+    if out_ttl.is_null() {
         return NGX_SHARED_NOT_FOUND;
     }
-    let key_slice = std::slice::from_raw_parts(key, klen);
+    let key_slice = match kslice(key, klen) {
+        Ok(k) => k,
+        Err(e) => return e,
+    };
     match dict.ttl(key_slice) {
         Err(e) => e,
         Ok(None) => {
@@ -465,5 +483,211 @@ pub unsafe extern "C" fn ngx_shared_free_space(h: *mut c_void) -> u64 {
     match handle(h) {
         Some(hnd) => hnd.dict.free_space(),
         None => 0,
+    }
+}
+
+// ── FFI-level tests ───────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod ffi_tests {
+    use super::*;
+    use std::ffi::CString;
+
+    /// Open a dictionary with a test-unique name (the registry is global).
+    fn open_unique(name: &str, size: u64) -> *mut c_void {
+        let c = CString::new(name).unwrap();
+        unsafe { ngx_shared_open(c.as_ptr(), size) }
+    }
+
+    #[test]
+    fn test_ffi_open_null_name_returns_null() {
+        let h = unsafe { ngx_shared_open(std::ptr::null(), 65536) };
+        assert!(h.is_null());
+    }
+
+    #[test]
+    fn test_ffi_open_absurd_size_returns_null_not_abort() {
+        // mmap of u64::MAX bytes must fail; open must return NULL gracefully
+        // rather than panic (panic = "abort" in release would kill the host
+        // Lua process).
+        let c = CString::new("ffi_absurd_size").unwrap();
+        let h = unsafe { ngx_shared_open(c.as_ptr(), u64::MAX) };
+        assert!(h.is_null(), "absurd size must yield NULL handle");
+    }
+
+    #[test]
+    fn test_ffi_open_close_roundtrip() {
+        let h = open_unique("ffi_rt", 65536);
+        assert!(!h.is_null());
+        unsafe { ngx_shared_close(h) };
+        // Closing NULL must be a no-op.
+        unsafe { ngx_shared_close(std::ptr::null_mut()) };
+    }
+
+    #[test]
+    fn test_ffi_set_get_free_roundtrip() {
+        let h = open_unique("ffi_sg", 65536);
+        assert!(!h.is_null());
+        unsafe {
+            let rc = ngx_shared_set(h, b"key".as_ptr(), 3, b"value".as_ptr(), 5, 0, 0.0);
+            assert_eq!(rc, NGX_SHARED_OK);
+
+            let mut out_val: *mut u8 = std::ptr::null_mut();
+            let mut out_len: usize = 0;
+            let mut out_type: c_int = -99;
+            let rc = ngx_shared_get(h, b"key".as_ptr(), 3, &mut out_val, &mut out_len, &mut out_type);
+            assert_eq!(rc, NGX_SHARED_OK);
+            assert_eq!(out_len, 5);
+            assert_eq!(out_type, 0);
+            assert_eq!(std::slice::from_raw_parts(out_val, out_len), b"value");
+            ngx_shared_free_bytes(out_val, out_len);
+            // Freeing NULL is a no-op.
+            ngx_shared_free_bytes(std::ptr::null_mut(), 0);
+
+            ngx_shared_close(h);
+        }
+    }
+
+    #[test]
+    fn test_ffi_get_missing_key() {
+        let h = open_unique("ffi_miss", 65536);
+        assert!(!h.is_null());
+        unsafe {
+            let mut out_val: *mut u8 = std::ptr::null_mut();
+            let mut out_len: usize = 0;
+            let mut out_type: c_int = 0;
+            let rc = ngx_shared_get(h, b"no".as_ptr(), 2, &mut out_val, &mut out_len, &mut out_type);
+            assert_eq!(rc, NGX_SHARED_NOT_FOUND);
+            assert!(out_val.is_null(), "failed get must not write out_val");
+            ngx_shared_close(h);
+        }
+    }
+
+    #[test]
+    fn test_ffi_null_handle_is_robust() {
+        unsafe {
+            let null = std::ptr::null_mut();
+            let mut out_val: *mut u8 = std::ptr::null_mut();
+            let mut out_len: usize = 0;
+            let mut out_type: c_int = 0;
+            let mut out_f64: f64 = 0.0;
+
+            assert_eq!(ngx_shared_get(null, b"k".as_ptr(), 1, &mut out_val, &mut out_len, &mut out_type), NGX_SHARED_NOT_FOUND);
+            assert_eq!(ngx_shared_set(null, b"k".as_ptr(), 1, b"v".as_ptr(), 1, 0, 0.0), NGX_SHARED_NOT_FOUND);
+            assert_eq!(ngx_shared_add(null, b"k".as_ptr(), 1, b"v".as_ptr(), 1, 0, 0.0), NGX_SHARED_NOT_FOUND);
+            assert_eq!(ngx_shared_replace(null, b"k".as_ptr(), 1, b"v".as_ptr(), 1, 0, 0.0), NGX_SHARED_NOT_FOUND);
+            assert_eq!(ngx_shared_delete(null, b"k".as_ptr(), 1), NGX_SHARED_NOT_FOUND);
+            assert_eq!(ngx_shared_incr(null, b"k".as_ptr(), 1, 1.0, 0.0, 1, 0.0, &mut out_f64), NGX_SHARED_NOT_FOUND);
+            assert_eq!(ngx_shared_expire(null, b"k".as_ptr(), 1, 1.0), NGX_SHARED_NOT_FOUND);
+            assert_eq!(ngx_shared_ttl(null, b"k".as_ptr(), 1, &mut out_f64), NGX_SHARED_NOT_FOUND);
+            ngx_shared_flush_all(null); // no-op, must not crash
+            assert_eq!(ngx_shared_flush_expired(null, 0), 0);
+            assert_eq!(ngx_shared_capacity(null), 0);
+            assert_eq!(ngx_shared_free_space(null), 0);
+        }
+    }
+
+    #[test]
+    fn test_ffi_null_key_rejected() {
+        let h = open_unique("ffi_nk", 65536);
+        assert!(!h.is_null());
+        unsafe {
+            assert_eq!(ngx_shared_set(h, std::ptr::null(), 1, b"v".as_ptr(), 1, 0, 0.0), NGX_SHARED_NOT_FOUND);
+            assert_eq!(ngx_shared_delete(h, std::ptr::null(), 1), NGX_SHARED_NOT_FOUND);
+            let mut out_val: *mut u8 = std::ptr::null_mut();
+            let mut out_len: usize = 0;
+            let mut out_type: c_int = 0;
+            assert_eq!(ngx_shared_get(h, std::ptr::null(), 1, &mut out_val, &mut out_len, &mut out_type), NGX_SHARED_NOT_FOUND);
+            ngx_shared_close(h);
+        }
+    }
+
+    #[test]
+    fn test_ffi_shared_region_between_handles() {
+        let h1 = open_unique("ffi_shared", 65536);
+        let h2 = open_unique("ffi_shared", 65536);
+        assert!(!h1.is_null() && !h2.is_null());
+        unsafe {
+            assert_eq!(ngx_shared_set(h1, b"k".as_ptr(), 1, b"v".as_ptr(), 1, 0, 0.0), NGX_SHARED_OK);
+            let mut out_val: *mut u8 = std::ptr::null_mut();
+            let mut out_len: usize = 0;
+            let mut out_type: c_int = 0;
+            assert_eq!(ngx_shared_get(h2, b"k".as_ptr(), 1, &mut out_val, &mut out_len, &mut out_type), NGX_SHARED_OK);
+            assert_eq!(std::slice::from_raw_parts(out_val, out_len), b"v");
+            ngx_shared_free_bytes(out_val, out_len);
+            ngx_shared_close(h1);
+            ngx_shared_close(h2);
+        }
+    }
+
+    #[test]
+    fn test_ffi_incr_and_ttl_semantics() {
+        let h = open_unique("ffi_incr", 65536);
+        assert!(!h.is_null());
+        unsafe {
+            let mut result: f64 = 0.0;
+            // incr with init creates the key.
+            assert_eq!(ngx_shared_incr(h, b"c".as_ptr(), 1, 1.0, 0.0, 1, 0.0, &mut result), NGX_SHARED_OK);
+            assert_eq!(result, 1.0);
+            // Key without expiry: ttl returns 1 and out_ttl = -1.
+            let mut ttl: f64 = 0.0;
+            assert_eq!(ngx_shared_ttl(h, b"c".as_ptr(), 1, &mut ttl), 1);
+            assert_eq!(ttl, -1.0);
+            // Key with expiry: ttl returns 0 and remaining seconds.
+            assert_eq!(ngx_shared_set(h, b"e".as_ptr(), 1, b"v".as_ptr(), 1, 0, 30.0), NGX_SHARED_OK);
+            assert_eq!(ngx_shared_ttl(h, b"e".as_ptr(), 1, &mut ttl), NGX_SHARED_OK);
+            assert!(ttl > 0.0 && ttl <= 30.0, "ttl={ttl}");
+            // Missing key: ttl returns NOT_FOUND.
+            assert_eq!(ngx_shared_ttl(h, b"x".as_ptr(), 1, &mut ttl), NGX_SHARED_NOT_FOUND);
+            ngx_shared_close(h);
+        }
+    }
+
+    #[test]
+    fn test_ffi_capacity_and_free_space() {
+        let h = open_unique("ffi_cap", 65536);
+        assert!(!h.is_null());
+        unsafe {
+            assert_eq!(ngx_shared_capacity(h), 65536);
+            let free = ngx_shared_free_space(h);
+            assert!(free > 0 && free < 65536, "free={free}");
+            ngx_shared_close(h);
+        }
+    }
+
+    #[test]
+    fn test_ffi_oversized_key_rejected_before_slicing() {
+        // klen > u32::MAX would truncate in the on-disk u32 key_len field.
+        // The FFI must reject it *before* materialising the slice (which
+        // would be instant UB for a 4 GiB "key" over a 1-byte buffer).
+        let h = open_unique("ffi_oversize", 65536);
+        assert!(!h.is_null());
+        let huge = (u32::MAX as usize) + 1;
+        unsafe {
+            let key = b"k";
+            assert_eq!(
+                ngx_shared_set(h, key.as_ptr(), huge, b"v".as_ptr(), 1, 0, 0.0),
+                NGX_SHARED_ERR_INVAL
+            );
+            assert_eq!(
+                ngx_shared_add(h, key.as_ptr(), huge, b"v".as_ptr(), 1, 0, 0.0),
+                NGX_SHARED_ERR_INVAL
+            );
+            assert_eq!(
+                ngx_shared_replace(h, key.as_ptr(), huge, b"v".as_ptr(), 1, 0, 0.0),
+                NGX_SHARED_ERR_INVAL
+            );
+            let mut out_f64: f64 = 0.0;
+            assert_eq!(
+                ngx_shared_incr(h, key.as_ptr(), huge, 1.0, 0.0, 1, 0.0, &mut out_f64),
+                NGX_SHARED_ERR_INVAL
+            );
+            // Oversized *value* is likewise rejected.
+            assert_eq!(
+                ngx_shared_set(h, key.as_ptr(), 1, b"v".as_ptr(), huge, 0, 0.0),
+                NGX_SHARED_ERR_INVAL
+            );
+            ngx_shared_close(h);
+        }
     }
 }

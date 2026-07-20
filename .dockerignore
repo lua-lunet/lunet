@@ -1,0 +1,11 @@
+.git
+.tmp
+.xmake
+build
+build-*
+build_*
+vcpkg
+ext/ngx_shared/target
+data
+opt
+rust

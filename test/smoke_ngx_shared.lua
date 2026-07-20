@@ -241,9 +241,141 @@ local function test_ngx_shared()
   end
   print("   OK: both handles see the same data")
 
-  print()
-  print("=== All ngx_shared tests passed ===")
-  __lunet_exit_code = 0
+  -- Compact assertion helpers for the extended cases.
+  local step = 14
+  local function fail(msg)
+    print("FAIL: " .. msg)
+    __lunet_exit_code = 1
+    error("__smoke_abort__", 0)
+  end
+  local function ok(msg)
+    step = step + 1
+    print(("   OK (%d): %s"):format(step, msg))
+  end
+  local function check(cond, msg)
+    if not cond then fail(msg) end
+  end
+  local aborted = select(2, pcall(function()
+
+  -- ── Missing-key error contracts ────────────────────────────────────────────
+  local v, e = cache:get("never_set")
+  check(v == nil and e == "not found", "get missing: want nil,'not found', got " .. tostring(v) .. "," .. tostring(e))
+  ok("get missing key -> nil, 'not found'")
+
+  local d_ok, d_err = cache:delete("never_set")
+  check(d_ok == nil and d_err == "not found", "delete missing should fail with 'not found'")
+  ok("delete missing key -> nil, 'not found'")
+
+  local r_ok, r_err = cache:replace("never_set", "x")
+  check(r_ok == nil and r_err == "not found", "replace missing should fail with 'not found'")
+  ok("replace missing key -> nil, 'not found'")
+
+  local x_ok, x_err = cache:expire("never_set", 5)
+  check(x_ok == nil and x_err == "not found", "expire missing should fail with 'not found'")
+  ok("expire missing key -> nil, 'not found'")
+
+  local t_ok, t_err = cache:ttl("never_set")
+  check(t_ok == nil and t_err == "not found", "ttl missing should fail with 'not found'")
+  ok("ttl missing key -> nil, 'not found'")
+
+  -- ── Type errors ────────────────────────────────────────────────────────────
+  cache:set("str_for_incr", "not_a_number")
+  local i_ok, i_err = cache:incr("str_for_incr", 1)
+  check(i_ok == nil and i_err == "type mismatch", "incr on string should fail with 'type mismatch', got " .. tostring(i_err))
+  ok("incr on string -> nil, 'type mismatch'")
+
+  local set_ok, set_err = pcall(function() cache:set("bad", { 1 }) end)
+  check(not set_ok, "set with table value should raise an error")
+  ok("set table value -> Lua error raised")
+
+  -- ── Value type round-trips ─────────────────────────────────────────────────
+  cache:set("bool_false", false)
+  check(cache:get("bool_false") == false, "boolean false round-trip failed")
+  ok("boolean false round-trip")
+
+  cache:set("neg_float", -1234.5)
+  local nf = cache:get("neg_float")
+  check(type(nf) == "number" and math.abs(nf - (-1234.5)) < 1e-9, "negative float round-trip failed")
+  ok("negative float round-trip")
+
+  cache:set("empty_str", "")
+  check(cache:get("empty_str") == "", "empty string round-trip failed")
+  ok("empty string round-trip")
+
+  cache:set("a\0b", "nul_key")
+  check(cache:get("a\0b") == "nul_key", "binary key with NUL byte failed")
+  ok("binary key with embedded NUL")
+
+  local big = string.rep("z", 64 * 1024)
+  cache:set("big_val", big)
+  check(cache:get("big_val") == big, "64 KiB value round-trip failed")
+  ok("64 KiB value round-trip")
+
+  -- ── incr variants ──────────────────────────────────────────────────────────
+  cache:flush_all()
+  local dv = cache:incr("ctr_default", nil, 0) -- delta omitted -> 1
+  check(dv == 1, "incr with default delta should give 1, got " .. tostring(dv))
+  ok("incr default delta = 1")
+
+  local noinit_ok, noinit_err = cache:incr("no_such", 1)
+  check(noinit_ok == nil and noinit_err == "not found", "incr without init on missing key should fail with 'not found'")
+  ok("incr missing key without init -> nil, 'not found'")
+
+  -- ── Real TTL expiry end-to-end ─────────────────────────────────────────────
+  -- NB: lunet.sleep takes MILLISECONDS; dict TTLs are in seconds.
+  cache:set("will_expire", "gone_soon", 0.05)
+  lunet.sleep(100) -- 100 ms > 50 ms TTL
+  local evicted = cache:flush_expired()
+  check(evicted >= 1, "flush_expired should evict >= 1, got " .. tostring(evicted))
+  local gone = cache:get("will_expire")
+  check(gone == nil, "expired key should be absent after flush_expired")
+  ok("flush_expired evicts real expired entries (" .. tostring(evicted) .. ")")
+
+  cache:set("ttl_a", "x", 0.05)
+  cache:set("ttl_b", "x", 0.05)
+  cache:set("ttl_c", "x", 0.05)
+  lunet.sleep(100)
+  local ev1 = cache:flush_expired(2) -- max = 2
+  check(ev1 == 2, "flush_expired(max=2) should evict exactly 2, got " .. tostring(ev1))
+  ok("flush_expired honours max limit")
+
+  -- ── add with TTL ───────────────────────────────────────────────────────────
+  local a_ok = cache:add("temp_add", "v", 30)
+  check(a_ok == true, "add with TTL failed")
+  local at = cache:ttl("temp_add")
+  check(type(at) == "number" and at > 0 and at <= 30, "add TTL should be in (0,30], got " .. tostring(at))
+  ok("add with TTL sets expiry")
+
+  -- ── tostring ───────────────────────────────────────────────────────────────
+  check(tostring(cache):find("smoke_test", 1, true) ~= nil, "tostring should include dict name")
+  ok("tostring includes dict name")
+
+  -- ── close() lifecycle ──────────────────────────────────────────────────────
+  local tmp = shared.open("smoke_close", 65536)
+  tmp:set("k", "v")
+  check(tmp:close() == true, "close() should return true")
+  check(tmp:close() == true, "second close() should be a safe no-op returning true")
+  local cv, cerr = tmp:get("k")
+  check(cv == nil and cerr == "not found", "get after close should fail gracefully, got " .. tostring(cv) .. "," .. tostring(cerr))
+  ok("close() + double-close + use-after-close is safe")
+
+  -- A fresh handle to the same region still sees old data (region outlives
+  -- individual handles).
+  local tmp2 = shared.open("smoke_close", 65536)
+  check(tmp2:get("k") == "v", "region should outlive a closed handle")
+  ok("region persists after single handle close")
+
+  end)) -- end of protected extended block
+  if aborted ~= "__smoke_abort__" and aborted ~= nil then
+    -- An unexpected Lua error inside the extended block.
+    print("FAIL (unexpected): " .. tostring(aborted))
+    __lunet_exit_code = 1
+  end
+  if __lunet_exit_code ~= 1 then
+    print()
+    print("=== All ngx_shared tests passed (" .. step .. " checks) ===")
+    __lunet_exit_code = 0
+  end
 end
 
 lunet.spawn(test_ngx_shared)

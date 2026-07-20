@@ -165,6 +165,7 @@ local ERR_CODES = {
   [-3] = "out of memory",  -- NGX_SHARED_ERR_NOMEM
   [-4] = "type mismatch",  -- NGX_SHARED_ERR_TYPE
   [-5] = "hash table full", -- NGX_SHARED_ERR_FULL
+  [-6] = "invalid argument", -- NGX_SHARED_ERR_INVAL
 }
 
 local function rc_to_err(rc)
@@ -381,15 +382,21 @@ function Dict:free_space()
   return tonumber(lib().ngx_shared_free_space(self._h))
 end
 
-function Dict:__tostring()
-  return string.format("ngx_shared.Dict(%s)", self._name)
-end
-
-function Dict:__gc()
-  if self._h then
+--- Explicitly close the dictionary handle.
+--- Safe to call multiple times; also runs automatically at GC time via
+--- ffi.gc (LuaJIT ignores __gc on plain tables, so the finalizer is
+--- attached to the cdata handle itself).
+function Dict:close()
+  if self._h ~= nil then
+    ffi.gc(self._h, nil)               -- disarm the finalizer
     lib().ngx_shared_close(self._h)
     self._h = nil
   end
+  return true
+end
+
+function Dict:__tostring()
+  return string.format("ngx_shared.Dict(%s)", self._name)
 end
 
 -- ── Public module ─────────────────────────────────────────────────────────────
@@ -407,10 +414,15 @@ local M = {}
 function M.open(name, size_bytes)
   assert(type(name) == "string" and #name > 0, "name must be a non-empty string")
   size_bytes = math.max(size_bytes or 1024 * 1024, 65536)
-  local h = lib().ngx_shared_open(name, size_bytes)
+  local l = lib()
+  local h = l.ngx_shared_open(name, size_bytes)
   if h == nil then
     error("lunet.ngx_shared: failed to open dictionary '" .. name .. "'", 2)
   end
+  -- Attach the finalizer to the cdata handle (LuaJIT does not honour __gc
+  -- on plain tables).  The underlying region outlives the handle: it is
+  -- freed only when the last handle to it is closed.
+  h = ffi.gc(h, l.ngx_shared_close)
   local d = setmetatable({ _h = h, _name = name }, Dict)
   return d
 end

@@ -14,6 +14,7 @@
 //! NGX_SHARED_ERR_NOMEM  -3  data area full
 //! NGX_SHARED_ERR_TYPE   -4  type mismatch (incr on non-numeric)
 //! NGX_SHARED_ERR_FULL   -5  hash table full (resize not supported)
+//! NGX_SHARED_ERR_INVAL  -6  invalid argument (key/value too large)
 //! ```
 
 use crate::region::{
@@ -30,6 +31,15 @@ pub const NGX_SHARED_ERR_EXISTS: i32 = -2;
 pub const NGX_SHARED_ERR_NOMEM: i32 = -3;
 pub const NGX_SHARED_ERR_TYPE: i32 = -4;
 pub const NGX_SHARED_ERR_FULL: i32 = -5;
+pub const NGX_SHARED_ERR_INVAL: i32 = -6;
+
+/// Entry header stores key/value lengths as u32; anything larger would
+/// truncate on disk.  Checked at the FFI boundary *before* a slice is
+/// materialised, and again inside Dict for direct Rust callers.
+#[inline]
+pub(crate) fn lens_valid(klen: usize, vlen: usize) -> bool {
+    klen <= u32::MAX as usize && vlen <= u32::MAX as usize
+}
 
 // ── FNV-1a 64-bit hash ────────────────────────────────────────────────────────
 
@@ -121,9 +131,7 @@ impl Dict {
                         // Check expiry — treat expired entries as absent.
                         if is_expired(ehdr.expire_ns) {
                             // Mark as tombstone and continue probing.
-                            (*self.region.slot_ptr(idx)).entry_off = SLOT_ENTRY_TOMB;
-                            h.tombstone_count.fetch_add(1, Ordering::Relaxed);
-                            h.entry_count.fetch_sub(1, Ordering::Relaxed);
+                            self.tombstone_slot(idx);
                             if first_tomb.is_none() {
                                 first_tomb = Some(idx);
                             }
@@ -159,6 +167,53 @@ impl Dict {
             }
         }
         None
+    }
+
+    /// Mark slot `idx` as a tombstone and adjust the header counters.
+    ///
+    /// SAFETY: must be called while the spinlock is held; `idx` must name a
+    /// live slot.
+    unsafe fn tombstone_slot(&self, idx: u32) {
+        (*self.region.slot_ptr(idx)).entry_off = SLOT_ENTRY_TOMB;
+        let h = self.region.header();
+        h.tombstone_count.fetch_add(1, Ordering::Relaxed);
+        h.entry_count.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// Find a slot, write the entry into the data area, and link the slot to
+    /// it.  `prefer` is a known-reusable slot (e.g. one the caller has just
+    /// tombstoned); otherwise `first_tomb`/fresh probing is used.
+    ///
+    /// SAFETY: must be called while the spinlock is held.
+    unsafe fn store_locked(
+        &self,
+        key: &[u8],
+        val: &[u8],
+        val_type: u8,
+        expire_ns: u64,
+        hash: u64,
+        prefer: Option<u32>,
+        first_tomb: Option<u32>,
+    ) -> i32 {
+        let insert_slot = self.find_insert_slot(hash, prefer.or(first_tomb));
+        match insert_slot {
+            None => NGX_SHARED_ERR_FULL,
+            Some(ins_idx) => match self.alloc_entry(key, val, val_type, expire_ns) {
+                None => NGX_SHARED_ERR_NOMEM,
+                Some(off) => {
+                    let slot = &mut *self.region.slot_ptr(ins_idx);
+                    let was_tomb = slot.entry_off == SLOT_ENTRY_TOMB;
+                    slot.hash = hash;
+                    slot.entry_off = off;
+                    let h = self.region.header();
+                    h.entry_count.fetch_add(1, Ordering::Relaxed);
+                    if was_tomb {
+                        h.tombstone_count.fetch_sub(1, Ordering::Relaxed);
+                    }
+                    NGX_SHARED_OK
+                }
+            },
+        }
     }
 
     /// Allocate space in the bump allocator and write an entry.
@@ -233,55 +288,20 @@ impl Dict {
 
     /// Set `key` to `val` (always overwrites).  `ttl_secs <= 0` means no expiry.
     pub fn set(&self, key: &[u8], val: &[u8], val_type: u8, ttl_secs: f64) -> i32 {
+        if !lens_valid(key.len(), val.len()) {
+            return NGX_SHARED_ERR_INVAL;
+        }
         let hash = fnv1a_64(key);
         let expire_ns = expiry_from_ttl(ttl_secs);
         self.region.lock();
         let rc = unsafe {
             let (slot_idx, first_tomb) = self.find_slot(key, hash);
             if let Some(idx) = slot_idx {
-                // Key exists — mark old slot as tombstone and re-insert.
-                (*self.region.slot_ptr(idx)).entry_off = SLOT_ENTRY_TOMB;
-                self.region
-                    .header()
-                    .tombstone_count
-                    .fetch_add(1, Ordering::Relaxed);
-                self.region
-                    .header()
-                    .entry_count
-                    .fetch_sub(1, Ordering::Relaxed);
+                // Key exists — tombstone the old slot; it becomes the
+                // preferred re-use target for the re-insert.
+                self.tombstone_slot(idx);
             }
-            // Now find an insert slot (may reuse the tombstone we just made).
-            let insert_slot = self.find_insert_slot(hash, if slot_idx.is_some() {
-                // The slot we just tombstoned is the preferred re-use target.
-                slot_idx
-            } else {
-                first_tomb
-            });
-            match insert_slot {
-                None => NGX_SHARED_ERR_FULL,
-                Some(ins_idx) => {
-                    match self.alloc_entry(key, val, val_type, expire_ns) {
-                        None => NGX_SHARED_ERR_NOMEM,
-                        Some(off) => {
-                            let slot = &mut *self.region.slot_ptr(ins_idx);
-                            let was_tomb = slot.entry_off == SLOT_ENTRY_TOMB;
-                            slot.hash = hash;
-                            slot.entry_off = off;
-                            self.region
-                                .header()
-                                .entry_count
-                                .fetch_add(1, Ordering::Relaxed);
-                            if was_tomb {
-                                self.region
-                                    .header()
-                                    .tombstone_count
-                                    .fetch_sub(1, Ordering::Relaxed);
-                            }
-                            NGX_SHARED_OK
-                        }
-                    }
-                }
-            }
+            self.store_locked(key, val, val_type, expire_ns, hash, slot_idx, first_tomb)
         };
         self.region.unlock();
         rc
@@ -289,6 +309,9 @@ impl Dict {
 
     /// Add `key` only if it does not already exist.
     pub fn add(&self, key: &[u8], val: &[u8], val_type: u8, ttl_secs: f64) -> i32 {
+        if !lens_valid(key.len(), val.len()) {
+            return NGX_SHARED_ERR_INVAL;
+        }
         let hash = fnv1a_64(key);
         let expire_ns = expiry_from_ttl(ttl_secs);
         self.region.lock();
@@ -297,29 +320,7 @@ impl Dict {
             if slot_idx.is_some() {
                 NGX_SHARED_ERR_EXISTS
             } else {
-                match self.find_insert_slot(hash, first_tomb) {
-                    None => NGX_SHARED_ERR_FULL,
-                    Some(ins_idx) => match self.alloc_entry(key, val, val_type, expire_ns) {
-                        None => NGX_SHARED_ERR_NOMEM,
-                        Some(off) => {
-                            let slot = &mut *self.region.slot_ptr(ins_idx);
-                            let was_tomb = slot.entry_off == SLOT_ENTRY_TOMB;
-                            slot.hash = hash;
-                            slot.entry_off = off;
-                            self.region
-                                .header()
-                                .entry_count
-                                .fetch_add(1, Ordering::Relaxed);
-                            if was_tomb {
-                                self.region
-                                    .header()
-                                    .tombstone_count
-                                    .fetch_sub(1, Ordering::Relaxed);
-                            }
-                            NGX_SHARED_OK
-                        }
-                    },
-                }
+                self.store_locked(key, val, val_type, expire_ns, hash, None, first_tomb)
             }
         };
         self.region.unlock();
@@ -330,6 +331,9 @@ impl Dict {
     pub fn replace(&self, key: &[u8], val: &[u8], val_type: u8, ttl_secs: f64) -> i32 {
         // Implemented as: check-exists + set.  The lock is held for the whole
         // operation so there is no TOCTOU race.
+        if !lens_valid(key.len(), val.len()) {
+            return NGX_SHARED_ERR_INVAL;
+        }
         let hash = fnv1a_64(key);
         let expire_ns = expiry_from_ttl(ttl_secs);
         self.region.lock();
@@ -338,41 +342,8 @@ impl Dict {
             match slot_idx {
                 None => NGX_SHARED_NOT_FOUND,
                 Some(idx) => {
-                    // Tombstone the old slot.
-                    (*self.region.slot_ptr(idx)).entry_off = SLOT_ENTRY_TOMB;
-                    self.region
-                        .header()
-                        .tombstone_count
-                        .fetch_add(1, Ordering::Relaxed);
-                    self.region
-                        .header()
-                        .entry_count
-                        .fetch_sub(1, Ordering::Relaxed);
-                    // Re-insert.
-                    let insert_slot = self.find_insert_slot(hash, Some(idx));
-                    match insert_slot {
-                        None => NGX_SHARED_ERR_FULL,
-                        Some(ins_idx) => match self.alloc_entry(key, val, val_type, expire_ns) {
-                            None => NGX_SHARED_ERR_NOMEM,
-                            Some(off) => {
-                                let slot = &mut *self.region.slot_ptr(ins_idx);
-                                let was_tomb = slot.entry_off == SLOT_ENTRY_TOMB;
-                                slot.hash = hash;
-                                slot.entry_off = off;
-                                self.region
-                                    .header()
-                                    .entry_count
-                                    .fetch_add(1, Ordering::Relaxed);
-                                if was_tomb {
-                                    self.region
-                                        .header()
-                                        .tombstone_count
-                                        .fetch_sub(1, Ordering::Relaxed);
-                                }
-                                NGX_SHARED_OK
-                            }
-                        },
-                    }
+                    self.tombstone_slot(idx);
+                    self.store_locked(key, val, val_type, expire_ns, hash, Some(idx), None)
                 }
             }
         };
@@ -389,15 +360,7 @@ impl Dict {
             match slot_idx {
                 None => NGX_SHARED_NOT_FOUND,
                 Some(idx) => {
-                    (*self.region.slot_ptr(idx)).entry_off = SLOT_ENTRY_TOMB;
-                    self.region
-                        .header()
-                        .tombstone_count
-                        .fetch_add(1, Ordering::Relaxed);
-                    self.region
-                        .header()
-                        .entry_count
-                        .fetch_sub(1, Ordering::Relaxed);
+                    self.tombstone_slot(idx);
                     NGX_SHARED_OK
                 }
             }
@@ -421,6 +384,9 @@ impl Dict {
         ttl_secs: f64,
         result: &mut f64,
     ) -> i32 {
+        if !lens_valid(key.len(), 0) {
+            return NGX_SHARED_ERR_INVAL;
+        }
         let hash = fnv1a_64(key);
         self.region.lock();
         let rc = unsafe {
@@ -431,34 +397,20 @@ impl Dict {
                         NGX_SHARED_NOT_FOUND
                     } else {
                         let new_val = init + delta;
-                        let val_bytes = new_val.to_le_bytes();
                         let expire_ns = expiry_from_ttl(ttl_secs);
-                        match self.find_insert_slot(hash, first_tomb) {
-                            None => NGX_SHARED_ERR_FULL,
-                            Some(ins_idx) => {
-                                match self.alloc_entry(key, &val_bytes, VTYPE_F64, expire_ns) {
-                                    None => NGX_SHARED_ERR_NOMEM,
-                                    Some(off) => {
-                                        let slot = &mut *self.region.slot_ptr(ins_idx);
-                                        let was_tomb = slot.entry_off == SLOT_ENTRY_TOMB;
-                                        slot.hash = hash;
-                                        slot.entry_off = off;
-                                        self.region
-                                            .header()
-                                            .entry_count
-                                            .fetch_add(1, Ordering::Relaxed);
-                                        if was_tomb {
-                                            self.region
-                                                .header()
-                                                .tombstone_count
-                                                .fetch_sub(1, Ordering::Relaxed);
-                                        }
-                                        *result = new_val;
-                                        NGX_SHARED_OK
-                                    }
-                                }
-                            }
+                        let rc = self.store_locked(
+                            key,
+                            &new_val.to_le_bytes(),
+                            VTYPE_F64,
+                            expire_ns,
+                            hash,
+                            None,
+                            first_tomb,
+                        );
+                        if rc == NGX_SHARED_OK {
+                            *result = new_val;
                         }
+                        rc
                     }
                 }
                 Some(idx) => {
@@ -467,17 +419,13 @@ impl Dict {
                     let entry_ptr = self.region.data_base().add(slot.entry_off as usize);
                     let ehdr = &*(entry_ptr as *const EntryHdr);
 
-                    if ehdr.val_type != VTYPE_F64 {
-                        NGX_SHARED_ERR_TYPE
-                    } else if ehdr.val_len < 8 {
+                    if ehdr.val_type != VTYPE_F64 || ehdr.val_len < 8 {
                         NGX_SHARED_ERR_TYPE
                     } else {
                         let val_ptr = entry_ptr.add(ENTRY_HDR_SIZE + ehdr.key_len as usize);
                         let mut bytes = [0u8; 8];
                         std::ptr::copy_nonoverlapping(val_ptr, bytes.as_mut_ptr(), 8);
-                        let current = f64::from_le_bytes(bytes);
-                        let new_val = current + delta;
-                        let new_bytes = new_val.to_le_bytes();
+                        let new_val = f64::from_le_bytes(bytes) + delta;
 
                         // Preserve expiry if no new TTL given.
                         let expire_ns = if ttl_secs > 0.0 {
@@ -486,43 +434,20 @@ impl Dict {
                             ehdr.expire_ns
                         };
 
-                        // Tombstone old slot and re-insert with updated value.
-                        (*self.region.slot_ptr(idx)).entry_off = SLOT_ENTRY_TOMB;
-                        self.region
-                            .header()
-                            .tombstone_count
-                            .fetch_add(1, Ordering::Relaxed);
-                        self.region
-                            .header()
-                            .entry_count
-                            .fetch_sub(1, Ordering::Relaxed);
-
-                        match self.find_insert_slot(hash, Some(idx)) {
-                            None => NGX_SHARED_ERR_FULL,
-                            Some(ins_idx) => {
-                                match self.alloc_entry(key, &new_bytes, VTYPE_F64, expire_ns) {
-                                    None => NGX_SHARED_ERR_NOMEM,
-                                    Some(off) => {
-                                        let s = &mut *self.region.slot_ptr(ins_idx);
-                                        let was_tomb = s.entry_off == SLOT_ENTRY_TOMB;
-                                        s.hash = hash;
-                                        s.entry_off = off;
-                                        self.region
-                                            .header()
-                                            .entry_count
-                                            .fetch_add(1, Ordering::Relaxed);
-                                        if was_tomb {
-                                            self.region
-                                                .header()
-                                                .tombstone_count
-                                                .fetch_sub(1, Ordering::Relaxed);
-                                        }
-                                        *result = new_val;
-                                        NGX_SHARED_OK
-                                    }
-                                }
-                            }
+                        self.tombstone_slot(idx);
+                        let rc = self.store_locked(
+                            key,
+                            &new_val.to_le_bytes(),
+                            VTYPE_F64,
+                            expire_ns,
+                            hash,
+                            Some(idx),
+                            None,
+                        );
+                        if rc == NGX_SHARED_OK {
+                            *result = new_val;
                         }
+                        rc
                     }
                 }
             }
@@ -798,6 +723,320 @@ mod tests {
                 .get(k.as_bytes())
                 .unwrap_or_else(|_| panic!("get {k} failed"));
             assert_eq!(val, expected.as_bytes());
+        }
+    }
+
+    // ── TTL / expiry behaviour ────────────────────────────────────────────
+
+    #[test]
+    fn test_expired_key_get_not_found() {
+        let d = new_dict();
+        d.set(b"ephem", b"v", 0, 0.01); // 10 ms TTL
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        assert_eq!(d.get(b"ephem").unwrap_err(), NGX_SHARED_NOT_FOUND);
+    }
+
+    #[test]
+    fn test_add_on_expired_key_succeeds() {
+        let d = new_dict();
+        assert_eq!(d.add(b"k", b"v1", 0, 0.01), NGX_SHARED_OK);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        // The old entry is expired, so add must succeed again.
+        assert_eq!(d.add(b"k", b"v2", 0, 0.0), NGX_SHARED_OK);
+        let (val, _) = d.get(b"k").unwrap();
+        assert_eq!(val, b"v2");
+    }
+
+    #[test]
+    fn test_set_on_expired_key_succeeds() {
+        let d = new_dict();
+        d.set(b"k", b"v1", 0, 0.01);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        assert_eq!(d.set(b"k", b"v2", 0, 0.0), NGX_SHARED_OK);
+        assert_eq!(d.get(b"k").unwrap().0, b"v2");
+    }
+
+    #[test]
+    fn test_ttl_on_expired_key_is_not_found() {
+        let d = new_dict();
+        d.set(b"k", b"v", 0, 0.01);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        assert_eq!(d.ttl(b"k").unwrap_err(), NGX_SHARED_NOT_FOUND);
+    }
+
+    #[test]
+    fn test_incr_preserves_existing_ttl() {
+        let d = new_dict();
+        let mut r = 0.0f64;
+        assert_eq!(d.incr(b"c", 1.0, 0.0, true, 50.0, &mut r), NGX_SHARED_OK);
+        // Second incr with ttl_secs=0 must preserve the original expiry.
+        assert_eq!(d.incr(b"c", 1.0, 0.0, true, 0.0, &mut r), NGX_SHARED_OK);
+        let secs = d.ttl(b"c").unwrap().unwrap();
+        assert!(secs > 0.0 && secs <= 50.0, "ttl={secs}");
+    }
+
+    #[test]
+    fn test_incr_new_ttl_overrides() {
+        let d = new_dict();
+        let mut r = 0.0f64;
+        d.incr(b"c", 1.0, 0.0, true, 10.0, &mut r);
+        d.incr(b"c", 1.0, 0.0, true, 99.0, &mut r);
+        let secs = d.ttl(b"c").unwrap().unwrap();
+        assert!(secs > 50.0 && secs <= 99.0, "ttl={secs}");
+    }
+
+    #[test]
+    fn test_incr_bool_type_mismatch() {
+        let d = new_dict();
+        d.set(b"b", &[1u8], 2, 0.0); // VTYPE_BOOL
+        let mut r = 0.0f64;
+        assert_eq!(d.incr(b"b", 1.0, 0.0, false, 0.0, &mut r), NGX_SHARED_ERR_TYPE);
+    }
+
+    #[test]
+    fn test_expire_missing_key() {
+        let d = new_dict();
+        assert_eq!(d.expire(b"nope", 10.0), NGX_SHARED_NOT_FOUND);
+    }
+
+    #[test]
+    fn test_ttl_missing_key() {
+        let d = new_dict();
+        assert_eq!(d.ttl(b"nope").unwrap_err(), NGX_SHARED_NOT_FOUND);
+    }
+
+    #[test]
+    fn test_flush_expired_evicts_and_counts() {
+        let d = new_dict();
+        d.set(b"a", b"1", 0, 0.01);
+        d.set(b"b", b"2", 0, 0.01);
+        d.set(b"keep", b"3", 0, 0.0); // no expiry
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let flushed = d.flush_expired(0);
+        assert_eq!(flushed, 2, "expected 2 evicted, got {flushed}");
+        assert!(d.get(b"keep").is_ok());
+    }
+
+    #[test]
+    fn test_flush_expired_max_limit() {
+        let d = new_dict();
+        d.set(b"a", b"1", 0, 0.01);
+        d.set(b"b", b"2", 0, 0.01);
+        d.set(b"c", b"3", 0, 0.01);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let first = d.flush_expired(2);
+        assert_eq!(first, 2, "max=2 must evict exactly 2, got {first}");
+        let rest = d.flush_expired(0);
+        assert_eq!(rest, 1, "one entry should remain, got {rest}");
+    }
+
+    #[test]
+    fn test_flush_expired_nothing_to_do() {
+        let d = new_dict();
+        d.set(b"a", b"1", 0, 0.0);
+        assert_eq!(d.flush_expired(0), 0);
+    }
+
+    // ── Capacity limits ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_nomem_data_area_full() {
+        // 64 KiB region; fill with large values until the bump allocator
+        // runs out of room.
+        let d = Dict::new(64 * 1024).expect("mmap failed");
+        let big = vec![0xABu8; 4096];
+        let mut nomem_seen = false;
+        for i in 0..200u32 {
+            let k = format!("big_{i}");
+            match d.set(k.as_bytes(), &big, 0, 0.0) {
+                NGX_SHARED_OK => continue,
+                NGX_SHARED_ERR_NOMEM => {
+                    nomem_seen = true;
+                    break;
+                }
+                other => panic!("unexpected rc={other}"),
+            }
+        }
+        assert!(nomem_seen, "expected NOMEM before 200 x 4 KiB values");
+    }
+
+    #[test]
+    fn test_full_hash_table() {
+        // Minimum-size region => small hash table (256 slots for 64 KiB).
+        // Distinct small keys keep data-area usage tiny so FULL (not NOMEM)
+        // is the error that fires.
+        let d = Dict::new(64 * 1024).expect("mmap failed");
+        let mut full_seen = false;
+        for i in 0..2000u32 {
+            let k = format!("k{i}");
+            match d.set(k.as_bytes(), b"v", 0, 0.0) {
+                NGX_SHARED_OK => continue,
+                NGX_SHARED_ERR_FULL => {
+                    full_seen = true;
+                    break;
+                }
+                NGX_SHARED_ERR_NOMEM => panic!("NOMEM fired before FULL — wrong limit hit first"),
+                other => panic!("unexpected rc={other}"),
+            }
+        }
+        assert!(full_seen, "expected FULL within 2000 keys");
+    }
+
+    // ── Key/value shape coverage ──────────────────────────────────────────
+
+    #[test]
+    fn test_binary_keys_with_nul() {
+        let d = new_dict();
+        d.set(b"a\0b", b"first", 0, 0.0);
+        d.set(b"a\0c", b"second", 0, 0.0);
+        assert_eq!(d.get(b"a\0b").unwrap().0, b"first");
+        assert_eq!(d.get(b"a\0c").unwrap().0, b"second");
+    }
+
+    #[test]
+    fn test_empty_value() {
+        let d = new_dict();
+        assert_eq!(d.set(b"k", b"", 0, 0.0), NGX_SHARED_OK);
+        let (val, _) = d.get(b"k").unwrap();
+        assert_eq!(val.len(), 0);
+    }
+
+    #[test]
+    fn test_empty_key() {
+        let d = new_dict();
+        assert_eq!(d.set(b"", b"v", 0, 0.0), NGX_SHARED_OK);
+        assert_eq!(d.get(b"").unwrap().0, b"v");
+    }
+
+    #[test]
+    fn test_large_value() {
+        let d = Dict::new(4 * 1024 * 1024).expect("mmap failed");
+        let big: Vec<u8> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
+        assert_eq!(d.set(b"big", &big, 0, 0.0), NGX_SHARED_OK);
+        let (val, _) = d.get(b"big").unwrap();
+        assert_eq!(val, big);
+    }
+
+    #[test]
+    fn test_f64_vtype_roundtrip() {
+        let d = new_dict();
+        let bytes = 3.14159f64.to_le_bytes();
+        assert_eq!(d.set(b"pi", &bytes, 1, 0.0), NGX_SHARED_OK);
+        let (val, vtype) = d.get(b"pi").unwrap();
+        assert_eq!(vtype, 1);
+        assert_eq!(val, bytes);
+        assert_eq!(f64::from_le_bytes(val.try_into().unwrap()), 3.14159);
+    }
+
+    #[test]
+    fn test_bool_vtype_roundtrip() {
+        let d = new_dict();
+        d.set(b"t", &[1u8], 2, 0.0);
+        d.set(b"f", &[0u8], 2, 0.0);
+        assert_eq!(d.get(b"t").unwrap(), (vec![1u8], 2));
+        assert_eq!(d.get(b"f").unwrap(), (vec![0u8], 2));
+    }
+
+    // ── Region / allocator invariants ─────────────────────────────────────
+
+    #[test]
+    fn test_region_new_too_small() {
+        assert!(Dict::new(1024).is_none());
+        assert!(Dict::new(0).is_none());
+    }
+
+    #[test]
+    fn test_lens_valid_boundaries() {
+        assert!(lens_valid(0, 0));
+        assert!(lens_valid(1, 1));
+        assert!(lens_valid(u32::MAX as usize, u32::MAX as usize));
+        assert!(!lens_valid(u32::MAX as usize + 1, 0));
+        assert!(!lens_valid(0, u32::MAX as usize + 1));
+        assert!(!lens_valid(usize::MAX, usize::MAX));
+    }
+
+    #[test]
+    fn test_compute_hash_capacity_rules() {
+        use crate::region::Region;
+        // Minimum is 64 slots.
+        assert_eq!(Region::compute_hash_capacity(64 * 1024).count_ones(), 1);
+        assert!(Region::compute_hash_capacity(64 * 1024) >= 64);
+        // Always a power of two.
+        for size in [64 * 1024usize, 128 * 1024, 1024 * 1024, 3 * 1024 * 1024 + 12345] {
+            let cap = Region::compute_hash_capacity(size);
+            assert!(cap.is_power_of_two(), "size={size} cap={cap}");
+        }
+        // Monotonic non-decreasing with size.
+        assert!(Region::compute_hash_capacity(1024 * 1024) >= Region::compute_hash_capacity(64 * 1024));
+    }
+
+    #[test]
+    fn test_set_after_delete_reuses_tombstone() {
+        let d = new_dict();
+        d.set(b"k", b"v1", 0, 0.0);
+        d.delete(b"k");
+        assert_eq!(d.set(b"k", b"v2", 0, 0.0), NGX_SHARED_OK);
+        assert_eq!(d.get(b"k").unwrap().0, b"v2");
+    }
+
+    #[test]
+    fn test_overwrite_consumes_space_flush_restores() {
+        let d = new_dict();
+        let free0 = d.free_space();
+        let val = vec![0x55u8; 1024];
+        for _ in 0..10 {
+            d.set(b"same", &val, 0, 0.0);
+        }
+        let free1 = d.free_space();
+        assert!(free1 < free0, "bump allocator should consume space on overwrite");
+        d.flush_all();
+        assert_eq!(d.free_space(), free0, "flush_all must reset the allocator");
+    }
+
+    // ── Concurrency (spinlock correctness) ────────────────────────────────
+
+    #[test]
+    fn test_concurrent_incr() {
+        use std::sync::Arc;
+        let d = Arc::new(new_dict());
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let dc = Arc::clone(&d);
+            handles.push(std::thread::spawn(move || {
+                let mut r = 0.0f64;
+                for _ in 0..1000 {
+                    let rc = dc.incr(b"ctr", 1.0, 0.0, true, 0.0, &mut r);
+                    assert_eq!(rc, NGX_SHARED_OK);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        let (val, vtype) = d.get(b"ctr").unwrap();
+        assert_eq!(vtype, 1);
+        let n = f64::from_le_bytes(val.try_into().unwrap());
+        assert_eq!(n, 4000.0, "spinlock must serialise all 4000 increments");
+    }
+
+    #[test]
+    fn test_concurrent_mixed_ops() {
+        use std::sync::Arc;
+        let d = Arc::new(new_dict());
+        let mut handles = Vec::new();
+        for t in 0..4u32 {
+            let dc = Arc::clone(&d);
+            handles.push(std::thread::spawn(move || {
+                for i in 0..250u32 {
+                    let k = format!("t{t}_k{i}");
+                    let v = format!("t{t}_v{i}");
+                    assert_eq!(dc.set(k.as_bytes(), v.as_bytes(), 0, 0.0), NGX_SHARED_OK);
+                    assert_eq!(dc.get(k.as_bytes()).unwrap().0, v.as_bytes());
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
         }
     }
 }

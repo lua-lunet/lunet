@@ -99,10 +99,10 @@ lunet.spawn(function()
   -- Add entries with a past-like TTL (very short, will already be expired
   -- by the time flush_expired runs in a real scenario, but for the demo
   -- we just show the call).
-  cache:set("stale:1", "x", 0.001)
+  cache:set("stale:1", "x", 0.001)  -- 1 ms TTL (dict TTLs are in seconds)
   cache:set("stale:2", "y", 0.001)
-  -- Give a tiny moment for those to expire (lunet coroutine scheduling).
-  lunet.sleep(0.01)
+  -- NB: lunet.sleep takes MILLISECONDS.  20 ms > 1 ms TTL.
+  lunet.sleep(20)
   local flushed = cache:flush_expired()
   print("flush_expired() evicted: " .. tostring(flushed) .. " entries")
   print()

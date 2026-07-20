@@ -271,6 +271,10 @@ local evicted = cache:flush_expired()
 
 -- Stats
 print(cache:capacity(), cache:free_space())
+
+-- Handles are GC-managed (ffi.gc finalizer); close eagerly if desired.
+-- The shared region itself outlives any single handle.
+cache:close()
 ```
 
 **Architecture**: one `mmap(MAP_ANONYMOUS|MAP_SHARED)` region per named

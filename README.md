@@ -19,6 +19,8 @@ Lunet is **modular by design**. You build only what you need:
   - `lunet-postgres` - PostgreSQL driver
 - **Outbound HTTPS client** (optional xmake target):
   - `lunet-httpc` - HTTPS client via libcurl (`require("lunet.httpc")`)
+- **Shared dictionary** (optional Rust extension, Linux/macOS):
+  - `lunet.ngx_shared` - nginx-inspired shared dict via Rust FFI (`xmake build-ngx-shared`)
 
 Build one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
 
@@ -94,6 +96,7 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1
 | 03 | [`examples/03_db_sqlite3.lua`](examples/03_db_sqlite3.lua) | SQLite3 CRUD + `query_params` / `exec_params` | `xmake build lunet-sqlite3` | `"$LUNET_BIN" examples/03_db_sqlite3.lua` |
 | 04 | [`examples/04_db_mysql.lua`](examples/04_db_mysql.lua) | MySQL CRUD + prepared statements (`?`) | `xmake build lunet-mysql` + MySQL server | `"$LUNET_BIN" examples/04_db_mysql.lua` |
 | 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + prepared statements (`$1`) | `xmake build lunet-postgres` + Postgres server | `"$LUNET_BIN" examples/05_db_postgres.lua` |
+| 08 | [`examples/08_ngx_shared.lua`](examples/08_ngx_shared.lua) | nginx-style shared dictionary via Rust FFI | `xmake build-ngx-shared` | `"$LUNET_BIN" examples/08_ngx_shared.lua` |
 
 See also [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app) for a complete RealWorld "Conduit" API implementation.
 
@@ -225,6 +228,55 @@ db.close(conn)
 | `db.escape(str)` | Escape string for SQL (rarely needed) | escaped string |
 
 **Note**: All three drivers now use native prepared statements internally. Parameters are automatically bound using driver-native functions (`sqlite3_bind_*`, `mysql_stmt_bind_param`, `PQexecParams`), eliminating SQL injection risks.
+
+### Shared Dictionary (`lunet.ngx_shared`) — Linux / macOS
+
+An nginx-inspired shared dictionary backed by a Rust FFI library.  This is
+**not** a dependency on nginx or OpenResty — it provides a similar API surface
+for convenience, without attempting to replicate any undefined or
+implementation-specific OpenResty behaviour.  It is a pure opt-in extension.
+
+**Build** (requires Rust 1.85+ / 2024 edition):
+```bash
+xmake build-ngx-shared   # runs: cargo build --release in ext/ngx_shared/
+```
+
+**Usage**:
+```lua
+-- Load the wrapper (after building the Rust library)
+local script_dir = debug.getinfo(1,"S").source:match("^@(.+)/[^/]+$") or "."
+local shared = loadfile(script_dir .. "/../ext/ngx_shared/ngx_shared.lua")()
+
+local cache = shared.open("my_cache", 1024 * 1024)  -- 1 MiB
+
+-- Strings, numbers, and booleans
+cache:set("key", "value")
+cache:set("hits", 0)
+cache:set("active", true)
+
+-- Atomic increment (creates key with init=0 if absent)
+cache:incr("hits", 1, 0)
+
+-- TTL (seconds, fractional OK)
+cache:set("session", "token123", 30)  -- expires in 30 s
+
+-- Standard dict operations
+cache:add("lock", "worker-1")         -- only if absent
+cache:replace("lock", "worker-2")     -- only if present
+cache:delete("lock")
+
+-- Bulk
+cache:flush_all()
+local evicted = cache:flush_expired()
+
+-- Stats
+print(cache:capacity(), cache:free_space())
+```
+
+**Architecture**: one `mmap(MAP_ANONYMOUS|MAP_SHARED)` region per named
+dictionary; all state lives in the region (no heap for persistent data);
+FNV-1a open-address hash table; bump allocator; single spinlock.  Multiple
+handles opened with the same name share the same region within a process.
 
 ## Safety: Zero-Cost Tracing
 
@@ -370,6 +422,8 @@ xmake is the canonical build system. There is no Makefile. All tasks are defined
 | `xmake build-debug` | Debug build with tracing |
 | `xmake examples-compile` | Examples compile/syntax check |
 | `xmake sqlite3-smoke` | SQLite3 example smoke test |
+| `xmake build-ngx-shared` | Build the ngx_shared Rust extension |
+| `xmake ngx-shared-smoke` | Build ngx_shared then run its smoke test |
 | `xmake stress` | Concurrent load test with tracing |
 | `xmake ci` | Local CI parity (lint + build + examples + sqlite3 smoke) |
 | `xmake preflight-easy-memory` | EasyMem + ASan preflight gate |

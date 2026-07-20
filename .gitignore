@@ -8,3 +8,5 @@ build_*
 .idea/
 .xmake/
 tmp/
+# Rust build artifacts for ext/ngx_shared
+ext/ngx_shared/target/

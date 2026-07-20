@@ -940,6 +940,22 @@ task("release")
     end)
 task_end()
 
+-- Full CI-parity gate in a clean Debian trixie (arm64) container.
+-- Runs: cargo test, xmake ci, xmake test, ngx_shared smoke,
+-- preflight-easy-memory (ASAN+EasyMem+LSAN).  Requires Docker (colima).
+-- Classic builder only (no BuildKit), no volume mounts.
+task("gate-trixie")
+    set_menu {
+        usage = "xmake gate-trixie",
+        description = "Run all local CI-parity gates in Docker (Debian trixie, arm64)"
+    }
+    on_run(function ()
+        local envs = {DOCKER_BUILDKIT = "0"}
+        os.execv("docker", {"build", "-f", "docker/Dockerfile", "-t", "lunet-gate:trixie", "."}, {envs = envs})
+        os.execv("docker", {"run", "--rm", "--platform", "linux/arm64", "lunet-gate:trixie"}, {envs = envs})
+    end)
+task_end()
+
 -- =============================================================================
 -- ngx_shared extension (Rust, optional)
 -- =============================================================================

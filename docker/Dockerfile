@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       luajit libluajit-5.1-dev \
       libuv1-dev libsqlite3-dev zlib1g-dev \
       libpq-dev default-libmysqlclient-dev \
+      libsodium-dev libcurl4-openssl-dev \
       libasan8 \
       rustc cargo \
       luarocks lua5.1 \

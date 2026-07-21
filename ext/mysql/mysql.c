@@ -1,5 +1,15 @@
 #include "lunet_db_mysql.h"
 
+#ifdef _WIN32
+/* Include winsock2.h before mysql.h to prevent the old winsock.h from being
+ * pulled in by the MySQL client headers. winsock2.h defines _WINSOCKAPI_
+ * which suppresses subsequent winsock.h inclusion, avoiding struct
+ * redefinition errors (sockaddr, fd_set, timeval, etc.) when libuv also
+ * includes the newer Windows socket headers. */
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
 #include <mysql.h>
 #include <stdbool.h>
 #include <stdlib.h>

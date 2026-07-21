@@ -3,7 +3,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#ifdef _WIN32
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#else
 #include <sys/types.h>
+#endif
 
 /* Failure policies */
 typedef enum { 

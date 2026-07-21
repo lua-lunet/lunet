@@ -1,0 +1,64 @@
+# lunet jsonic Maelstrom demo server — Debian trixie (arm64).
+# Builds lunet + the jsonic Rust extension + lunet.httpc from source, then
+# ships a minimal runtime image that serves Maelstrom JSON-RPC over HTTP on
+# 127.0.0.1:18090 (loopback only; reached by the rig container via a shared
+# network namespace — see docker-compose.yml).
+#
+# Build context: repository root.
+#   DOCKER_BUILDKIT=0 docker build --platform linux/arm64 \
+#     -f ext/jsonic/maelstrom/Dockerfile.demo -t lunet-jsonic-demo:latest .
+# (classic builder only — no BuildKit, no mounts)
+
+FROM --platform=linux/arm64 debian:trixie AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Same dependency set as docker/Dockerfile (CI parity), minus test-only
+# tooling (busted, libasan): this image only needs to *build* lunet.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential pkg-config \
+      luajit libluajit-5.1-dev \
+      libuv1-dev libsqlite3-dev zlib1g-dev \
+      libpq-dev default-libmysqlclient-dev \
+      libsodium-dev libcurl4-openssl-dev \
+      rustc cargo \
+      curl ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG XMAKE_VERSION=3.0.8
+RUN curl -fsSL -o /tmp/xmake.run "https://github.com/xmake-io/xmake/releases/download/v${XMAKE_VERSION}/xmake-v${XMAKE_VERSION}.gz.run" \
+    && bash /tmp/xmake.run \
+    && rm /tmp/xmake.run
+ENV PATH="/root/.local/bin:${PATH}"
+# Containers run as root; xmake requires explicit opt-in for that.
+ENV XMAKE_ROOT=y
+
+WORKDIR /src
+COPY . /src
+
+RUN xmake build-release \
+    && xmake build lunet-httpc \
+    && xmake build-jsonic
+
+FROM --platform=linux/arm64 debian:trixie
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libuv1 luajit libcurl4 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+# lunet-run resolves lunet/?.so next to the binary (see src/main.c), so
+# httpc.so must live at /app/bin/lunet/httpc.so.
+COPY --from=build /src/build/linux/arm64/release/lunet-run /app/bin/lunet-run
+COPY --from=build /src/build/linux/arm64/release/lunet/httpc.so /app/bin/lunet/httpc.so
+# jsonic.lua's loader probes <script_dir>/liblunet_jsonic.so (this exact path)
+# and then LUNET_JSONIC_LIB; ship it where it probes.
+COPY --from=build /src/ext/jsonic/target/release/liblunet_jsonic.so /app/ext/jsonic/liblunet_jsonic.so
+COPY ext/jsonic/jsonic.lua /app/ext/jsonic/jsonic.lua
+COPY ext/jsonic/dkjson-encode-v2.10.lua /app/ext/jsonic/dkjson-encode-v2.10.lua
+COPY ext/jsonic/maelstrom/server.lua /app/ext/jsonic/maelstrom/server.lua
+
+ENV LUNET_JSONIC_LIB=/app/ext/jsonic/liblunet_jsonic.so
+
+CMD ["/app/bin/lunet-run", "/app/ext/jsonic/maelstrom/server.lua"]

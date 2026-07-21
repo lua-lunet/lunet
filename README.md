@@ -312,6 +312,10 @@ local str = json.encode({ a = 1, b = { true, json.null } })
 json.encode({ a = 1 }, { indent = true, keyorder = { "a" } })
 ```
 
+**Maelstrom rig**: [`ext/jsonic/maelstrom/`](ext/jsonic/maelstrom/README.md)
+runs the jsonic demo as a Maelstrom (Jepsen) node — Docker on arm64, no
+volume mounts, loopback-only — via `make -C ext/jsonic/maelstrom test`.
+
 ## Safety: Zero-Cost Tracing
 
 Build with `xmake build-debug` to enable coroutine reference tracking and stack integrity checks. The runtime will assert and crash on leaks or stack pollution.

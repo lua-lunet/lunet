@@ -1,0 +1,17 @@
+# Maelstrom test rig for the lunet jsonic demo.
+#
+# The rig shares the demo container's network namespace (network_mode), so
+# the shim can reach the server on 127.0.0.1:18090 — no published ports, no
+# 0.0.0.0 binding, no volume mounts. Images are built by the Makefile
+# (classic builder, DOCKER_BUILDKIT=0); compose only orchestrates the run.
+#
+#   docker compose -f docker-compose.yml up --abort-on-container-exit --exit-code-from rig
+
+services:
+  demo:
+    image: lunet-jsonic-demo:latest
+  rig:
+    image: lunet-jsonic-rig:latest
+    network_mode: "service:demo"
+    depends_on:
+      - demo

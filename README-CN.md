@@ -248,6 +248,10 @@ local str = json.encode({ a = 1, b = { true, json.null } })
 json.encode({ a = 1 }, { indent = true, keyorder = { "a" } })
 ```
 
+**Maelstrom 测试平台**:[`ext/jsonic/maelstrom/`](ext/jsonic/maelstrom/README-CN.md)
+将 jsonic 演示作为 Maelstrom(Jepsen)节点运行 —— Docker arm64、无卷挂载、
+仅回环 —— 通过 `make -C ext/jsonic/maelstrom test` 执行。
+
 ## 安全性：零开销追踪
 
 使用 `xmake build-debug` 构建可启用协程引用追踪和栈完整性检查。运行时会在检测到泄漏或栈污染时触发断言并崩溃。

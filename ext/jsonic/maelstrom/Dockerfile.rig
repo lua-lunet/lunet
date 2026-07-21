@@ -1,0 +1,45 @@
+# Maelstrom test rig for the lunet jsonic demo — Debian trixie (arm64).
+#
+# Contains: JDK + graphviz + gnuplot + the Maelstrom v0.2.4 release tarball
+# (prebuilt uberjar — no lein/clojure build needed), plus the lunet-run +
+# httpc shim copied FROM the demo image. At container start it waits for the
+# demo server (shared network namespace via compose) and runs:
+#   maelstrom test -w echo --bin shim.sh --node-count 1 --time-limit 10
+#
+# Build context: repository root. The demo image MUST be built first
+# (`make build` in this directory handles the ordering).
+#   DOCKER_BUILDKIT=0 docker build --platform linux/arm64 \
+#     -f ext/jsonic/maelstrom/Dockerfile.rig -t lunet-jsonic-rig:latest .
+# (classic builder only — no BuildKit, no mounts)
+
+FROM --platform=linux/arm64 lunet-jsonic-demo:latest AS demo
+
+FROM --platform=linux/arm64 debian:trixie
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      openjdk-21-jre-headless graphviz gnuplot \
+      bzip2 curl ca-certificates git \
+      libuv1 luajit libcurl4 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Maelstrom release tarball, checksum-pinned. Nothing is vendored into git.
+ARG MAELSTROM_VERSION=0.2.4
+ARG MAELSTROM_SHA256=301ec71d6b12af0d765edb413f5cf5aa1046b5609bd4e31376a0b549548e5799
+RUN curl -fsSL -o /tmp/maelstrom.tar.bz2 \
+      "https://github.com/jepsen-io/maelstrom/releases/download/v${MAELSTROM_VERSION}/maelstrom.tar.bz2" \
+    && echo "${MAELSTROM_SHA256}  /tmp/maelstrom.tar.bz2" | sha256sum -c - \
+    && tar -xjf /tmp/maelstrom.tar.bz2 -C /opt \
+    && rm /tmp/maelstrom.tar.bz2
+ENV PATH="/opt/maelstrom:${PATH}"
+
+WORKDIR /app
+# The shim runs under lunet-run (httpc requires the lunet event loop).
+COPY --from=demo /app/bin/lunet-run /app/bin/lunet-run
+COPY --from=demo /app/bin/lunet/httpc.so /app/bin/lunet/httpc.so
+COPY ext/jsonic/maelstrom/shim.lua /app/ext/jsonic/maelstrom/shim.lua
+COPY ext/jsonic/maelstrom/shim.sh /app/ext/jsonic/maelstrom/shim.sh
+COPY ext/jsonic/maelstrom/run-test.sh /app/ext/jsonic/maelstrom/run-test.sh
+RUN chmod +x /app/ext/jsonic/maelstrom/shim.sh /app/ext/jsonic/maelstrom/run-test.sh
+
+ENTRYPOINT ["/app/ext/jsonic/maelstrom/run-test.sh"]

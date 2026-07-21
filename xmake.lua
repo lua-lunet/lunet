@@ -939,3 +939,89 @@ task("release")
         os.exec("xmake build-release")
     end)
 task_end()
+
+-- Full CI-parity gate in a clean Debian trixie (arm64) container.
+-- Runs: cargo test, xmake ci, xmake test, ngx_shared smoke,
+-- preflight-easy-memory (ASAN+EasyMem+LSAN).  Requires Docker (colima).
+-- Classic builder only (no BuildKit), no volume mounts.
+task("gate-trixie")
+    set_menu {
+        usage = "xmake gate-trixie",
+        description = "Run all local CI-parity gates in Docker (Debian trixie, arm64)"
+    }
+    on_run(function ()
+        local envs = {DOCKER_BUILDKIT = "0"}
+        os.execv("docker", {"build", "-f", "docker/Dockerfile", "-t", "lunet-gate:trixie", "."}, {envs = envs})
+        os.execv("docker", {"run", "--rm", "--platform", "linux/arm64", "lunet-gate:trixie"}, {envs = envs})
+    end)
+task_end()
+
+-- =============================================================================
+-- ngx_shared extension (Rust, optional)
+-- =============================================================================
+-- Build:   xmake build-ngx-shared
+-- Smoke:   xmake ngx-shared-smoke
+-- The extension lives entirely in ext/ngx_shared/ and is loaded at runtime
+-- by the Lua module lunet.ngx_shared via LuaJIT FFI.  It does not need to be
+-- linked into lunet-run.
+
+task("build-ngx-shared")
+    set_menu {
+        usage = "xmake build-ngx-shared",
+        description = "Build the ngx_shared Rust extension (ext/ngx_shared)"
+    }
+    on_run(function ()
+        local crate_dir = path.join(os.scriptdir(), "ext", "ngx_shared")
+        print("[ngx_shared] cargo build --release ...")
+        os.execv("cargo", {"build", "--release"}, {curdir = crate_dir})
+        print("[ngx_shared] built: " .. path.join(crate_dir, "target", "release"))
+    end)
+task_end()
+
+task("ngx-shared-smoke")
+    set_menu {
+        usage = "xmake ngx-shared-smoke",
+        description = "Build ngx_shared then run the smoke test"
+    }
+    on_run(function ()
+        os.exec("xmake build-ngx-shared")
+        os.exec("xmake build-release")
+        local runner = lunet_runner_path("release")
+        os.execv(runner, {"test/smoke_ngx_shared.lua"})
+    end)
+task_end()
+
+-- =============================================================================
+-- jsonic extension (Rust, optional) - dkjson-style JSON decode via FFI
+-- =============================================================================
+-- Build:   xmake build-jsonic
+-- Smoke:   xmake jsonic-smoke
+-- Wraps https://github.com/g1mv/jsonic (MIT/Apache-2.0, zero deps). Lives
+-- entirely in ext/jsonic/ and is loaded at runtime by lunet.jsonic via
+-- LuaJIT FFI. Does not need to be linked into lunet-run.
+
+task("build-jsonic")
+    set_menu {
+        usage = "xmake build-jsonic",
+        description = "Build the jsonic Rust extension (ext/jsonic)"
+    }
+    on_run(function ()
+        local crate_dir = path.join(os.scriptdir(), "ext", "jsonic")
+        print("[jsonic] cargo build --release ...")
+        os.execv("cargo", {"build", "--release"}, {curdir = crate_dir})
+        print("[jsonic] built: " .. path.join(crate_dir, "target", "release"))
+    end)
+task_end()
+
+task("jsonic-smoke")
+    set_menu {
+        usage = "xmake jsonic-smoke",
+        description = "Build jsonic then run the smoke test"
+    }
+    on_run(function ()
+        os.exec("xmake build-jsonic")
+        os.exec("xmake build-release")
+        local runner = lunet_runner_path("release")
+        os.execv(runner, {"test/smoke_jsonic.lua"})
+    end)
+task_end()

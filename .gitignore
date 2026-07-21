@@ -8,3 +8,6 @@ build_*
 .idea/
 .xmake/
 tmp/
+# Rust build artifacts for ext/ngx_shared, ext/jsonic
+ext/ngx_shared/target/
+ext/jsonic/target/

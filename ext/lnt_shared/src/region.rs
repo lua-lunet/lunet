@@ -35,7 +35,8 @@ use libc::{
 // ── Constants ───────────────────────────────────────────────────────────────
 
 /// Magic number stored in the header to detect an initialised region.
-/// ASCII "NGXSHD_1" in little-endian.
+/// ASCII "NGXSHD_1" in little-endian, retained only for backward compatibility
+/// with regions created before the lnt_shared rename.
 pub const MAGIC: u64 = 0x315f44485358474e;
 pub const VERSION: u32 = 1;
 /// The header occupies one OS page so that the hash table that follows it is

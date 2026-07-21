@@ -956,7 +956,7 @@ task("release")
 task_end()
 
 -- Full CI-parity gate in a clean Debian trixie (arm64) container.
--- Runs: cargo test, xmake ci, xmake test, ngx_shared smoke,
+-- Runs: cargo test, xmake ci, xmake test, lnt_shared smoke,
 -- preflight-easy-memory (ASAN+EasyMem+LSAN).  Requires Docker (colima).
 -- Classic builder only (no BuildKit), no volume mounts.
 task("gate-trixie")
@@ -972,37 +972,57 @@ task("gate-trixie")
 task_end()
 
 -- =============================================================================
--- ngx_shared extension (Rust, optional)
+-- lnt_shared extension (Rust, optional)
 -- =============================================================================
--- Build:   xmake build-ngx-shared
--- Smoke:   xmake ngx-shared-smoke
--- The extension lives entirely in ext/ngx_shared/ and is loaded at runtime
--- by the Lua module lunet.ngx_shared via LuaJIT FFI.  It does not need to be
+-- Build:   xmake build-lnt-shared
+-- Smoke:   xmake lnt-shared-smoke
+-- The extension lives entirely in ext/lnt_shared/ and is loaded at runtime
+-- by the Lua module lunet.lnt_shared via LuaJIT FFI.  It does not need to be
 -- linked into lunet-run.
+
+task("build-lnt-shared")
+    set_menu {
+        usage = "xmake build-lnt-shared",
+        description = "Build the lnt_shared Rust extension (ext/lnt_shared)"
+    }
+    on_run(function ()
+        local crate_dir = path.join(os.scriptdir(), "ext", "lnt_shared")
+        print("[lnt_shared] cargo build --release ...")
+        os.execv("cargo", {"build", "--release"}, {curdir = crate_dir})
+        print("[lnt_shared] built: " .. path.join(crate_dir, "target", "release"))
+    end)
+task_end()
+
+task("lnt-shared-smoke")
+    set_menu {
+        usage = "xmake lnt-shared-smoke",
+        description = "Build lnt_shared then run the smoke test"
+    }
+    on_run(function ()
+        os.exec("xmake build-lnt-shared")
+        os.exec("xmake build-release")
+        local runner = lunet_runner_path("release")
+        os.execv(runner, {"test/smoke_lnt_shared.lua"})
+    end)
+task_end()
 
 task("build-ngx-shared")
     set_menu {
         usage = "xmake build-ngx-shared",
-        description = "Build the ngx_shared Rust extension (ext/ngx_shared)"
+        description = "Deprecated alias for xmake build-lnt-shared"
     }
     on_run(function ()
-        local crate_dir = path.join(os.scriptdir(), "ext", "ngx_shared")
-        print("[ngx_shared] cargo build --release ...")
-        os.execv("cargo", {"build", "--release"}, {curdir = crate_dir})
-        print("[ngx_shared] built: " .. path.join(crate_dir, "target", "release"))
+        os.exec("xmake build-lnt-shared")
     end)
 task_end()
 
 task("ngx-shared-smoke")
     set_menu {
         usage = "xmake ngx-shared-smoke",
-        description = "Build ngx_shared then run the smoke test"
+        description = "Deprecated alias for xmake lnt-shared-smoke"
     }
     on_run(function ()
-        os.exec("xmake build-ngx-shared")
-        os.exec("xmake build-release")
-        local runner = lunet_runner_path("release")
-        os.execv(runner, {"test/smoke_ngx_shared.lua"})
+        os.exec("xmake lnt-shared-smoke")
     end)
 task_end()
 

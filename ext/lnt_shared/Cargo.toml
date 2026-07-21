@@ -1,19 +1,16 @@
 [package]
-name = "ngx-shared"
+name = "lnt-shared"
 version = "0.1.0"
 edition = "2024"
 description = """
-nginx-style shared dictionary for LuaJIT via FFI (Linux/macOS).
-This is NOT an OpenResty/nginx dependency — it provides a similar API
-surface as ngx.shared.DICT for convenience, but makes no guarantees of
-identical behaviour for any undefined or implementation-specific corner
-cases of OpenResty.  It is a pure opt-in extension for lunet.
+lunet-style shared dictionary for LuaJIT via FFI (Linux/macOS).
+This is a lunet-native shared dictionary extension.
 """
 license = "MIT"
 authors = []
 
 [lib]
-name = "ngx_shared"
+name = "lnt_shared"
 crate-type = ["cdylib"]
 
 # Minimal dependencies — only libc for raw OS primitives (mmap, clock_gettime).

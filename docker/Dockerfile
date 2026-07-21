@@ -2,7 +2,7 @@
 # Mirrors .github/workflows/build.yml (Linux entries) plus the repo's
 # mandatory local gates from AGENTS.md:
 #   xmake lint | xmake test | xmake preflight-easy-memory | xmake build-release
-# …and this branch's ngx_shared Rust extension (cargo test + smoke).
+# …and this branch's lnt_shared Rust extension (cargo test + smoke).
 #
 # Build:  docker build -f docker/Dockerfile -t lunet-gate:trixie .
 # Run:    docker run --rm lunet-gate:trixie

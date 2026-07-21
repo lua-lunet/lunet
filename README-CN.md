@@ -20,7 +20,7 @@ Lunet 采用**模块化设计**。只构建你需要的：
 - **出站 HTTPS 客户端**（可选 xmake 目标）：
   - `lunet-httpc` - 基于 libcurl 的 HTTPS 客户端（`require("lunet.httpc")`）
 - **共享字典**（可选 Rust 扩展，Linux/macOS）：
-  - `lunet.ngx_shared` - 受 nginx 启发的共享字典，通过 Rust FFI 实现（`xmake build-ngx-shared`）
+  - `lunet.lnt_shared` - lunet 风格的共享字典，通过 Rust FFI 实现（`xmake build-lnt-shared`）
 - **JSON**（可选 Rust 扩展，Linux/macOS）：
   - `lunet.jsonic` - dkjson 风格的编解码；解码通过 Rust FFI 封装 [jsonic](https://github.com/g1mv/jsonic)（`xmake build-jsonic`）
 
@@ -184,22 +184,20 @@ db.close(conn)
 | `db.exec_params(conn, sql, ...)` | 与 `db.exec` 行为一致 | 结果表（`affected_rows`、`last_insert_id`） |
 | `db.escape(str)` | 转义 SQL 字符串 | 转义后的字符串 |
 
-### 共享字典（`lunet.ngx_shared`）— Linux / macOS
+### 共享字典（`lunet.lnt_shared`）— Linux / macOS
 
-受 nginx 启发的共享字典，由 Rust FFI 库支撑。这**不**依赖 nginx 或 OpenResty——
-API 风格类似 `ngx.shared.DICT`，便于熟悉 OpenResty 的开发者快速上手，但不复制
-任何 OpenResty 的未定义行为。纯可选扩展。
+lunet 风格的共享字典，由 Rust FFI 库支撑。纯可选扩展。
 
 **构建**（需要 Rust 1.85+ / 2024 edition）：
 ```bash
-xmake build-ngx-shared   # 等同于: cd ext/ngx_shared && cargo build --release
+xmake build-lnt-shared   # 等同于: cd ext/lnt_shared && cargo build --release
 ```
 
 **使用示例**：
 ```lua
-local shared = loadfile("ext/ngx_shared/ngx_shared.lua")()
+local lnt = loadfile("ext/lnt_shared/lnt_shared.lua")()
 
-local cache = shared.open("my_cache", 1024 * 1024)  -- 1 MiB
+local cache = lnt.store("my_cache", 1024 * 1024)  -- 1 MiB
 
 cache:set("key", "value")
 cache:set("hits", 0)
@@ -269,8 +267,8 @@ xmake 是标准构建系统。没有 Makefile。所有任务定义在 `xmake.lua
 | `xmake build-debug` | 启用追踪的调试构建 |
 | `xmake examples-compile` | 示例编译/语法检查 |
 | `xmake sqlite3-smoke` | SQLite3 示例冒烟测试 |
-| `xmake build-ngx-shared` | 构建 ngx_shared Rust 扩展 |
-| `xmake ngx-shared-smoke` | 构建 ngx_shared 并运行冒烟测试 |
+| `xmake build-lnt-shared` | 构建 lnt_shared Rust 扩展 |
+| `xmake lnt-shared-smoke` | 构建 lnt_shared 并运行冒烟测试 |
 | `xmake build-jsonic` | 构建 jsonic Rust 扩展 |
 | `xmake jsonic-smoke` | 构建 jsonic 并运行冒烟测试 |
 | `xmake stress` | 带追踪的并发压力测试 |

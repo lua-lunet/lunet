@@ -1,45 +1,45 @@
--- Smoke test for lunet.ngx_shared extension
+-- Smoke test for lunet.lnt_shared extension
 --
 -- Before running this test, build the Rust extension:
---   xmake build-ngx-shared
+--   xmake build-lnt-shared
 -- Then run via the lunet-shared task:
---   xmake ngx-shared-smoke
+--   xmake lnt-shared-smoke
 -- Or manually:
---   LUNET_NGX_SHARED_LIB=ext/ngx_shared/target/release/libngx_shared.so \
---   lunet-run test/smoke_ngx_shared.lua
+--   LUNET_LNT_SHARED_LIB=ext/lnt_shared/target/release/liblnt_shared.so \
+--   lunet-run test/smoke_lnt_shared.lua
 
--- Add the ext/ngx_shared directory to the Lua module search path so that
--- require("lunet.ngx_shared") resolves the pure-Lua wrapper.
+-- Add the ext/lnt_shared directory to the Lua module search path so that
+-- require("lunet.lnt_shared") resolves the pure-Lua wrapper.
 local script_dir = debug.getinfo(1, "S").source:match("^@(.+)/[^/]+$") or "."
-local ext_dir = script_dir .. "/../ext/ngx_shared"
+local ext_dir = script_dir .. "/../ext/lnt_shared"
 package.path = ext_dir .. "/?.lua;" .. package.path
--- Also expose it as lunet.ngx_shared
+-- Also expose it as lunet.lnt_shared
 package.path = ext_dir .. "/?.lua;" ..
                ext_dir .. "/../?/?.lua;" ..
                package.path
 
--- Teach require("lunet.ngx_shared") to find ext/ngx_shared/ngx_shared.lua
--- by making "lunet.ngx_shared" an alias.
-local function load_ngx_shared()
-  local full_path = ext_dir .. "/ngx_shared.lua"
+-- Teach require("lunet.lnt_shared") to find ext/lnt_shared/lnt_shared.lua
+-- by making "lunet.lnt_shared" an alias.
+local function load_lnt_shared()
+  local full_path = ext_dir .. "/lnt_shared.lua"
   local chunk, err = loadfile(full_path)
   if not chunk then
-    error("Cannot load ngx_shared.lua: " .. tostring(err))
+    error("Cannot load lnt_shared.lua: " .. tostring(err))
   end
   return chunk()
 end
 
 local lunet = require("lunet")
 
-local function test_ngx_shared()
-  print("=== ngx_shared Smoke Test ===")
+local function test_lnt_shared()
+  print("=== lnt_shared Smoke Test ===")
   print()
 
   -- ── Load the module ────────────────────────────────────────────────────────
-  print("1. Loading lunet.ngx_shared ...")
-  local ok, shared = pcall(load_ngx_shared)
+  print("1. Loading lunet.lnt_shared ...")
+  local ok, lnt = pcall(load_lnt_shared)
   if not ok then
-    print("FAIL: " .. tostring(shared))
+    print("FAIL: " .. tostring(lnt))
     __lunet_exit_code = 1
     return
   end
@@ -47,7 +47,7 @@ local function test_ngx_shared()
 
   -- ── Open a dictionary ──────────────────────────────────────────────────────
   print("2. Opening dictionary (512 KiB) ...")
-  local ok, result = pcall(function() return shared.open("smoke_test", 512 * 1024) end)
+  local ok, result = pcall(function() return lnt.store("smoke_test", 512 * 1024) end)
   if not ok then
     print("FAIL: " .. tostring(result))
     __lunet_exit_code = 1
@@ -231,7 +231,7 @@ local function test_ngx_shared()
 
   -- ── Shared-handle semantics: second open returns same region ───────────────
   print("14. Shared handle (same name = same region) ...")
-  local cache2 = shared.open("smoke_test", 512 * 1024)
+  local cache2 = lnt.store("smoke_test", 512 * 1024)
   cache:set("shared_key", "shared_val")
   local sv = cache2:get("shared_key")
   if sv ~= "shared_val" then
@@ -351,7 +351,7 @@ local function test_ngx_shared()
   ok("tostring includes dict name")
 
   -- ── close() lifecycle ──────────────────────────────────────────────────────
-  local tmp = shared.open("smoke_close", 65536)
+  local tmp = lnt.store("smoke_close", 65536)
   tmp:set("k", "v")
   check(tmp:close() == true, "close() should return true")
   check(tmp:close() == true, "second close() should be a safe no-op returning true")
@@ -361,7 +361,7 @@ local function test_ngx_shared()
 
   -- A fresh handle to the same region still sees old data (region outlives
   -- individual handles).
-  local tmp2 = shared.open("smoke_close", 65536)
+  local tmp2 = lnt.store("smoke_close", 65536)
   check(tmp2:get("k") == "v", "region should outlive a closed handle")
   ok("region persists after single handle close")
 
@@ -373,9 +373,9 @@ local function test_ngx_shared()
   end
   if __lunet_exit_code ~= 1 then
     print()
-    print("=== All ngx_shared tests passed (" .. step .. " checks) ===")
+    print("=== All lnt_shared tests passed (" .. step .. " checks) ===")
     __lunet_exit_code = 0
   end
 end
 
-lunet.spawn(test_ngx_shared)
+lunet.spawn(test_lnt_shared)

@@ -1,45 +1,42 @@
 --[[
-ngx_shared Extension Demo for lunet
+lnt_shared Extension Demo for lunet
 
-This demo shows how to use the lunet.ngx_shared extension — an nginx-style
+This demo shows how to use the lunet.lnt_shared extension — a lunet-style
 shared dictionary backed by a Rust FFI library.
 
-NOTE: This is NOT a dependency on nginx or OpenResty.  The API is inspired
-by ngx.shared.DICT for convenience, but this is an independent implementation.
-Undefined or implementation-specific OpenResty behaviour is explicitly NOT
-replicated.
+NOTE: This is an independent implementation for lunet.
 
 Prerequisites
   1. Build the Rust extension once:
-       cd ext/ngx_shared && cargo build --release
+       cd ext/lnt_shared && cargo build --release
      Or via xmake:
-       xmake build-ngx-shared
+       xmake build-lnt-shared
 
   2. Run this example:
-       LUNET_NGX_SHARED_LIB=ext/ngx_shared/target/release/libngx_shared.so \
-       ./build/linux/x86_64/release/lunet-run examples/08_ngx_shared.lua
+       LUNET_LNT_SHARED_LIB=ext/lnt_shared/target/release/liblnt_shared.so \
+       ./build/linux/x86_64/release/lunet-run examples/08_lnt_shared.lua
      Or via xmake:
-       xmake ngx-shared-smoke  (runs smoke_ngx_shared.lua, not this file)
+       xmake lnt-shared-smoke  (runs smoke_lnt_shared.lua, not this file)
 ]]
 
 -- Load the Lua wrapper from the extension directory.
 local script_dir = debug.getinfo(1, "S").source:match("^@(.+)/[^/]+$") or "."
-local ext_lua = script_dir .. "/../ext/ngx_shared/ngx_shared.lua"
+local ext_lua = script_dir .. "/../ext/lnt_shared/lnt_shared.lua"
 local chunk, err = loadfile(ext_lua)
 if not chunk then
-  error("Cannot find ngx_shared.lua: " .. tostring(err) ..
-        "\nBuild with: cd ext/ngx_shared && cargo build --release")
+  error("Cannot find lnt_shared.lua: " .. tostring(err) ..
+        "\nBuild with: cd ext/lnt_shared && cargo build --release")
 end
-local shared = chunk()
+local lnt = chunk()
 
 local lunet = require("lunet")
 
 lunet.spawn(function()
-  print("=== lunet.ngx_shared Demo ===")
+  print("=== lunet.lnt_shared Demo ===")
   print()
 
   -- ── Open a 1 MiB dictionary ────────────────────────────────────────────────
-  local cache = shared.open("demo_cache", 1024 * 1024)
+  local cache = lnt.store("demo_cache", 1024 * 1024)
   cache:flush_all()  -- start clean
 
   print(string.format("Dictionary capacity : %d bytes", cache:capacity()))

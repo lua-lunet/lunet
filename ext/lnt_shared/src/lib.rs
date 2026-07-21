@@ -1,10 +1,7 @@
-//! # ngx-shared — nginx-style shared dictionary for LuaJIT (Linux / macOS)
+//! # lnt-shared — lunet-style shared dictionary for LuaJIT (Linux / macOS)
 //!
-//! This library provides a `ngx.shared.DICT`-inspired API for LuaJIT programs
-//! running under lunet.  It is **not** a dependency on nginx or OpenResty, and
-//! makes **no guarantee** of identical behaviour for any undefined or
-//! implementation-specific aspects of OpenResty.  It is a pure opt-in
-//! extension that provides a convenient shared-dictionary API.
+//! This library provides a shared dictionary API for LuaJIT programs running
+//! under lunet. It is a pure opt-in extension.
 //!
 //! ## Design
 //!
@@ -24,8 +21,9 @@
 //! ## C ABI
 //!
 //! LuaJIT accesses this library exclusively through the stable C ABI exported
-//! below.  The opaque `*mut c_void` handle is a `Box<NgxSharedHandle>` whose
-//! lifetime is managed by `ngx_shared_open` / `ngx_shared_close`.
+//! below. The opaque `*mut c_void` handle is a `Box<NgxSharedHandle>` whose
+//! lifetime is managed by `ngx_shared_open` / `ngx_shared_close` (legacy symbol
+//! names retained for ABI compatibility).
 
 // Low-level systems code: unsafe fn bodies intentionally contain raw pointer
 // operations.  The explicit unsafe block per-operation style required by

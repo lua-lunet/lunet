@@ -1,21 +1,18 @@
 --[[
-  lunet.ngx_shared — nginx-style shared dictionary for LuaJIT
+  lunet.lnt_shared — shared dictionary for LuaJIT
 
-  This module exposes an API inspired by ngx.shared.DICT from OpenResty.
-  It is NOT a dependency on nginx or OpenResty, and deliberately does not
-  attempt to replicate undefined or implementation-specific behaviour from
-  OpenResty.  It is a pure opt-in extension provided for convenience.
+  This module exposes an lnt-style shared dictionary API.
 
-  The backing store is a Rust library (libngx_shared) that manages an
+  The backing store is a Rust library (liblnt_shared) that manages an
   anonymous mmap(2) region.  All state lives inside the mmap — no heap
   allocation for persistent dictionary data.
 
   Usage
   -----
-      local shared = require("lunet.ngx_shared")
+      local lnt = require("lunet.lnt_shared")
 
       -- Open (or reuse) a named dictionary of 1 MiB.
-      local cache = shared.open("cache", 1024 * 1024)
+      local cache = lnt.store("cache", 1024 * 1024)
 
       cache:set("greeting", "hello")
       print(cache:get("greeting"))          --> "hello"
@@ -107,7 +104,11 @@ ffi.cdef[[
 
 local function find_lib()
   -- 1. Explicit environment override.
-  local env = os.getenv("LUNET_NGX_SHARED_LIB")
+  local env = os.getenv("LUNET_LNT_SHARED_LIB")
+  if not env or env == "" then
+    -- Deprecated compatibility alias for older setups.
+    env = os.getenv("LUNET_NGX_SHARED_LIB")
+  end
   if env and env ~= "" then
     return env
   end
@@ -128,6 +129,9 @@ local function find_lib()
   local script = debug.getinfo(2, "S").source
   local dir = script:match("^@(.+)/[^/]+$") or "."
   local candidates = {
+    dir .. "/target/release/liblnt_shared." .. suffix,
+    dir .. "/liblnt_shared." .. suffix,
+    -- Deprecated compatibility paths for previously built artifacts.
     dir .. "/target/release/libngx_shared." .. suffix,
     dir .. "/libngx_shared." .. suffix,
   }
@@ -141,9 +145,9 @@ local function find_lib()
   end
 
   error(
-    "lunet.ngx_shared: cannot find libngx_shared." .. suffix .. "\n" ..
-    "  Build it with:  cd ext/ngx_shared && cargo build --release\n" ..
-    "  or set LUNET_NGX_SHARED_LIB=/path/to/libngx_shared." .. suffix,
+    "lunet.lnt_shared: cannot find liblnt_shared." .. suffix .. "\n" ..
+    "  Build it with:  cd ext/lnt_shared && cargo build --release\n" ..
+    "  or set LUNET_LNT_SHARED_LIB=/path/to/liblnt_shared." .. suffix,
     3
   )
 end
@@ -199,7 +203,7 @@ local function encode_value(v)
   elseif t == "boolean" then
     return (v and "\1" or "\0"), 1, VTYPE_BOOL
   else
-    error("lunet.ngx_shared: unsupported value type: " .. t, 3)
+    error("lunet.lnt_shared: unsupported value type: " .. t, 3)
   end
 end
 
@@ -396,7 +400,7 @@ function Dict:close()
 end
 
 function Dict:__tostring()
-  return string.format("ngx_shared.Dict(%s)", self._name)
+  return string.format("lnt_shared.Dict(%s)", self._name)
 end
 
 -- ── Public module ─────────────────────────────────────────────────────────────
@@ -417,8 +421,9 @@ function M.open(name, size_bytes)
   local l = lib()
   local h = l.ngx_shared_open(name, size_bytes)
   if h == nil then
-    error("lunet.ngx_shared: failed to open dictionary '" .. name .. "'", 2)
+    error("lunet.lnt_shared: failed to open dictionary '" .. name .. "'", 2)
   end
+
   -- Attach the finalizer to the cdata handle (LuaJIT does not honour __gc
   -- on plain tables).  The underlying region outlives the handle: it is
   -- freed only when the last handle to it is closed.
@@ -426,5 +431,7 @@ function M.open(name, size_bytes)
   local d = setmetatable({ _h = h, _name = name }, Dict)
   return d
 end
+
+M.store = M.open
 
 return M

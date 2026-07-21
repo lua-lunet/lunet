@@ -5,7 +5,7 @@ build
 build-*
 build_*
 vcpkg
-ext/ngx_shared/target
+ext/lnt_shared/target
 ext/jsonic/target
 data
 opt

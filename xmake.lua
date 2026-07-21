@@ -451,7 +451,9 @@ target("lunet-mysql")
     if is_plat("windows") then
         add_cflags("/TC")
         add_defines("LUNET_BUILDING_DLL")
-        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
+        -- crypt32/secur32 are required by libcrypto (OpenSSL) which is pulled in
+        -- by the MySQL client library on Windows (CAPI/WinCert store backends).
+        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp", "crypt32", "secur32")
         -- vcpkg libmysql installs mysql.h under include/mysql/, not include/.
         on_load(function (target)
             local vcpkg_root = os.getenv("VCPKG_ROOT")

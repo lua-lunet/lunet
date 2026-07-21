@@ -27,6 +27,10 @@
 #include "httpc.h"
 #endif
 
+#ifdef LUNET_GRAPHLITE
+#include "lunet_graphlite.h"
+#endif
+
 static char *lunet_resolve_executable_path(const char *argv0) {
 #if defined(_WIN32)
   return _fullpath(NULL, argv0, 0);
@@ -167,6 +171,26 @@ LUNET_API int luaopen_lunet_httpc(lua_State *L) {
   lunet_init_once();
   set_default_luaL(L);
   return lunet_open_httpc(L);
+}
+#endif
+
+#if defined(LUNET_GRAPHLITE)
+static int lunet_open_graphlite(lua_State *L) {
+  luaL_Reg funcs[] = {{"open", lunet_graphlite_open},
+                      {"close", lunet_graphlite_close},
+                      {"query", lunet_graphlite_query},
+                      {"create_session", lunet_graphlite_create_session},
+                      {"close_session", lunet_graphlite_close_session},
+                      {"version", lunet_graphlite_version},
+                      {NULL, NULL}};
+  luaL_newlib(L, funcs);
+  return 1;
+}
+
+LUNET_API int luaopen_lunet_graphlite(lua_State *L) {
+  lunet_init_once();
+  set_default_luaL(L);
+  return lunet_open_graphlite(L);
 }
 #endif
 

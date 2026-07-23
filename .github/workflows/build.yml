@@ -141,6 +141,26 @@ jobs:
         xmake build lunet-postgres
         xmake build lunet-mysql
 
+    # Rust ext modules (lnt_shared, jsonic) — built on Unix only:
+    # lnt_shared is POSIX-only by design (mmap/clock_gettime), and the
+    # jsonic Lua loader has no .dll suffix handling yet.  See #115.
+    - name: Setup Rust toolchain (Unix)
+      if: runner.os != 'Windows'
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache cargo artifacts (Unix)
+      if: runner.os != 'Windows'
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ runner.os }}-rust-ext
+
+    - name: Build Rust ext modules (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        set -euo pipefail
+        cargo build --release --manifest-path ext/lnt_shared/Cargo.toml
+        cargo build --release --manifest-path ext/jsonic/Cargo.toml
+
     - name: Examples compile check (Unix)
       if: runner.os != 'Windows'
       run: |
@@ -194,6 +214,13 @@ jobs:
         while IFS= read -r mod; do
           cp "$mod" "$DIST_DIR/lunet/"
         done < <(find build -type f -path '*/lunet/*.so')
+        # Rust ext modules (#115): each Lua loader resolves its compiled
+        # library relative to its own directory, so co-locate loaders and
+        # cdylibs under lunet/.
+        cp ext/lnt_shared/lnt_shared.lua "$DIST_DIR/lunet/"
+        cp ext/lnt_shared/target/release/liblnt_shared.so "$DIST_DIR/lunet/"
+        cp ext/jsonic/jsonic.lua ext/jsonic/dkjson-encode-v2.10.lua "$DIST_DIR/lunet/"
+        cp ext/jsonic/target/release/liblunet_jsonic.so "$DIST_DIR/lunet/"
         tar -C "$DIST_DIR" -czf lunet-linux-amd64.tar.gz .
 
     - name: Package release archive (macOS)
@@ -207,6 +234,13 @@ jobs:
         while IFS= read -r mod; do
           cp "$mod" "$DIST_DIR/lunet/"
         done < <(find build -type f -path '*/lunet/*.so')
+        # Rust ext modules (#115): each Lua loader resolves its compiled
+        # library relative to its own directory, so co-locate loaders and
+        # cdylibs under lunet/.
+        cp ext/lnt_shared/lnt_shared.lua "$DIST_DIR/lunet/"
+        cp ext/lnt_shared/target/release/liblnt_shared.dylib "$DIST_DIR/lunet/"
+        cp ext/jsonic/jsonic.lua ext/jsonic/dkjson-encode-v2.10.lua "$DIST_DIR/lunet/"
+        cp ext/jsonic/target/release/liblunet_jsonic.dylib "$DIST_DIR/lunet/"
         tar -C "$DIST_DIR" -czf lunet-macos.tar.gz .
 
     - name: Package release archive (Windows)
@@ -222,6 +256,34 @@ jobs:
           Copy-Item $_.FullName (Join-Path $dist "lunet")
         }
         Compress-Archive -Path (Join-Path $dist "*") -DestinationPath lunet-windows-amd64.zip -Force
+
+    # Guard against shipping a broken archive: extract the just-built tarball
+    # and exercise both Rust ext modules through the packaged binary, using
+    # exactly the layout downstream apps will consume (#115).
+    - name: Verify packaged ext modules (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        set -euo pipefail
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          ARCHIVE=lunet-linux-amd64.tar.gz
+        else
+          ARCHIVE=lunet-macos.tar.gz
+        fi
+        VERIFY_DIR="$(mktemp -d)"
+        tar -C "$VERIFY_DIR" -xzf "$ARCHIVE"
+        cat > "$VERIFY_DIR/verify_ext.lua" <<LUA
+        package.path = "$VERIFY_DIR/?.lua;" .. package.path
+        local lnt = require("lunet.lnt_shared")
+        local store = lnt.store("verify", 256 * 1024)
+        assert(store:set("k", "v"))
+        assert(store:get("k") == "v")
+        local json = require("lunet.jsonic")
+        local v = json.decode('{"a":1,"s":"ok"}')
+        assert(v.a == 1 and v.s == "ok")
+        assert(json.encode({ a = 1 }, { keyorder = { "a" } }) == '{"a":1}')
+        print("VERIFY OK: lunet.lnt_shared + lunet.jsonic work from packaged archive")
+        LUA
+        "$VERIFY_DIR/lunet-run" "$VERIFY_DIR/verify_ext.lua"
 
     - name: Upload artifact (Linux)
       if: runner.os == 'Linux'

@@ -1060,3 +1060,191 @@ task("jsonic-smoke")
         os.execv(runner, {"test/smoke_jsonic.lua"})
     end)
 task_end()
+
+-- =============================================================================
+-- GraphLite extension (Rust FFI, vendored from source, optional)
+-- =============================================================================
+-- Build:   xmake build-graphlite
+-- Smoke:   xmake graphlite-smoke
+-- GraphLite has no official platform packages, so unlike ngx_shared/jsonic
+-- (whose Rust source lives in-repo under ext/), the graphlite-ffi crate is
+-- built from a pinned upstream commit that xmake clones on demand into
+-- .tmp/graphlite-vendor/. The lunet-graphlite C module (ext/graphlite/) then
+-- dlopen()s the resulting shared library at runtime.
+
+-- Pinned upstream commit for GraphLite
+local GRAPHLITE_COMMIT = "a370a1c909642688130eccfd57c74b6508dcaea5"
+local GRAPHLITE_REPO   = "https://github.com/GraphLite-AI/GraphLite.git"
+local GRAPHLITE_RUST_TOOLCHAIN = "1.87.0"
+
+-- GraphLite GQL driver: require("lunet.graphlite")
+target("lunet-graphlite")
+    set_default(false)
+    set_kind("shared")
+    add_rules("lunet.c_safety_lint")
+    set_prefixname("")
+    set_basename("graphlite")
+    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
+    if is_plat("windows") then
+        set_extension(".dll")
+    else
+        set_extension(".so")
+    end
+
+    add_files(core_sources)
+    add_files("ext/graphlite/graphlite.c")
+    add_includedirs("include", "ext/graphlite", {public = true})
+    add_packages("luajit", "libuv")
+    lunet_apply_asan_flags("shared")
+    lunet_apply_easy_memory()
+    add_defines("LUNET_NO_MAIN", "LUNET_GRAPHLITE")
+
+    if is_plat("macosx") then
+        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+    end
+    if is_plat("linux") then
+        add_defines("_GNU_SOURCE")
+        add_cflags("-pthread")
+        add_ldflags("-pthread")
+        add_syslinks("pthread", "dl", "m")
+    end
+    if is_plat("windows") then
+        add_cflags("/TC")
+        add_defines("LUNET_BUILDING_DLL")
+        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
+    end
+    if has_config("lunet_trace") then
+        add_defines("LUNET_TRACE")
+    end
+    if has_config("lunet_verbose_trace") then
+        add_defines("LUNET_TRACE_VERBOSE")
+    end
+target_end()
+
+-- Helper: path to vendored GraphLite build
+local function graphlite_vendor_dir()
+    return path.join(os.projectdir(), ".tmp", "graphlite-vendor")
+end
+
+local function graphlite_ffi_lib_name()
+    if is_host("windows") then
+        return "graphlite_ffi.dll"
+    elseif is_host("macosx") then
+        return "libgraphlite_ffi.dylib"
+    else
+        return "libgraphlite_ffi.so"
+    end
+end
+
+task("build-graphlite")
+    set_menu {
+        usage = "xmake build-graphlite",
+        description = "Build the GraphLite Rust extension (ext/graphlite): clone + cargo build + compile C shim"
+    }
+    on_run(function ()
+        local vendor = graphlite_vendor_dir()
+        local src_dir = path.join(vendor, "GraphLite")
+        local logdir = path.join(os.projectdir(), lunet_new_logdir(os, "build_graphlite"))
+        print("GraphLite build logs: " .. logdir)
+
+        -- Step 1: Clone or update GraphLite repo at pinned commit
+        if not os.isdir(src_dir) then
+            os.mkdir(vendor)
+            print("Cloning GraphLite at " .. GRAPHLITE_COMMIT:sub(1, 12) .. "...")
+            lunet_exec_logged(os, logdir, "01_clone",
+                "git clone " .. GRAPHLITE_REPO .. " " .. lunet_quote(src_dir))
+        end
+
+        lunet_exec_logged(os, logdir, "02_checkout",
+            "cd " .. lunet_quote(src_dir) .. " && git fetch origin && git checkout " .. GRAPHLITE_COMMIT)
+
+        -- Step 2: Ensure Rust toolchain is available at the pinned version
+        print("Ensuring Rust toolchain " .. GRAPHLITE_RUST_TOOLCHAIN .. "...")
+        if is_host("windows") then
+            lunet_exec_logged(os, logdir, "03_rustup",
+                "rustup toolchain install " .. GRAPHLITE_RUST_TOOLCHAIN .. " && rustup default " .. GRAPHLITE_RUST_TOOLCHAIN)
+        else
+            lunet_exec_logged(os, logdir, "03_rustup",
+                "command -v rustup >/dev/null 2>&1 || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain " .. GRAPHLITE_RUST_TOOLCHAIN .. " && "
+                .. "export PATH=\"$HOME/.cargo/bin:$PATH\" && "
+                .. "rustup toolchain install " .. GRAPHLITE_RUST_TOOLCHAIN .. " && "
+                .. "rustup default " .. GRAPHLITE_RUST_TOOLCHAIN)
+        end
+
+        -- Step 3: Build graphlite-ffi as a cdylib (shared library)
+        print("Building graphlite-ffi (release)...")
+        if is_host("windows") then
+            lunet_exec_logged(os, logdir, "04_cargo_build",
+                "cd " .. lunet_quote(src_dir) .. " && cargo build --release -p graphlite-ffi")
+        else
+            lunet_exec_logged(os, logdir, "04_cargo_build",
+                "export PATH=\"$(dirname $(rustup which rustc)):$PATH\" && cd " .. lunet_quote(src_dir) .. " && cargo build --release -p graphlite-ffi")
+        end
+
+        -- Step 4: Copy the FFI shared library to the lunet build output dir
+        local lib_name = graphlite_ffi_lib_name()
+        local cargo_out
+        if is_host("windows") then
+            cargo_out = path.join(src_dir, "target", "release", "graphlite_ffi.dll")
+        elseif is_host("macosx") then
+            cargo_out = path.join(src_dir, "target", "release", "libgraphlite_ffi.dylib")
+        else
+            cargo_out = path.join(src_dir, "target", "release", "libgraphlite_ffi.so")
+        end
+
+        if not os.isfile(cargo_out) then
+            raise("GraphLite FFI library not found at " .. cargo_out .. " — cargo build may have failed. Check " .. logdir)
+        end
+
+        -- Place the FFI lib alongside lunet modules so dlopen can find it
+        local build_dirs = os.dirs("build/**/lunet")
+        if #build_dirs == 0 then
+            local mode = get_config("mode") or "release"
+            local fallback = path.join("build", os.host(), os.arch(), mode, "lunet")
+            os.mkdir(fallback)
+            build_dirs = {fallback}
+        end
+        for _, d in ipairs(build_dirs) do
+            local dest = path.join(d, lib_name)
+            os.cp(cargo_out, dest)
+            print("Installed " .. lib_name .. " -> " .. dest)
+        end
+
+        -- Step 5: Build the lunet-graphlite C module
+        print("Building lunet-graphlite C module...")
+        os.exec("xmake build -y lunet-graphlite")
+
+        print("build-graphlite complete!")
+    end)
+task_end()
+
+task("graphlite-smoke")
+    set_menu {
+        usage = "xmake graphlite-smoke",
+        description = "Build the GraphLite extension then run the example smoke test"
+    }
+    on_run(function ()
+        os.exec("xmake build-release")
+        os.exec("xmake build-graphlite")
+        local mode = get_config("mode") or "release"
+        local runner = lunet_runner_path(mode)
+
+        -- Ensure the FFI lib is on the library search path
+        local lib_dirs = os.dirs("build/**/lunet")
+        local lib_path = ""
+        for _, d in ipairs(lib_dirs) do
+            lib_path = path.join(os.projectdir(), d) .. ":" .. lib_path
+        end
+
+        local envs = {}
+        if is_host("windows") then
+            envs.PATH = lib_path .. (os.getenv("PATH") or "")
+        elseif is_host("macosx") then
+            envs.DYLD_LIBRARY_PATH = lib_path .. (os.getenv("DYLD_LIBRARY_PATH") or "")
+        else
+            envs.LD_LIBRARY_PATH = lib_path .. (os.getenv("LD_LIBRARY_PATH") or "")
+        end
+
+        os.execv(runner, {"examples/10_graphlite_gql.lua"}, {envs = envs})
+    end)
+task_end()

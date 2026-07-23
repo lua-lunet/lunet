@@ -23,6 +23,8 @@ Lunet 采用**模块化设计**。只构建你需要的：
   - `lunet.lnt_shared` - lunet 风格的共享字典，通过 Rust FFI 实现（`xmake build-lnt-shared`）
 - **JSON**（可选 Rust 扩展，Linux/macOS）：
   - `lunet.jsonic` - dkjson 风格的编解码；解码通过 Rust FFI 封装 [jsonic](https://github.com/g1mv/jsonic)（`xmake build-jsonic`）
+- **图数据库**（可选 Rust 扩展，从源码构建，Linux/macOS）：
+  - `lunet.graphlite` - 基于 [GraphLite](https://github.com/GraphLite-AI/GraphLite) Rust FFI 的 ISO GQL 图数据库（`xmake build-graphlite`）
 
 只构建一个数据库驱动，而不是全部。没有未使用的依赖。不需要为从未使用的库打安全补丁。
 
@@ -250,6 +252,44 @@ json.encode({ a = 1 }, { indent = true, keyorder = { "a" } })
 将 jsonic 演示作为 Maelstrom(Jepsen)节点运行 —— Docker arm64、无卷挂载、
 仅回环 —— 通过 `make -C ext/jsonic/maelstrom test` 执行。
 
+### 图数据库（`lunet.graphlite`）— Linux / macOS
+
+基于 [GraphLite](https://github.com/GraphLite-AI/GraphLite) 的 ISO GQL
+(Graph Query Language) 图数据库，GraphLite 是一个用 Rust 编写的可嵌入图数据库。
+与 `ngx_shared`/`jsonic` 不同（它们的 Rust 源码在仓库内），GraphLite 没有官方
+平台包，因此其 `graphlite-ffi` crate 是从固定的上游 commit 按需由 xmake 克隆
+构建的。`lunet-graphlite` C 模块（`ext/graphlite/`）在运行时通过
+`dlopen`/`LoadLibrary` 动态加载生成的库，并像 SQLite3 驱动一样将调用分派到
+libuv 工作线程，具有相同的协程 yield/resume 语义。
+
+**构建**（需要 Rust 1.87+ / 2024 edition，通过 `rustup` 自动获取）：
+```bash
+xmake build-graphlite   # 克隆固定 commit 的 GraphLite、构建 Rust FFI cdylib、
+                         # 编译 lunet-graphlite C 桩代码
+```
+
+**使用示例**：
+```lua
+local gl = require("lunet.graphlite")
+
+local conn, err = gl.open({ path = "/tmp/mydb" })
+local session, err = gl.create_session(conn, "admin")
+
+gl.query(conn, session, "CREATE SCHEMA IF NOT EXISTS /example")
+gl.query(conn, session, "SESSION SET SCHEMA /example")
+gl.query(conn, session, "CREATE GRAPH IF NOT EXISTS social")
+gl.query(conn, session, "SESSION SET GRAPH social")
+
+gl.query(conn, session, "INSERT (:Person {name: 'Alice', age: 30})")
+local result, err = gl.query(conn, session, "MATCH (p:Person) RETURN p.name, p.age")
+
+gl.close_session(conn, session)
+gl.close(conn)
+```
+
+完整流程（模式/图 DDL、插入、模式匹配、过滤、聚合）见
+[`examples/10_graphlite_gql.lua`](examples/10_graphlite_gql.lua)。
+
 ## 安全性：零开销追踪
 
 使用 `xmake build-debug` 构建可启用协程引用追踪和栈完整性检查。运行时会在检测到泄漏或栈污染时触发断言并崩溃。
@@ -271,6 +311,8 @@ xmake 是标准构建系统。没有 Makefile。所有任务定义在 `xmake.lua
 | `xmake lnt-shared-smoke` | 构建 lnt_shared 并运行冒烟测试 |
 | `xmake build-jsonic` | 构建 jsonic Rust 扩展 |
 | `xmake jsonic-smoke` | 构建 jsonic 并运行冒烟测试 |
+| `xmake build-graphlite` | 构建 GraphLite Rust 扩展（克隆 + cargo build + C 桩代码） |
+| `xmake graphlite-smoke` | 构建 GraphLite 扩展并运行示例冒烟测试 |
 | `xmake stress` | 带追踪的并发压力测试 |
 | `xmake ci` | 本地 CI 一致性检查（lint + 构建 + 示例 + sqlite3 冒烟） |
 | `xmake preflight-easy-memory` | EasyMem + ASan 预检门控 |

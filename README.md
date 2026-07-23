@@ -23,6 +23,8 @@ Lunet is **modular by design**. You build only what you need:
   - `lunet.lnt_shared` - lunet-style shared dict via Rust FFI (`xmake build-lnt-shared`)
 - **JSON** (optional Rust extension, Linux/macOS):
   - `lunet.jsonic` - dkjson-style encode/decode; decode via Rust FFI wrapping [jsonic](https://github.com/g1mv/jsonic) (`xmake build-jsonic`)
+- **Graph database** (optional Rust extension, vendored from source, Linux/macOS):
+  - `lunet.graphlite` - ISO GQL graph database via [GraphLite](https://github.com/GraphLite-AI/GraphLite) Rust FFI (`xmake build-graphlite`)
 
 Build one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
 
@@ -100,6 +102,7 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1
 | 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + prepared statements (`$1`) | `xmake build lunet-postgres` + Postgres server | `"$LUNET_BIN" examples/05_db_postgres.lua` |
 | 08 | [`examples/08_lnt_shared.lua`](examples/08_lnt_shared.lua) | lunet-style shared dictionary via Rust FFI | `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_lnt_shared.lua` |
 | 09 | [`examples/09_jsonic_demo.lua`](examples/09_jsonic_demo.lua) | dkjson-style JSON encode/decode via Rust FFI | `xmake build-jsonic` | `"$LUNET_BIN" examples/09_jsonic_demo.lua` |
+| 10 | [`examples/10_graphlite_gql.lua`](examples/10_graphlite_gql.lua) | ISO GQL graph database CRUD via Rust FFI | `xmake build-graphlite` | `"$LUNET_BIN" examples/10_graphlite_gql.lua` |
 
 See also [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app) for a complete RealWorld "Conduit" API implementation.
 
@@ -314,6 +317,47 @@ json.encode({ a = 1 }, { indent = true, keyorder = { "a" } })
 runs the jsonic demo as a Maelstrom (Jepsen) node — Docker on arm64, no
 volume mounts, loopback-only — via `make -C ext/jsonic/maelstrom test`.
 
+### Graph database (`lunet.graphlite`) — Linux / macOS
+
+An ISO GQL (Graph Query Language) graph database powered by
+[GraphLite](https://github.com/GraphLite-AI/GraphLite), an embeddable graph
+database written in Rust. Unlike `ngx_shared`/`jsonic`, whose Rust source
+lives in-repo, GraphLite has no official platform packages, so its
+`graphlite-ffi` crate is built from a pinned upstream commit that xmake
+clones on demand. The `lunet-graphlite` C module (`ext/graphlite/`)
+dynamically loads the resulting library via `dlopen`/`LoadLibrary` at
+runtime, dispatching to libuv worker threads with the same coroutine
+yield/resume semantics as the SQLite3 driver.
+
+**Build** (requires Rust 1.87+ / 2024 edition, fetched automatically via `rustup`):
+```bash
+xmake build-graphlite   # clones GraphLite at a pinned commit, builds the
+                         # Rust FFI cdylib, compiles the lunet-graphlite C shim
+```
+
+**Usage**:
+```lua
+local gl = require("lunet.graphlite")
+
+local conn, err = gl.open({ path = "/tmp/mydb" })
+local session, err = gl.create_session(conn, "admin")
+
+gl.query(conn, session, "CREATE SCHEMA IF NOT EXISTS /example")
+gl.query(conn, session, "SESSION SET SCHEMA /example")
+gl.query(conn, session, "CREATE GRAPH IF NOT EXISTS social")
+gl.query(conn, session, "SESSION SET GRAPH social")
+
+gl.query(conn, session, "INSERT (:Person {name: 'Alice', age: 30})")
+local result, err = gl.query(conn, session, "MATCH (p:Person) RETURN p.name, p.age")
+
+gl.close_session(conn, session)
+gl.close(conn)
+```
+
+See [`examples/10_graphlite_gql.lua`](examples/10_graphlite_gql.lua) for a
+full walkthrough (schema/graph DDL, inserts, pattern matching, filtering,
+aggregation).
+
 ## Safety: Zero-Cost Tracing
 
 Build with `xmake build-debug` to enable coroutine reference tracking and stack integrity checks. The runtime will assert and crash on leaks or stack pollution.
@@ -462,6 +506,8 @@ xmake is the canonical build system. There is no Makefile. All tasks are defined
 | `xmake lnt-shared-smoke` | Build lnt_shared then run its smoke test |
 | `xmake build-jsonic` | Build the jsonic Rust extension |
 | `xmake jsonic-smoke` | Build jsonic then run its smoke test |
+| `xmake build-graphlite` | Build the GraphLite Rust extension (clone + cargo build + C shim) |
+| `xmake graphlite-smoke` | Build the GraphLite extension then run its example smoke test |
 | `xmake stress` | Concurrent load test with tracing |
 | `xmake ci` | Local CI parity (lint + build + examples + sqlite3 smoke) |
 | `xmake preflight-easy-memory` | EasyMem + ASan preflight gate |

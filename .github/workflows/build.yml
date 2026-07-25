@@ -56,13 +56,13 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y pkg-config libuv1-dev luajit libluajit-5.1-dev libsqlite3-dev libsodium-dev libcurl4-openssl-dev libpq-dev default-libmysqlclient-dev
+        sudo apt-get install -y pkg-config libuv1-dev luajit libluajit-5.1-dev zlib1g-dev libsqlite3-dev libsodium-dev libcurl4-openssl-dev libpq-dev default-libmysqlclient-dev
 
     - name: Install Dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        brew install pkg-config libuv luajit sqlite3 libsodium curl libpq mysql-client
-        echo "PKG_CONFIG_PATH=$(brew --prefix curl)/lib/pkgconfig:$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mysql-client)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+        brew install pkg-config libuv luajit zlib sqlite3 libsodium curl libpq mysql-client
+        echo "PKG_CONFIG_PATH=$(brew --prefix zlib)/lib/pkgconfig:$(brew --prefix curl)/lib/pkgconfig:$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mysql-client)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
 
     - name: Setup vcpkg (Windows)
       if: runner.os == 'Windows'
@@ -100,6 +100,7 @@ jobs:
         # Install workflow dependencies with retry for transient vcpkg/network hiccups.
         Invoke-VcpkgWithRetry "libuv:x64-windows"
         Invoke-VcpkgWithRetry "luajit:x64-windows"
+        Invoke-VcpkgWithRetry "zlib:x64-windows"
         Invoke-VcpkgWithRetry "sqlite3:x64-windows"
         Invoke-VcpkgWithRetry "libpq[lz4,openssl,zlib]:x64-windows"
         Invoke-VcpkgWithRetry "libmysql:x64-windows"
@@ -124,6 +125,8 @@ jobs:
       if: runner.os != 'Windows'
       run: |
         xmake build
+        xmake build lunet-static
+        xmake build sdk-api-test
         xmake build lunet-sqlite3
         xmake build lunet-paxe
         xmake build lunet-httpc
@@ -135,11 +138,29 @@ jobs:
       shell: pwsh
       run: |
         xmake build
+        xmake build lunet-static
+        xmake build sdk-api-test
         xmake build lunet-sqlite3
         xmake build lunet-paxe
         xmake build lunet-httpc
         xmake build lunet-postgres
         xmake build lunet-mysql
+
+    - name: C SDK lifecycle test (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        SDK_API_TEST=$(find build -type f -name sdk-api-test | head -n 1)
+        if [ -z "$SDK_API_TEST" ]; then echo "sdk-api-test not found" >&2; exit 1; fi
+        timeout 10 "$SDK_API_TEST"
+
+    - name: C SDK lifecycle test (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $test = Get-ChildItem -Path build -Recurse -Filter "sdk-api-test.exe" | Select-Object -First 1
+        if (-not $test) { throw "sdk-api-test.exe not found" }
+        & $test.FullName
+        if ($LASTEXITCODE -ne 0) { throw "sdk-api-test failed" }
 
     # Rust ext modules (lnt_shared, jsonic) — built on Unix only:
     # lnt_shared is POSIX-only by design (mmap/clock_gettime), and the
@@ -243,6 +264,38 @@ jobs:
         cp ext/jsonic/target/release/liblunet_jsonic.dylib "$DIST_DIR/lunet/"
         tar -C "$DIST_DIR" -czf lunet-macos.tar.gz .
 
+    - name: Package release SDK (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        set -euo pipefail
+        SDK_DIR="$(mktemp -d)"
+        mkdir -p "$SDK_DIR/bin" "$SDK_DIR/examples/sdk_embed/app" "$SDK_DIR/include" "$SDK_DIR/lib"
+        cp "$(find build -type f -name 'liblunet-static.a' | head -n 1)" "$SDK_DIR/lib/liblunet-static.a"
+        cp include/lunet.h include/lunet_exports.h "$SDK_DIR/include/"
+        cp bin/generate_embed_scripts.lua "$SDK_DIR/bin/"
+        cp examples/sdk_embed/main.c "$SDK_DIR/examples/sdk_embed/"
+        cp examples/sdk_embed/app/main.lua "$SDK_DIR/examples/sdk_embed/app/"
+        cp docs/EMBEDDING.md "$SDK_DIR/README.md"
+        cp docs/EMBEDDING-CN.md "$SDK_DIR/README-CN.md"
+        cp LICENSE "$SDK_DIR/"
+        tar -C "$SDK_DIR" -czf lunet-linux-amd64-sdk.tar.gz .
+
+    - name: Package release SDK (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        set -euo pipefail
+        SDK_DIR="$(mktemp -d)"
+        mkdir -p "$SDK_DIR/bin" "$SDK_DIR/examples/sdk_embed/app" "$SDK_DIR/include" "$SDK_DIR/lib"
+        cp "$(find build -type f -name 'liblunet-static.a' | head -n 1)" "$SDK_DIR/lib/liblunet-static.a"
+        cp include/lunet.h include/lunet_exports.h "$SDK_DIR/include/"
+        cp bin/generate_embed_scripts.lua "$SDK_DIR/bin/"
+        cp examples/sdk_embed/main.c "$SDK_DIR/examples/sdk_embed/"
+        cp examples/sdk_embed/app/main.lua "$SDK_DIR/examples/sdk_embed/app/"
+        cp docs/EMBEDDING.md "$SDK_DIR/README.md"
+        cp docs/EMBEDDING-CN.md "$SDK_DIR/README-CN.md"
+        cp LICENSE "$SDK_DIR/"
+        tar -C "$SDK_DIR" -czf lunet-macos-sdk.tar.gz .
+
     - name: Package release archive (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
@@ -256,6 +309,23 @@ jobs:
           Copy-Item $_.FullName (Join-Path $dist "lunet")
         }
         Compress-Archive -Path (Join-Path $dist "*") -DestinationPath lunet-windows-amd64.zip -Force
+
+    - name: Package release SDK (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $sdk = Join-Path $env:RUNNER_TEMP ("lunet-sdk-" + $env:GITHUB_RUN_ID + "-" + $env:GITHUB_RUN_ATTEMPT)
+        New-Item -ItemType Directory -Path (Join-Path $sdk "bin"), (Join-Path $sdk "examples\sdk_embed\app"), (Join-Path $sdk "include"), (Join-Path $sdk "lib") -Force | Out-Null
+        Copy-Item (Get-ChildItem -Path build -Recurse -Filter lunet-static.lib | Select-Object -First 1).FullName (Join-Path $sdk "lib\lunet-static.lib")
+        Copy-Item include\lunet.h, include\lunet_exports.h (Join-Path $sdk "include")
+        Copy-Item bin\generate_embed_scripts.lua (Join-Path $sdk "bin")
+        Copy-Item examples\sdk_embed\main.c (Join-Path $sdk "examples\sdk_embed")
+        Copy-Item examples\sdk_embed\app\main.lua (Join-Path $sdk "examples\sdk_embed\app")
+        Copy-Item docs\EMBEDDING.md (Join-Path $sdk "README.md")
+        Copy-Item docs\EMBEDDING-CN.md (Join-Path $sdk "README-CN.md")
+        Copy-Item LICENSE $sdk
+        Compress-Archive -Path (Join-Path $sdk "*") -DestinationPath lunet-windows-amd64-sdk.zip -Force
 
     # Guard against shipping a broken archive: extract the just-built tarball
     # and exercise both Rust ext modules through the packaged binary, using
@@ -284,6 +354,55 @@ jobs:
         print("VERIFY OK: lunet.lnt_shared + lunet.jsonic work from packaged archive")
         LUA
         "$VERIFY_DIR/lunet-run" "$VERIFY_DIR/verify_ext.lua"
+
+    - name: Verify packaged SDK (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        set -euo pipefail
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          ARCHIVE=lunet-linux-amd64-sdk.tar.gz
+        else
+          ARCHIVE=lunet-macos-sdk.tar.gz
+        fi
+        VERIFY_DIR="$(mktemp -d)"
+        tar -C "$VERIFY_DIR" -xzf "$ARCHIVE"
+        (
+          cd "$VERIFY_DIR"
+          mkdir generated
+          LUNET_EMBED_SOURCE=examples/sdk_embed/app \
+          LUNET_EMBED_OUTPUT=generated/lunet_embed_scripts_blob.h \
+          LUNET_EMBED_PROJECT_ROOT="$VERIFY_DIR" \
+          xmake lua bin/generate_embed_scripts.lua
+          cc -std=c99 -Iinclude -Igenerated \
+            $(pkg-config --cflags luajit libuv zlib) \
+            examples/sdk_embed/main.c lib/liblunet-static.a \
+            $(pkg-config --libs luajit libuv zlib) -pthread -ldl -lm \
+            -o sdk-embedded-app
+          timeout 10 ./sdk-embedded-app
+        )
+
+    - name: Verify packaged SDK (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $verify = Join-Path $env:RUNNER_TEMP ("lunet-sdk-verify-" + $env:GITHUB_RUN_ID + "-" + $env:GITHUB_RUN_ATTEMPT)
+        Expand-Archive -Path lunet-windows-amd64-sdk.zip -DestinationPath $verify -Force
+        Push-Location $verify
+        try {
+          New-Item -ItemType Directory generated | Out-Null
+          $env:LUNET_EMBED_SOURCE = "examples\\sdk_embed\\app"
+          $env:LUNET_EMBED_OUTPUT = "generated\\lunet_embed_scripts_blob.h"
+          $env:LUNET_EMBED_PROJECT_ROOT = $verify
+          xmake lua bin\generate_embed_scripts.lua
+          if ($LASTEXITCODE -ne 0) { throw "SDK blob generation failed" }
+          cl /nologo /std:c11 /I include /I generated /I "$env:VCPKG_ROOT\installed\x64-windows\include" examples\sdk_embed\main.c lib\lunet-static.lib /link /LIBPATH:"$env:VCPKG_ROOT\installed\x64-windows\lib" lua51.lib uv.lib zlib.lib ws2_32.lib iphlpapi.lib userenv.lib psapi.lib advapi32.lib user32.lib shell32.lib ole32.lib dbghelp.lib /OUT:sdk-embedded-app.exe
+          if ($LASTEXITCODE -ne 0) { throw "SDK example compile failed" }
+          & .\sdk-embedded-app.exe
+          if ($LASTEXITCODE -ne 0) { throw "SDK example execution failed" }
+        } finally {
+          Pop-Location
+        }
 
     - name: Upload artifact (Linux)
       if: runner.os == 'Linux'
@@ -335,6 +454,27 @@ jobs:
       with:
         name: release-windows
         path: lunet-windows-amd64.zip
+
+    - name: Upload release SDK (Linux)
+      if: runner.os == 'Linux'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-sdk-linux
+        path: lunet-linux-amd64-sdk.tar.gz
+
+    - name: Upload release SDK (macOS)
+      if: runner.os == 'macOS'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-sdk-macos
+        path: lunet-macos-sdk.tar.gz
+
+    - name: Upload release SDK (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-sdk-windows
+        path: lunet-windows-amd64-sdk.zip
 
   embed-scripts:
     name: Embed scripts smoke (${{ matrix.os }})
@@ -557,3 +697,6 @@ jobs:
           release-assets/lunet-linux-amd64.tar.gz
           release-assets/lunet-macos.tar.gz
           release-assets/lunet-windows-amd64.zip
+          release-assets/lunet-linux-amd64-sdk.tar.gz
+          release-assets/lunet-macos-sdk.tar.gz
+          release-assets/lunet-windows-amd64-sdk.zip

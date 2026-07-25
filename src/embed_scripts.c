@@ -7,14 +7,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef LUNET_EMBED_SCRIPTS
 #include <zlib.h>
-#include "embed_scripts_blob.h"
 
 #if defined(_WIN32)
 #include <direct.h>
 #include <windows.h>
 #else
+#include <dirent.h>
 #include <limits.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -23,6 +22,62 @@
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
+#endif
+
+#if defined(_WIN32)
+static void lunet_embed_remove_tree(const char *path) {
+  WIN32_FIND_DATAA entry;
+  HANDLE find;
+  char pattern[MAX_PATH];
+  char child[MAX_PATH];
+
+  if (!path || snprintf(pattern, sizeof(pattern), "%s\\*", path) >= (int)sizeof(pattern)) {
+    return;
+  }
+  find = FindFirstFileA(pattern, &entry);
+  if (find != INVALID_HANDLE_VALUE) {
+    do {
+      if (strcmp(entry.cFileName, ".") == 0 || strcmp(entry.cFileName, "..") == 0 ||
+          snprintf(child, sizeof(child), "%s\\%s", path, entry.cFileName) >= (int)sizeof(child)) {
+        continue;
+      }
+      if ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+          (entry.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+        lunet_embed_remove_tree(child);
+      } else if ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+        RemoveDirectoryA(child);
+      } else {
+        DeleteFileA(child);
+      }
+    } while (FindNextFileA(find, &entry));
+    FindClose(find);
+  }
+  RemoveDirectoryA(path);
+}
+#else
+static void lunet_embed_remove_tree(const char *path) {
+  DIR *dir;
+  struct dirent *entry;
+  char child[PATH_MAX];
+  struct stat st;
+
+  if (!path || !(dir = opendir(path))) {
+    return;
+  }
+  while ((entry = readdir(dir)) != NULL) {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 ||
+        snprintf(child, sizeof(child), "%s/%s", path, entry->d_name) >= (int)sizeof(child)) {
+      continue;
+    }
+    if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode)) {
+      lunet_embed_remove_tree(child);
+    } else {
+      unlink(child);
+    }
+  }
+  closedir(dir);
+  rmdir(path);
+}
 #endif
 
 #define LUNET_EMBED_MAGIC "LUNETPK1"
@@ -655,56 +710,52 @@ static int lunet_embed_make_temp_dir(char *out_dir, size_t out_len, char *err, s
   return 0;
 }
 #endif
-#endif /* LUNET_EMBED_SCRIPTS */
-
 int lunet_embed_scripts_prepare(lua_State *L,
+                                const unsigned char *blob,
+                                size_t blob_len,
                                 char *out_dir,
                                 size_t out_dir_len,
                                 char *err,
                                 size_t err_len) {
-#ifdef LUNET_EMBED_SCRIPTS
   unsigned char *payload = NULL;
   size_t payload_len = 0;
 
-  if (!L || !out_dir || out_dir_len == 0) {
+  if (!L || !blob || blob_len == 0 || !out_dir || out_dir_len == 0) {
     lunet_embed_set_error(err, err_len, "invalid arguments");
-    return -1;
-  }
-
-  if (lunet_embedded_scripts_gzip_len == 0) {
-    lunet_embed_set_error(err, err_len, "embedded script blob is empty");
     return -1;
   }
 
   if (lunet_embed_make_temp_dir(out_dir, out_dir_len, err, err_len) != 0) {
     return -1;
   }
-  if (lunet_embed_decompress_gzip(lunet_embedded_scripts_gzip,
-                                  lunet_embedded_scripts_gzip_len,
+  if (lunet_embed_decompress_gzip(blob,
+                                  blob_len,
                                   &payload,
                                   &payload_len,
                                   err,
                                   err_len) != 0) {
+    lunet_embed_remove_tree(out_dir);
+    out_dir[0] = '\0';
     return -1;
   }
   if (lunet_embed_extract_payload(payload, payload_len, out_dir, err, err_len) != 0) {
     free(payload);
+    lunet_embed_remove_tree(out_dir);
+    out_dir[0] = '\0';
     return -1;
   }
   free(payload);
 
   if (lunet_embed_patch_package_paths(L, out_dir, err, err_len) != 0) {
+    lunet_embed_remove_tree(out_dir);
+    out_dir[0] = '\0';
     return -1;
   }
   return 0;
-#else
-  (void)L;
-  (void)out_dir;
-  (void)out_dir_len;
-  (void)err;
-  (void)err_len;
-  return 0;
-#endif
+}
+
+void lunet_embed_scripts_cleanup(const char *embed_dir) {
+  lunet_embed_remove_tree(embed_dir);
 }
 
 int lunet_embed_scripts_resolve_script(const char *embed_dir,
@@ -713,7 +764,6 @@ int lunet_embed_scripts_resolve_script(const char *embed_dir,
                                        size_t out_script_len,
                                        char *err,
                                        size_t err_len) {
-#ifdef LUNET_EMBED_SCRIPTS
   if (!embed_dir || !script_arg || !out_script || out_script_len == 0) {
     lunet_embed_set_error(err, err_len, "invalid arguments");
     return -1;
@@ -733,13 +783,15 @@ int lunet_embed_scripts_resolve_script(const char *embed_dir,
     return 0;
   }
   return 1;
-#else
-  (void)embed_dir;
-  (void)script_arg;
-  (void)out_script;
-  (void)out_script_len;
-  (void)err;
-  (void)err_len;
+}
+
+int lunet_embed_scripts_validate_relative_path(const char *script_arg,
+                                               char *err,
+                                               size_t err_len) {
+  if (!lunet_embed_is_safe_relative_path(script_arg)) {
+    lunet_embed_set_error(err, err_len, "unsafe embedded script path '%s'",
+                          script_arg ? script_arg : "");
+    return -1;
+  }
   return 0;
-#endif
 }

@@ -9,6 +9,8 @@
 #endif
 
 int lunet_embed_scripts_prepare(lua_State *L,
+                                const unsigned char *blob,
+                                size_t blob_len,
                                 char *out_dir,
                                 size_t out_dir_len,
                                 char *err,
@@ -20,5 +22,11 @@ int lunet_embed_scripts_resolve_script(const char *embed_dir,
                                        size_t out_script_len,
                                        char *err,
                                        size_t err_len);
+
+int lunet_embed_scripts_validate_relative_path(const char *script_arg,
+                                               char *err,
+                                               size_t err_len);
+
+void lunet_embed_scripts_cleanup(const char *embed_dir);
 
 #endif /* LUNET_EMBED_SCRIPTS_H */

@@ -72,6 +72,9 @@ xmake build lunet-bin
 
 启用后，`lunet-run` 会在启动时将嵌入的脚本目录树提取到私有临时目录，并将该位置添加到 `package.path` 和 `package.cpath` 的前面。
 
+对于需要自定义原生 `main()` 并嵌入 Lua 应用的发布版使用者，请阅读
+[EMBEDDING-CN.md](EMBEDDING-CN.md)，而不是将 Lunet 作为 xmake 子项目重新构建。
+
 ### 3. 或从普通 LuaJIT 加载 lunet.so
 
 如果您更喜欢直接使用 `luajit`：

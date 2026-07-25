@@ -171,9 +171,8 @@ option("lunet_embed_scripts_dir")
 option_end()
 -- Common source files for core lunet
 local core_sources = {
-    "src/main.c",
+    "src/lunet.c",
     "src/embed_scripts.c",
-    "src/embed_scripts_blob.c",
     "src/co.c",
     "src/fs.c",
     "src/rt.c",
@@ -194,11 +193,11 @@ local core_sources = {
 if is_plat("windows") then
     add_requires("vcpkg::luajit", {alias = "luajit"})
     add_requires("vcpkg::libuv", {alias = "libuv"})
-    add_requires("vcpkg::zlib", {alias = "zlib", optional = true})
+    add_requires("vcpkg::zlib", {alias = "zlib"})
 else
     add_requires("pkgconfig::luajit", {alias = "luajit"})
     add_requires("pkgconfig::libuv", {alias = "libuv"})
-    add_requires("pkgconfig::zlib", {alias = "zlib", optional = true})
+    add_requires("pkgconfig::zlib", {alias = "zlib"})
 end
 
 if lunet_easy_memory_enabled() then
@@ -256,7 +255,7 @@ target("lunet")
     
     add_files(core_sources)
     add_includedirs("include", {public = true})
-    add_packages("luajit", "libuv")
+    add_packages("luajit", "libuv", "zlib")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
 
@@ -303,8 +302,9 @@ target("lunet-bin")
     set_basename("lunet-run")  -- Avoid conflict with lunet/ driver directory
     
     add_files(core_sources)
+    add_files("src/main.c", "src/embed_scripts_blob.c")
     add_includedirs("include", {public = true})
-    add_packages("luajit", "libuv")
+    add_packages("luajit", "libuv", "zlib")
     lunet_apply_asan_flags("binary")
     lunet_apply_easy_memory()
     
@@ -315,7 +315,6 @@ target("lunet-bin")
         end
 
         add_defines("LUNET_EMBED_SCRIPTS")
-        add_packages("zlib")
         add_includedirs(".tmp/generated")
 
         before_build(function ()
@@ -366,6 +365,53 @@ target("lunet-bin")
     end
 target_end()
 
+-- Linkable engine for release SDK consumers.  It deliberately excludes the
+-- Lunet CLI main() and the compile-time generated application blob.
+target("lunet-static")
+    set_default(false)
+    set_kind("static")
+    add_rules("lunet.c_safety_lint")
+    add_files(core_sources)
+    add_includedirs("include", {public = true})
+    add_packages("luajit", "libuv", "zlib", {public = true})
+    lunet_apply_easy_memory()
+    if is_plat("linux") then
+        add_defines("_GNU_SOURCE")
+        add_cflags("-pthread")
+        add_ldflags("-pthread")
+        add_syslinks("pthread", "dl", "m")
+    end
+    if is_plat("windows") then
+        add_cflags("/TC")
+        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
+    end
+    if has_config("lunet_trace") then
+        add_defines("LUNET_TRACE")
+    end
+    if has_config("lunet_verbose_trace") then
+        add_defines("LUNET_TRACE_VERBOSE")
+    end
+target_end()
+
+target("sdk-api-test")
+    set_default(false)
+    set_kind("binary")
+    add_rules("lunet.c_safety_lint")
+    add_files("test/sdk_api.c")
+    add_includedirs("include")
+    add_deps("lunet-static")
+    add_packages("luajit", "libuv", "zlib")
+    if is_plat("linux") then
+        add_cflags("-pthread")
+        add_ldflags("-pthread")
+        add_syslinks("pthread", "dl", "m")
+    end
+    if is_plat("windows") then
+        add_cflags("/TC")
+        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
+    end
+target_end()
+
 -- =============================================================================
 -- Database Driver Modules (separate packages)
 -- =============================================================================
@@ -390,7 +436,7 @@ target("lunet-sqlite3")
     add_files(core_sources)
     add_files("ext/sqlite3/sqlite3.c")
     add_includedirs("include", "ext/sqlite3", {public = true})
-    add_packages("luajit", "libuv", "sqlite3")
+    add_packages("luajit", "libuv", "zlib", "sqlite3")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_SQLITE3")
@@ -434,7 +480,7 @@ target("lunet-mysql")
     add_files(core_sources)
     add_files("ext/mysql/mysql.c")
     add_includedirs("include", "ext/mysql", {public = true})
-    add_packages("luajit", "libuv", "mysql")
+    add_packages("luajit", "libuv", "zlib", "mysql")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_MYSQL")
@@ -492,7 +538,7 @@ target("lunet-postgres")
     add_files(core_sources)
     add_files("ext/postgres/postgres.c")
     add_includedirs("include", "ext/postgres", {public = true})
-    add_packages("luajit", "libuv", "pq")
+    add_packages("luajit", "libuv", "zlib", "pq")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
     add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_POSTGRES")
@@ -543,7 +589,7 @@ target("lunet-paxe")
     add_includedirs("include", {public = true})
 
     -- CRITICAL: Fail fast if libsodium is not available
-    add_packages("luajit", "libuv", {public = true})
+    add_packages("luajit", "libuv", "zlib", {public = true})
     add_packages("sodium")  -- Will fail at config time if not found (no optional = true)
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
@@ -590,7 +636,7 @@ target("lunet-httpc")
     add_files(core_sources)
     add_files("ext/httpc/httpc.c")
     add_includedirs("include", "ext/httpc", {public = true})
-    add_packages("luajit", "libuv", "curl")
+    add_packages("luajit", "libuv", "zlib", "curl")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
 

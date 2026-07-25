@@ -72,6 +72,10 @@ xmake build lunet-bin
 
 When enabled, `lunet-run` extracts the embedded script tree into a private temp directory at startup and prepends that location to `package.path` and `package.cpath`.
 
+For release consumers who need their own native `main()` and an embedded Lua
+application, see [EMBEDDING.md](EMBEDDING.md) instead of rebuilding Lunet as an
+xmake subproject.
+
 ### 3. Or load lunet.so from plain LuaJIT
 
 If you prefer to use `luajit` directly:

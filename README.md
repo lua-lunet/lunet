@@ -246,9 +246,35 @@ db.close(conn)
 | `db.exec(conn, sql, ...)` | Execute INSERT/UPDATE/DELETE (with optional parameters) | result table (`affected_rows`, `last_insert_id`) |
 | `db.query_params(conn, sql, ...)` | Same behavior as `db.query` | array of row tables |
 | `db.exec_params(conn, sql, ...)` | Same behavior as `db.exec` | result table (`affected_rows`, `last_insert_id`) |
-| `db.escape(str)` | Escape string for SQL (rarely needed) | escaped string |
 
-**Note**: All three drivers now use native prepared statements internally. Parameters are automatically bound using driver-native functions (`sqlite3_bind_*`, `mysql_stmt_bind_param`, `PQexecParams`), eliminating SQL injection risks.
+**Note**: All three drivers use native prepared statements internally. Parameters are automatically bound using driver-native functions (`sqlite3_bind_*`, `mysql_stmt_bind_param`, `PQexecParams`), eliminating SQL injection risks. There is deliberately no `db.escape`: hand-escaping is never needed, and never as safe as binding.
+
+### Transactions
+
+Pass a connection handle you hold, and issue the transaction control statements
+like any other statement:
+
+```lua
+db.exec(conn, "BEGIN")
+local ok, err = pcall(function()
+    db.exec(conn, "DELETE FROM nodes WHERE path = $1", dst)
+    db.exec(conn, "UPDATE nodes SET path = $1 WHERE path = $2", dst, src)
+end)
+db.exec(conn, ok and "COMMIT" or "ROLLBACK")
+```
+
+Two properties to be aware of:
+
+- **A statement with bound parameters must be a single command.** That is
+  libpq/MySQL extended-protocol behaviour, not a Lunet restriction. Statements
+  with *no* parameters may contain several commands separated by `;`, but only
+  the last command's rows and `affected_rows` are returned.
+- **The transaction lives on the connection handle, not on the coroutine.** All
+  statements in a transaction must use the same `conn`. If your application
+  pools connections, pin one handle for the whole transaction — a pool that
+  leases a connection per call will scatter `BEGIN` and `COMMIT` across
+  different sessions. Do not let another coroutine use that handle until you
+  have committed.
 
 ### Shared Dictionary (`lunet.lnt_shared`) — Linux / macOS
 

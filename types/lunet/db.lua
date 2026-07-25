@@ -42,11 +42,4 @@ function db.query(conn, sql) end
 ---@return string|nil error Error message if failed
 function db.exec(conn, sql) end
 
----Escape a string for safe SQL literal inclusion.
----Use this when parameter binding is not available.
----Escapes backslashes and single quotes to prevent SQL injection.
----@param s string The string to escape
----@return string escaped The escaped string safe for SQL literals
-function db.escape(s) end
-
 return db

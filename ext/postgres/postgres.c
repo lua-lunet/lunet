@@ -731,33 +731,6 @@ int lunet_db_exec(lua_State* L) {
   return lua_yield(L, 0);
 }
 
-int lunet_db_escape(lua_State* L) {
-  luaL_checkstring(L, 1);
-  lua_getglobal(L, "string");
-  lua_getfield(L, -1, "gsub");
-  lua_remove(L, -2); /* remove string table */
-
-  if (!lua_isfunction(L, -1)) {
-    return luaL_error(L, "string.gsub is not available");
-  }
-
-  lua_pushvalue(L, 1); /* subject */
-  lua_pushstring(L, "(['\\\\])"); /* pattern */
-  
-  lua_newtable(L); /* replacement table */
-  lua_pushstring(L, "'");
-  lua_pushstring(L, "''");
-  lua_settable(L, -3);
-  lua_pushstring(L, "\\");
-  lua_pushstring(L, "\\\\");
-  lua_settable(L, -3);
-
-  if (lua_pcall(L, 3, 1, 0) != LUA_OK) {
-    return lua_error(L);
-  }
-  return 1;
-}
-
 int lunet_db_query_params(lua_State* L) {
   if (lunet_ensure_coroutine(L, "db.query_params")) {
     return lua_error(L);

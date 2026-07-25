@@ -199,7 +199,31 @@ db.close(conn)
 | `db.exec(conn, sql, ...)` | 执行 INSERT/UPDATE/DELETE（可带参数） | 结果表（`affected_rows`、`last_insert_id`） |
 | `db.query_params(conn, sql, ...)` | 与 `db.query` 行为一致 | 行表数组 |
 | `db.exec_params(conn, sql, ...)` | 与 `db.exec` 行为一致 | 结果表（`affected_rows`、`last_insert_id`） |
-| `db.escape(str)` | 转义 SQL 字符串 | 转义后的字符串 |
+
+**注意**：三种驱动内部均使用原生预处理语句。参数通过驱动原生函数（`sqlite3_bind_*`、`mysql_stmt_bind_param`、`PQexecParams`）自动绑定，从根本上消除 SQL 注入风险。本项目有意不提供 `db.escape`：手工转义既无必要，也永远不如参数绑定安全。
+
+### 事务
+
+使用你自己持有的连接句柄，像执行普通语句一样执行事务控制语句：
+
+```lua
+db.exec(conn, "BEGIN")
+local ok, err = pcall(function()
+    db.exec(conn, "DELETE FROM nodes WHERE path = $1", dst)
+    db.exec(conn, "UPDATE nodes SET path = $1 WHERE path = $2", dst, src)
+end)
+db.exec(conn, ok and "COMMIT" or "ROLLBACK")
+```
+
+需要注意两点：
+
+- **带绑定参数的语句必须是单条命令。** 这是 libpq / MySQL 扩展协议的行为，并非
+  Lunet 的限制。**不带**参数的语句可以包含多条以 `;` 分隔的命令，但只会返回最后
+  一条命令的行数据与 `affected_rows`。
+- **事务属于连接句柄，而不属于协程。** 事务中的所有语句必须使用同一个 `conn`。
+  如果应用层使用连接池，请在整个事务期间固定同一个句柄——每次调用都从池中租借
+  连接的做法会把 `BEGIN` 与 `COMMIT` 分散到不同会话上。在提交之前，不要让其他
+  协程使用该句柄。
 
 ### 共享字典（`lunet.lnt_shared`）— Linux / macOS
 

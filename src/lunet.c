@@ -96,7 +96,6 @@ int lunet_db_open(lua_State* L);
 int lunet_db_close(lua_State* L);
 int lunet_db_query(lua_State* L);
 int lunet_db_exec(lua_State* L);
-int lunet_db_escape(lua_State* L);
 int lunet_db_query_params(lua_State* L);
 int lunet_db_exec_params(lua_State* L);
 
@@ -105,7 +104,6 @@ static int lunet_open_db(lua_State *L) {
                       {"close", lunet_db_close},
                       {"query", lunet_db_query},
                       {"exec", lunet_db_exec},
-                      {"escape", lunet_db_escape},
                       {"query_params", lunet_db_query_params},
                       {"exec_params", lunet_db_exec_params},
                       {NULL, NULL}};

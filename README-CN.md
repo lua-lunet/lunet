@@ -8,6 +8,20 @@
 
 > 本项目基于 [夏磊 (Xia Lei)](https://github.com/xialeistudio) 的 [xialeistudio/lunet](https://github.com/xialeistudio/lunet)。详见他的精彩文章：[Lunet：高性能协程网络库的设计与实现](https://www.ddhigh.com/2025/07/12/lunet-high-performance-coroutine-network-library/)。
 
+Lunet 最初的用途是编写**微型 localhost MCP 服务器** —— 运行在 LLM 客户端旁、回环地址上的 Model Context Protocol 工具：空闲时只占个位数 MB 内存，瞬间启动。这至今仍是首页用例。长篇理念阐述请阅读：**[Lunet 的 Talos、Ethos 与無為](docs/PHILOSOPHY-CN.md)**。
+
+## 三种使用 Lunet 的方式
+
+| 路径 | 适合谁 | 需要什么 | 从这里开始 |
+|------|--------|----------|------------|
+| **运行 Lua** | 你写 Lua 应用；不想碰 C 工具链 | 对应 OS 的发布压缩包 | [发布页](https://github.com/lua-lunet/lunet/releases) |
+| **打包一体机** | 你要交付单一自包含可执行文件 —— 你的 `main()` + Lunet + 你的应用 | 发布版 SDK + 一个 C 编译器 | [docs/EMBEDDING-CN.md](docs/EMBEDDING-CN.md) |
+| **hack 核心** | 你开发 Lunet 本身，或想要最小化功能构建 | xmake + 系统开发库 | [docs/XMAKE_INTEGRATION-CN.md](docs/XMAKE_INTEGRATION-CN.md) |
+
+## 安全姿态：默认仅回环
+
+Lunet 拒绝把监听器绑定到 `127.0.0.1`、`::1` 或 Unix socket 以外的地址 —— **默认没有远程安全漏洞**。要对外暴露服务，请在前面放一个久经考验的 sidecar（nginx、OpenResty、Caddy、Envoy，由管理员选择），让协议拆分攻击死在代理层而不是你的 Lua 协程里。在唯一入口是加固云代理（清洗畸形流量、吸收 DDoS）的私有网络中，绑定所有网卡可以是安全的 —— 但 Lunet 要求你用显式的 `--dangerously-skip-loopback-restriction` 标志郑重声明这一点。详见 [docs/SECURITY_ARCHITECTURE-CN.md](docs/SECURITY_ARCHITECTURE-CN.md)。
+
 ## 设计理念：无冗余，无臃肿
 
 Lunet 采用**模块化设计**。只构建你需要的：
@@ -27,7 +41,8 @@ Lunet 采用**模块化设计**。只构建你需要的：
 只构建一个数据库驱动，而不是全部。没有未使用的依赖。不需要为从未使用的库打安全补丁。
 
 入门（完整构建流程、配置档位、集成方式）：
-- **[docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md)**
+- **[docs/PHILOSOPHY-CN.md](docs/PHILOSOPHY-CN.md)**（长篇理念阐述）
+- **[docs/XMAKE_INTEGRATION-CN.md](docs/XMAKE_INTEGRATION-CN.md)**
 - **[docs/HTTPC-CN.md](docs/HTTPC-CN.md)**（可选出站 HTTPS 客户端）
 
 ### 为什么使用 lunet 数据库驱动？
@@ -44,16 +59,18 @@ Lunet 数据库驱动是**协程安全的**：
 ## 构建
 
 ```bash
-# 默认 SQLite 构建
+# 默认 SQLite 构建（同时构建 lunet-static SDK 静态库和 sdk-api-test）
 xmake build-release
 
 # 调试模式构建（启用追踪）
 xmake build-debug
 ```
 
-发布档位默认会剥离 EasyMem。若需 EasyMem 诊断，请使用 debug/ASan 档位。
+LuaJIT、libuv 和 zlib 是必需依赖；每个驱动只增加自己的客户端库。发布档位默认会剥离 EasyMem。若需 EasyMem 诊断，请使用 debug/ASan 档位。
 
 ## 示例应用
+
+最小入门示例请见 [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) —— 一个通过 `lunet.httpc` 调用 [OpenAlex](https://openalex.org/) 学术 API 的 SSE 传输 MCP 服务器，无数据库、无文件状态。
 
 完整的 RealWorld "Conduit" API 实现请参见 [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app)。
 
@@ -182,7 +199,31 @@ db.close(conn)
 | `db.exec(conn, sql, ...)` | 执行 INSERT/UPDATE/DELETE（可带参数） | 结果表（`affected_rows`、`last_insert_id`） |
 | `db.query_params(conn, sql, ...)` | 与 `db.query` 行为一致 | 行表数组 |
 | `db.exec_params(conn, sql, ...)` | 与 `db.exec` 行为一致 | 结果表（`affected_rows`、`last_insert_id`） |
-| `db.escape(str)` | 转义 SQL 字符串 | 转义后的字符串 |
+
+**注意**：三种驱动内部均使用原生预处理语句。参数通过驱动原生函数（`sqlite3_bind_*`、`mysql_stmt_bind_param`、`PQexecParams`）自动绑定，从根本上消除 SQL 注入风险。本项目有意不提供 `db.escape`：手工转义既无必要，也永远不如参数绑定安全。
+
+### 事务
+
+使用你自己持有的连接句柄，像执行普通语句一样执行事务控制语句：
+
+```lua
+db.exec(conn, "BEGIN")
+local ok, err = pcall(function()
+    db.exec(conn, "DELETE FROM nodes WHERE path = $1", dst)
+    db.exec(conn, "UPDATE nodes SET path = $1 WHERE path = $2", dst, src)
+end)
+db.exec(conn, ok and "COMMIT" or "ROLLBACK")
+```
+
+需要注意两点：
+
+- **带绑定参数的语句必须是单条命令。** 这是 libpq / MySQL 扩展协议的行为，并非
+  Lunet 的限制。**不带**参数的语句可以包含多条以 `;` 分隔的命令，但只会返回最后
+  一条命令的行数据与 `affected_rows`。
+- **事务属于连接句柄，而不属于协程。** 事务中的所有语句必须使用同一个 `conn`。
+  如果应用层使用连接池，请在整个事务期间固定同一个句柄——每次调用都从池中租借
+  连接的做法会把 `BEGIN` 与 `COMMIT` 分散到不同会话上。在提交之前，不要让其他
+  协程使用该句柄。
 
 ### 共享字典（`lunet.lnt_shared`）— Linux / macOS
 

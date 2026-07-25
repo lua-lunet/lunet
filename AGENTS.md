@@ -13,8 +13,9 @@ You MUST NOT do any git reset or stash or an git rm or rm or anything that might
 3.  **LOGGING:** All test runs must log stdout/stderr to `.tmp/logs/YYYYMMDD_HHMMSS/`.
 4.  **SECURE BINDING:** Never bind to `0.0.0.0` or public interfaces. Use Unix sockets (preferred) or `127.0.0.1` (development). Only bypass this rule if the user explicitly requests it via CLI flag `--dangerously-skip-loopback-restriction`.
 5.  **MANDATORY LOCAL CI PARITY BEFORE PUSH:** Before any push, agents MUST run locally all steps from `.github/workflows/build.yml` for their current OS matrix entry (Linux/macOS/Windows), including configure, build, and packaging commands. If any required step cannot be run locally or fails, do not push until fixed or explicitly approved by the user.
-    - Minimum local gate for this repo: `xmake lint`, `xmake test` (or CI-equivalent Lua test step), `xmake preflight-easy-memory`, and `xmake build-release`.
+    - Minimum local gate for this repo: `xmake lint`, `xmake test` (or CI-equivalent Lua test step), `xmake preflight-easy-memory`, and `xmake build-release` (which also builds the `lunet-static` and `sdk-api-test` SDK targets).
     - If the change affects examples, packaging, or specialized jobs, run the corresponding local equivalents for the current OS as well.
+    - macOS local notes: Homebrew's `zlib`, `curl`, `libpq`, and `mysql-client` are keg-only — export `PKG_CONFIG_PATH` with each `$(brew --prefix <pkg>)/lib/pkgconfig` before building drivers or running preflight (same as CI). As of 2026-07-25, ASan-instrumented debug binaries hang in `__malloc_init` at dyld time on macOS 26 (observed on 26.5.2, even for hello-world scripts; release and non-ASan debug/trace builds are unaffected). This blocks the ASan legs of `xmake preflight-easy-memory` locally — environmental, CI is unaffected.
 
 ## Internationalisation Parity (STRICT)
 
@@ -33,10 +34,13 @@ This includes badges, links, examples, and section structure.  A missing or stal
 Before creating or announcing a release:
 
 1. **Tag-triggered CI only:** Release tags (`v*`) must go through GitHub Actions builds (Linux/macOS/Windows). Do not handcraft a release from local output.
-2. **Assets required:** The release must include all three archives:
+2. **Assets required:** The release must include all six archives:
    - `lunet-linux-amd64.tar.gz`
    - `lunet-macos.tar.gz`
    - `lunet-windows-amd64.zip`
+   - `lunet-linux-amd64-sdk.tar.gz`
+   - `lunet-macos-sdk.tar.gz`
+   - `lunet-windows-amd64-sdk.zip`
 3. **Readable release notes:** Notes must include at minimum:
    - `## Highlights`
    - `## Binaries`
@@ -78,6 +82,8 @@ This section defines naming conventions and safety rules for C code. These are e
 | `*_impl.c` | Implementation file that may call `_lunet_*` | Rare, only for trace.h internals |
 
 **Rule**: Code outside of `trace.h` and `*_impl.c` files MUST NOT call `_lunet_*` functions directly.
+
+**Exception (public SDK API)**: Symbols declared in `include/lunet.h` (`lunet_runtime_init`, `lunet_runtime_run_file`, `lunet_runtime_run_embedded`, `lunet_runtime_shutdown`) are the embedding API shipped to downstream consumers in the release SDK. They are not trace wrappers over `_lunet_*` internals and are exempt from the wrapper convention.
 
 ### Safe Wrappers
 

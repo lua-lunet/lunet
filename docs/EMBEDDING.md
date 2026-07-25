@@ -20,6 +20,9 @@ include/lunet.h
 include/lunet_exports.h
 lib/liblunet-static.a                 # Linux/macOS
 lib/lunet-static.lib                  # Windows
+LICENSE
+README.md                             # this document
+README-CN.md
 ```
 
 `generate_embed_scripts.lua` is executed with `xmake lua`; xmake is used only
@@ -73,6 +76,11 @@ cl /nologo /std:c11 /I include /I generated `
   advapi32.lib user32.lib shell32.lib ole32.lib dbghelp.lib /OUT:my-lunet-app.exe
 .\my-lunet-app.exe
 ```
+
+Name the output after your appliance. The convention used by downstream
+projects is `<app>-<os>-<arch>.run` (for example `webdav-linux-amd64.run`):
+a single self-contained executable that users run directly, with no
+extracted script tree and nothing else installed.
 
 ## C API and lifecycle
 

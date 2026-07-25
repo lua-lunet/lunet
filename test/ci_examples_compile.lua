@@ -4,6 +4,12 @@ local examples = {
   "examples/03_db_sqlite3.lua",
   "examples/04_db_mysql.lua",
   "examples/05_db_postgres.lua",
+  "examples/mcp_openalex_sse/main.lua",
+  "examples/mcp_openalex_sse/mcp.lua",
+  "examples/mcp_openalex_sse/sse.lua",
+  "examples/mcp_openalex_sse/openalex.lua",
+  "examples/mcp_openalex_sse/json.lua",
+  "examples/mcp_openalex_sse/dotenv.lua",
 }
 
 local ok_count = 0

@@ -8,6 +8,20 @@ A high-performance coroutine-based networking library for LuaJIT, built on top o
 
 > This project is based on [xialeistudio/lunet](https://github.com/xialeistudio/lunet) by [夏磊 (Xia Lei)](https://github.com/xialeistudio). See also his excellent write-up: [Lunet: Design and Implementation of a High-Performance Coroutine Network Library](https://www.ddhigh.com/en/2025/07/12/lunet-high-performance-coroutine-network-library/).
 
+Lunet began as a way to write **tiny localhost MCP servers** — Model Context Protocol tools that sit next to an LLM client on loopback, idle in single-digit megabytes of RAM, and start instantly. That is still the front-page use case. Long-form motivation: **[The Talos, Ethos and 無為 of Lunet](docs/PHILOSOPHY.md)**.
+
+## Three ways to use Lunet
+
+| Path | Who it is for | What you need | Start here |
+|------|---------------|---------------|------------|
+| **Run Lua** | You write Lua apps; no C toolchain | A release archive for your OS | [Releases](https://github.com/lua-lunet/lunet/releases) |
+| **Package an appliance** | You ship one self-contained executable — your `main()` + Lunet + your app | The release SDK + a C compiler | [docs/EMBEDDING.md](docs/EMBEDDING.md) |
+| **Hack the core** | You develop Lunet itself, or want a minimal feature build | xmake + system dev libraries | [docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md) |
+
+## Security posture: loopback by default
+
+Lunet refuses to bind listeners to anything other than `127.0.0.1`, `::1`, or a Unix socket — **no remote security holes by default**. To expose a service, put a battle-hardened sidecar in front (nginx, OpenResty, Caddy, Envoy — the admin picks) so protocol-smashing attacks die at the proxy, not in your Lua coroutine. On a private network whose only ingress is a hardened cloud proxy that scrubs bad traffic and absorbs DDoS, binding all interfaces can be safe — but Lunet makes you say that out loud with the explicit `--dangerously-skip-loopback-restriction` flag. Details: [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md).
+
 ## Philosophy: No Bloat, No Kitchen Sink
 
 Lunet is **modular by design**. You build only what you need:
@@ -27,6 +41,7 @@ Lunet is **modular by design**. You build only what you need:
 Build one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
 
 Getting started (build flow, profiles, and integration details):
+- **[docs/PHILOSOPHY.md](docs/PHILOSOPHY.md)** (the long-form why)
 - **[docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md)**
 - **[docs/HTTPC.md](docs/HTTPC.md)** (optional outbound HTTPS client)
 
@@ -44,18 +59,20 @@ If you use raw FFI database bindings inside a lunet application, you lose all th
 ## Build
 
 ```bash
-# Default SQLite build
+# Default SQLite build (also builds the lunet-static SDK archive and sdk-api-test)
 xmake build-release
 
 # Build with tracing (debug mode)
 xmake build-debug
 ```
 
-Release profiles strip EasyMem by default. Use debug/ASan profiles for EasyMem diagnostics.
+LuaJIT, libuv, and zlib are required dependencies; each driver adds only its own client library. Release profiles strip EasyMem by default. Use debug/ASan profiles for EasyMem diagnostics.
 
-## Example: MCP-SSE Server
+## Example: MCP-SSE Servers
 
-[lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) is an MCP (Model Context Protocol) server with Tavily web search, demonstrating:
+For a minimal in-repo starting point see [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) — an SSE-transport MCP server that calls the [OpenAlex](https://openalex.org/) scholarly API via `lunet.httpc`, with no database and no filesystem state.
+
+[lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) is a fuller MCP (Model Context Protocol) server with Tavily web search, demonstrating:
 
 - **SSE transport** - Server-Sent Events for real-time streaming
 - **JSON-RPC over HTTP** - Stateful session management
@@ -100,6 +117,7 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1
 | 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + prepared statements (`$1`) | `xmake build lunet-postgres` + Postgres server | `"$LUNET_BIN" examples/05_db_postgres.lua` |
 | 08 | [`examples/08_lnt_shared.lua`](examples/08_lnt_shared.lua) | lunet-style shared dictionary via Rust FFI | `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_lnt_shared.lua` |
 | 09 | [`examples/09_jsonic_demo.lua`](examples/09_jsonic_demo.lua) | dkjson-style JSON encode/decode via Rust FFI | `xmake build-jsonic` | `"$LUNET_BIN" examples/09_jsonic_demo.lua` |
+| 10 | [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) | **Canonical tiny MCP server**: SSE transport + OpenAlex API via `lunet.httpc`, no DB, loopback only | `xmake build lunet-httpc` + `OPEN_ALEX_API_KEY` in `.env` | `"$LUNET_BIN" examples/mcp_openalex_sse/main.lua` |
 
 See also [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app) for a complete RealWorld "Conduit" API implementation.
 
@@ -228,9 +246,35 @@ db.close(conn)
 | `db.exec(conn, sql, ...)` | Execute INSERT/UPDATE/DELETE (with optional parameters) | result table (`affected_rows`, `last_insert_id`) |
 | `db.query_params(conn, sql, ...)` | Same behavior as `db.query` | array of row tables |
 | `db.exec_params(conn, sql, ...)` | Same behavior as `db.exec` | result table (`affected_rows`, `last_insert_id`) |
-| `db.escape(str)` | Escape string for SQL (rarely needed) | escaped string |
 
-**Note**: All three drivers now use native prepared statements internally. Parameters are automatically bound using driver-native functions (`sqlite3_bind_*`, `mysql_stmt_bind_param`, `PQexecParams`), eliminating SQL injection risks.
+**Note**: All three drivers use native prepared statements internally. Parameters are automatically bound using driver-native functions (`sqlite3_bind_*`, `mysql_stmt_bind_param`, `PQexecParams`), eliminating SQL injection risks. There is deliberately no `db.escape`: hand-escaping is never needed, and never as safe as binding.
+
+### Transactions
+
+Pass a connection handle you hold, and issue the transaction control statements
+like any other statement:
+
+```lua
+db.exec(conn, "BEGIN")
+local ok, err = pcall(function()
+    db.exec(conn, "DELETE FROM nodes WHERE path = $1", dst)
+    db.exec(conn, "UPDATE nodes SET path = $1 WHERE path = $2", dst, src)
+end)
+db.exec(conn, ok and "COMMIT" or "ROLLBACK")
+```
+
+Two properties to be aware of:
+
+- **A statement with bound parameters must be a single command.** That is
+  libpq/MySQL extended-protocol behaviour, not a Lunet restriction. Statements
+  with *no* parameters may contain several commands separated by `;`, but only
+  the last command's rows and `affected_rows` are returned.
+- **The transaction lives on the connection handle, not on the coroutine.** All
+  statements in a transaction must use the same `conn`. If your application
+  pools connections, pin one handle for the whole transaction — a pool that
+  leases a connection per call will scatter `BEGIN` and `COMMIT` across
+  different sessions. Do not let another coroutine use that handle until you
+  have committed.
 
 ### Shared Dictionary (`lunet.lnt_shared`) — Linux / macOS
 

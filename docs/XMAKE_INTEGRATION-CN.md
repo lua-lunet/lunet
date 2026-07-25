@@ -70,7 +70,9 @@ xmake f -c -m release --lunet_embed_scripts=y --lunet_embed_scripts_dir=lua -y
 xmake build lunet-bin
 ```
 
-启用后，`lunet-run` 会在启动时将嵌入的脚本目录树提取到私有临时目录，并将该位置添加到 `package.path` 和 `package.cpath` 的前面。
+启用后，`lunet-run` 会在启动时将嵌入的脚本目录树提取到私有临时目录，并将该位置添加到 `package.path` 和 `package.cpath` 的前面。临时目录会在退出时删除。
+
+注意：入口脚本参数必须是嵌入目录树内的安全相对路径（例如 `main.lua`）。绝对路径、包含 `..` 的路径以及 blob 之外的脚本都会被拒绝 —— 嵌入构建不再回退到从磁盘运行文件。
 
 对于需要自定义原生 `main()` 并嵌入 Lua 应用的发布版使用者，请阅读
 [EMBEDDING-CN.md](EMBEDDING-CN.md)，而不是将 Lunet 作为 xmake 子项目重新构建。

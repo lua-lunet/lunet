@@ -19,6 +19,9 @@ include/lunet.h
 include/lunet_exports.h
 lib/liblunet-static.a                 # Linux/macOS
 lib/lunet-static.lib                  # Windows
+LICENSE
+README.md                             # 英文文档
+README-CN.md                          # 本文档
 ```
 
 `generate_embed_scripts.lua` 通过 `xmake lua` 执行；xmake 只用于运行提供的
@@ -71,6 +74,10 @@ cl /nologo /std:c11 /I include /I generated `
   advapi32.lib user32.lib shell32.lib ole32.lib dbghelp.lib /OUT:my-lunet-app.exe
 .\my-lunet-app.exe
 ```
+
+请按你的应用命名输出文件。下游项目采用的约定是
+`<app>-<os>-<arch>.run`（例如 `webdav-linux-amd64.run`）：单一自包含
+可执行文件，用户直接运行，无需解压脚本目录树，也无需安装任何其他组件。
 
 ## C API 和生命周期
 

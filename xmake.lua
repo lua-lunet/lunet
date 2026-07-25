@@ -259,9 +259,6 @@ target("lunet")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
 
-    -- Build as a Lua C module (no CLI entrypoint)
-    add_defines("LUNET_NO_MAIN")
-
     -- macOS: build as a bundle with undefined symbols allowed (for Lua host)
     if is_plat("macosx") then
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
@@ -439,7 +436,7 @@ target("lunet-sqlite3")
     add_packages("luajit", "libuv", "zlib", "sqlite3")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
-    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_SQLITE3")
+    add_defines("LUNET_HAS_DB", "LUNET_DB_SQLITE3")
     
     if is_plat("macosx") then
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
@@ -483,7 +480,7 @@ target("lunet-mysql")
     add_packages("luajit", "libuv", "zlib", "mysql")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
-    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_MYSQL")
+    add_defines("LUNET_HAS_DB", "LUNET_DB_MYSQL")
     
     if is_plat("macosx") then
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
@@ -541,7 +538,7 @@ target("lunet-postgres")
     add_packages("luajit", "libuv", "zlib", "pq")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
-    add_defines("LUNET_NO_MAIN", "LUNET_HAS_DB", "LUNET_DB_POSTGRES")
+    add_defines("LUNET_HAS_DB", "LUNET_DB_POSTGRES")
 
     if is_plat("macosx") then
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
@@ -594,7 +591,7 @@ target("lunet-paxe")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
 
-    add_defines("LUNET_NO_MAIN", "LUNET_PAXE")
+    add_defines("LUNET_PAXE")
 
     if is_plat("macosx") then
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
@@ -640,7 +637,7 @@ target("lunet-httpc")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
 
-    add_defines("LUNET_NO_MAIN", "LUNET_HTTPC")
+    add_defines("LUNET_HTTPC")
 
     if is_plat("macosx") then
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
@@ -774,11 +771,15 @@ task_end()
 task("build-release")
     set_menu {
         usage = "xmake build-release",
-        description = "Configure and build release profile"
+        description = "Configure and build release profile (including SDK targets)"
     }
     on_run(function ()
         os.exec("xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n -y")
         os.exec("xmake build")
+        -- SDK targets are set_default(false); build them explicitly so the
+        -- local release gate covers what CI packages (#117).
+        os.exec("xmake build lunet-static")
+        os.exec("xmake build sdk-api-test")
     end)
 task_end()
 

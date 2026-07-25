@@ -70,7 +70,9 @@ xmake f -c -m release --lunet_embed_scripts=y --lunet_embed_scripts_dir=lua -y
 xmake build lunet-bin
 ```
 
-When enabled, `lunet-run` extracts the embedded script tree into a private temp directory at startup and prepends that location to `package.path` and `package.cpath`.
+When enabled, `lunet-run` extracts the embedded script tree into a private temp directory at startup and prepends that location to `package.path` and `package.cpath`. The temp directory is removed again at shutdown.
+
+Note: the entry script argument must be a safe relative path inside the embedded tree (for example `main.lua`). Absolute paths, `..` segments, and scripts outside the blob are rejected — there is no fallback to running a file from disk in an embed build.
 
 For release consumers who need their own native `main()` and an embedded Lua
 application, see [EMBEDDING.md](EMBEDDING.md) instead of rebuilding Lunet as an

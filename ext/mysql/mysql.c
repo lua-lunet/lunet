@@ -1040,26 +1040,6 @@ int lunet_db_exec(lua_State* L) {
   return lua_yield(L, 0);
 }
 
-int lunet_db_escape(lua_State* L) {
-  luaL_checkstring(L, 1);
-  lua_getglobal(L, "string");
-  lua_getfield(L, -1, "gsub");
-  lua_remove(L, -2);
-
-  if (!lua_isfunction(L, -1)) {
-    return luaL_error(L, "string.gsub is not available");
-  }
-
-  lua_pushvalue(L, 1);
-  lua_pushstring(L, "(['\\\\])");
-  lua_pushstring(L, "\\%1");
-
-  if (lua_pcall(L, 3, 1, 0) != LUA_OK) {
-    return lua_error(L);
-  }
-  return 1;
-}
-
 // Helper function to count parameters in SQL string
 static int count_params(const char* sql) {
   int count = 0;

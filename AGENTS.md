@@ -79,6 +79,8 @@ This section defines naming conventions and safety rules for C code. These are e
 
 **Rule**: Code outside of `trace.h` and `*_impl.c` files MUST NOT call `_lunet_*` functions directly.
 
+**Exception (public SDK API)**: Symbols declared in `include/lunet.h` (`lunet_runtime_init`, `lunet_runtime_run_file`, `lunet_runtime_run_embedded`, `lunet_runtime_shutdown`) are the embedding API shipped to downstream consumers in the release SDK. They are not trace wrappers over `_lunet_*` internals and are exempt from the wrapper convention.
+
 ### Safe Wrappers
 
 Always use the safe wrappers defined in `include/trace.h`:

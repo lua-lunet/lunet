@@ -19,6 +19,9 @@ include/lunet.h
 include/lunet_exports.h
 lib/liblunet-static.a                 # Linux/macOS
 lib/lunet-static.lib                  # Windows
+LICENSE
+README.md                             # 英文文档
+README-CN.md                          # 本文档
 ```
 
 `generate_embed_scripts.lua` 通过 `xmake lua` 执行；xmake 只用于运行提供的

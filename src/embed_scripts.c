@@ -31,7 +31,10 @@ static void lunet_embed_remove_tree(const char *path) {
   char pattern[MAX_PATH];
   char child[MAX_PATH];
 
-  if (!path || snprintf(pattern, sizeof(pattern), "%s\\*", path) >= (int)sizeof(pattern)) {
+  /* Guard: an empty pattern would be the drive-relative root wildcard "\*",
+   * which would recursively delete the current drive. */
+  if (!path || path[0] == '\0' ||
+      snprintf(pattern, sizeof(pattern), "%s\\*", path) >= (int)sizeof(pattern)) {
     return;
   }
   find = FindFirstFileA(pattern, &entry);
@@ -61,7 +64,8 @@ static void lunet_embed_remove_tree(const char *path) {
   char child[PATH_MAX];
   struct stat st;
 
-  if (!path || !(dir = opendir(path))) {
+  /* Guard: never treat an empty path as a deletion target. */
+  if (!path || path[0] == '\0' || !(dir = opendir(path))) {
     return;
   }
   while ((entry = readdir(dir)) != NULL) {
@@ -654,6 +658,7 @@ static int lunet_embed_make_temp_dir(char *out_dir, size_t out_len, char *err, s
 
   if (strlen(unique) + 1 > out_len) {
     lunet_embed_set_error(err, err_len, "temp dir path too long");
+    RemoveDirectoryA(unique);
     return -1;
   }
   strcpy(out_dir, unique);
@@ -704,6 +709,7 @@ static int lunet_embed_make_temp_dir(char *out_dir, size_t out_len, char *err, s
   chmod(created, 0700);
   if (strlen(created) + 1 > out_len) {
     lunet_embed_set_error(err, err_len, "temp dir path too long");
+    rmdir(created);
     return -1;
   }
   strcpy(out_dir, created);
@@ -755,6 +761,11 @@ int lunet_embed_scripts_prepare(lua_State *L,
 }
 
 void lunet_embed_scripts_cleanup(const char *embed_dir) {
+  /* runtimes that never ran an embedded blob have an empty embedded_root;
+   * removing "nothing" must be a no-op, never a deletion. */
+  if (!embed_dir || embed_dir[0] == '\0') {
+    return;
+  }
   lunet_embed_remove_tree(embed_dir);
 }
 

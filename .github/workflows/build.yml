@@ -355,17 +355,14 @@ jobs:
         LUA
         "$VERIFY_DIR/lunet-run" "$VERIFY_DIR/verify_ext.lua"
 
-    - name: Verify packaged SDK (Unix)
-      if: runner.os != 'Windows'
+    # Keep these steps byte-identical to the documented commands in
+    # docs/EMBEDDING.md so CI verifies exactly what users are told to run.
+    - name: Verify packaged SDK (Linux)
+      if: runner.os == 'Linux'
       run: |
         set -euo pipefail
-        if [ "$RUNNER_OS" = "Linux" ]; then
-          ARCHIVE=lunet-linux-amd64-sdk.tar.gz
-        else
-          ARCHIVE=lunet-macos-sdk.tar.gz
-        fi
         VERIFY_DIR="$(mktemp -d)"
-        tar -C "$VERIFY_DIR" -xzf "$ARCHIVE"
+        tar -C "$VERIFY_DIR" -xzf lunet-linux-amd64-sdk.tar.gz
         (
           cd "$VERIFY_DIR"
           mkdir generated
@@ -378,6 +375,26 @@ jobs:
             examples/sdk_embed/main.c lib/liblunet-static.a \
             $(pkg-config --libs luajit libuv zlib) -pthread -ldl -lm \
             -o sdk-embedded-app
+          timeout 10 ./sdk-embedded-app
+        )
+
+    - name: Verify packaged SDK (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        set -euo pipefail
+        VERIFY_DIR="$(mktemp -d)"
+        tar -C "$VERIFY_DIR" -xzf lunet-macos-sdk.tar.gz
+        (
+          cd "$VERIFY_DIR"
+          mkdir generated
+          LUNET_EMBED_SOURCE=examples/sdk_embed/app \
+          LUNET_EMBED_OUTPUT=generated/lunet_embed_scripts_blob.h \
+          LUNET_EMBED_PROJECT_ROOT="$VERIFY_DIR" \
+          xmake lua bin/generate_embed_scripts.lua
+          cc -std=c99 -Iinclude -Igenerated \
+            $(pkg-config --cflags luajit libuv zlib) \
+            examples/sdk_embed/main.c lib/liblunet-static.a \
+            $(pkg-config --libs luajit libuv zlib) -o sdk-embedded-app
           timeout 10 ./sdk-embedded-app
         )
 

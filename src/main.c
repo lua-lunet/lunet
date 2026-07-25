@@ -31,7 +31,7 @@ int main(int argc, char **argv) {
       options.dangerously_skip_loopback_restriction = 1;
       fprintf(stderr, "WARNING: Loopback restriction disabled. Binding to public interfaces allowed.\n");
     } else if (strcmp(argv[i], "--verbose-trace") == 0) {
-      /* Verbose tracing remains a compile-time option. */
+      fprintf(stderr, "Note: verbose tracing is a compile-time option (LUNET_TRACE_VERBOSE); flag ignored.\n");
     } else if (argv[i][0] == '-') {
       fprintf(stderr, "Unknown option: %s\n", argv[i]);
       return 1;

@@ -271,6 +271,7 @@ static void lunet_runtime_configure_cpath(lua_State *L, const char *executable_p
   char *last_sep;
   const char *old_cpath;
   char new_cpath[4096];
+  int written;
 
   if (!L || !executable_path || executable_path[0] == '\0') {
     return;
@@ -295,12 +296,19 @@ static void lunet_runtime_configure_cpath(lua_State *L, const char *executable_p
   old_cpath = lua_tostring(L, -1);
   lua_pop(L, 1);
 #if defined(_WIN32)
-  snprintf(new_cpath, sizeof(new_cpath), "%s\\lunet\\?.dll;%s\\?.dll;%s",
-           resolved_path, resolved_path, old_cpath ? old_cpath : "");
+  written = snprintf(new_cpath, sizeof(new_cpath), "%s\\lunet\\?.dll;%s\\?.dll;%s",
+                     resolved_path, resolved_path, old_cpath ? old_cpath : "");
 #else
-  snprintf(new_cpath, sizeof(new_cpath), "%s/lunet/?.so;%s/?.so;%s",
-           resolved_path, resolved_path, old_cpath ? old_cpath : "");
+  written = snprintf(new_cpath, sizeof(new_cpath), "%s/lunet/?.so;%s/?.so;%s",
+                     resolved_path, resolved_path, old_cpath ? old_cpath : "");
 #endif
+  if (written < 0 || (size_t)written >= sizeof(new_cpath)) {
+    /* A truncated cpath would silently break module loading; keep the default. */
+    fprintf(stderr, "[LUNET] warning: executable path too long, package.cpath unchanged\n");
+    lua_pop(L, 1);
+    free(resolved_path);
+    return;
+  }
   lua_pushstring(L, new_cpath);
   lua_setfield(L, -2, "cpath");
   lua_pop(L, 1);

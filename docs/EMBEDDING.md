@@ -20,6 +20,9 @@ include/lunet.h
 include/lunet_exports.h
 lib/liblunet-static.a                 # Linux/macOS
 lib/lunet-static.lib                  # Windows
+LICENSE
+README.md                             # this document
+README-CN.md
 ```
 
 `generate_embed_scripts.lua` is executed with `xmake lua`; xmake is used only

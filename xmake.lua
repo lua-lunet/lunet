@@ -774,11 +774,15 @@ task_end()
 task("build-release")
     set_menu {
         usage = "xmake build-release",
-        description = "Configure and build release profile"
+        description = "Configure and build release profile (including SDK targets)"
     }
     on_run(function ()
         os.exec("xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n -y")
         os.exec("xmake build")
+        -- SDK targets are set_default(false); build them explicitly so the
+        -- local release gate covers what CI packages (#117).
+        os.exec("xmake build lunet-static")
+        os.exec("xmake build sdk-api-test")
     end)
 task_end()
 

@@ -242,6 +242,9 @@ jobs:
         cp ext/lnt_shared/target/release/liblnt_shared.so "$DIST_DIR/lunet/"
         cp ext/jsonic/jsonic.lua ext/jsonic/dkjson-encode-v2.10.lua "$DIST_DIR/lunet/"
         cp ext/jsonic/target/release/liblunet_jsonic.so "$DIST_DIR/lunet/"
+        # DB transaction wrappers (#119): one per driver, deliberately not shared.
+        cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
+           ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
         tar -C "$DIST_DIR" -czf lunet-linux-amd64.tar.gz .
 
     - name: Package release archive (macOS)
@@ -262,6 +265,9 @@ jobs:
         cp ext/lnt_shared/target/release/liblnt_shared.dylib "$DIST_DIR/lunet/"
         cp ext/jsonic/jsonic.lua ext/jsonic/dkjson-encode-v2.10.lua "$DIST_DIR/lunet/"
         cp ext/jsonic/target/release/liblunet_jsonic.dylib "$DIST_DIR/lunet/"
+        # DB transaction wrappers (#119): one per driver, deliberately not shared.
+        cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
+           ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
         tar -C "$DIST_DIR" -czf lunet-macos.tar.gz .
 
     - name: Package release SDK (Linux)
@@ -308,6 +314,8 @@ jobs:
         Get-ChildItem -Path build -Recurse -Filter *.dll | Where-Object { $_.FullName -match '\\lunet\\' } | ForEach-Object {
           Copy-Item $_.FullName (Join-Path $dist "lunet")
         }
+        # DB transaction wrappers (#119): one per driver, deliberately not shared.
+        Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
         Compress-Archive -Path (Join-Path $dist "*") -DestinationPath lunet-windows-amd64.zip -Force
 
     - name: Package release SDK (Windows)
@@ -696,6 +704,10 @@ jobs:
       uses: actions/checkout@v4
       with:
         ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
+        fetch-depth: 0  # full tag history for per-tag release notes
+
+    - name: Setup xmake
+      uses: xmake-io/github-action-setup-xmake@v1
 
     - name: Download release archives
       uses: actions/download-artifact@v4
@@ -704,12 +716,19 @@ jobs:
         merge-multiple: true
         path: release-assets
 
+    - name: Generate release notes
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        LUNET_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}
+      run: |
+        xmake lua bin/generate_release_notes.lua > release-notes.md
+        cat release-notes.md
+
     - name: Create or update GitHub release
       uses: softprops/action-gh-release@v2
       with:
         name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}
-        body_path: .github/release-template.md
-        generate_release_notes: true
+        body_path: release-notes.md
         files: |
           release-assets/lunet-linux-amd64.tar.gz
           release-assets/lunet-macos.tar.gz

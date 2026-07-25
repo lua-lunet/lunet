@@ -259,13 +259,18 @@ static void lunet_runtime_set_error(char *error, size_t error_len, const char *f
   va_end(ap);
 }
 
-static void lunet_runtime_configure_cpath(lua_State *L, const char *executable_path) {
+/* Prepend the executable's directory (and its lunet/ subdirectory) to both
+ * package.cpath and package.path, so binary modules and the Lua loaders that
+ * ship beside them resolve regardless of the working directory. */
+static void lunet_runtime_configure_module_paths(lua_State *L, const char *executable_path) {
   char *resolved_path;
   char *last_slash;
   char *last_backslash;
   char *last_sep;
   const char *old_cpath;
+  const char *old_path;
   char new_cpath[4096];
+  char new_path[4096];
   int written;
 
   if (!L || !executable_path || executable_path[0] == '\0') {
@@ -306,6 +311,31 @@ static void lunet_runtime_configure_cpath(lua_State *L, const char *executable_p
   }
   lua_pushstring(L, new_cpath);
   lua_setfield(L, -2, "cpath");
+
+  /* Extension modules that ship a Lua loader next to their binary
+   * (lunet/lnt_shared.lua, lunet/jsonic.lua, lunet/<driver>_tx.lua) are only
+   * reachable if package.path covers the same directories as cpath above.
+   * Without this, require("lunet.postgres_tx") resolved only when the process
+   * happened to be started from the archive root. "package" is still on the
+   * stack at -1 here. */
+  lua_getfield(L, -1, "path");
+  old_path = lua_tostring(L, -1);
+  lua_pop(L, 1);
+#if defined(_WIN32)
+  written = snprintf(new_path, sizeof(new_path), "%s\\lunet\\?.lua;%s\\?.lua;%s",
+                     resolved_path, resolved_path, old_path ? old_path : "");
+#else
+  written = snprintf(new_path, sizeof(new_path), "%s/lunet/?.lua;%s/?.lua;%s",
+                     resolved_path, resolved_path, old_path ? old_path : "");
+#endif
+  if (written < 0 || (size_t)written >= sizeof(new_path)) {
+    /* A truncated path would silently break module loading; keep the default. */
+    fprintf(stderr, "[LUNET] warning: executable path too long, package.path unchanged\n");
+  } else {
+    lua_pushstring(L, new_path);
+    lua_setfield(L, -2, "path");
+  }
+
   lua_pop(L, 1);
   free(resolved_path);
 }
@@ -377,7 +407,7 @@ int lunet_runtime_init(lunet_runtime_t **out_runtime,
   luaL_openlibs(runtime->L);
   set_default_luaL(runtime->L);
   lunet_open(runtime->L);
-  lunet_runtime_configure_cpath(runtime->L, options ? options->executable_path : NULL);
+  lunet_runtime_configure_module_paths(runtime->L, options ? options->executable_path : NULL);
   g_active_runtime = runtime;
   g_runtime_consumed = 1;
   *out_runtime = runtime;

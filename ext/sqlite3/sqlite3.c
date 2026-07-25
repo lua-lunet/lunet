@@ -598,12 +598,25 @@ int lunet_db_query(lua_State* L) {
     return 2;
   }
 
+  /* Bind trailing arguments as parameters, same as db.query_params. Without
+   * this, db.query(conn, sql, ...) silently discarded its parameters and left
+   * every '?' unbound (i.e. NULL), which the sqlite3 API reports as success. */
+  ctx->params = collect_params(L, 3, &ctx->nparams);
+  if (ctx->nparams < 0) {
+    lunet_free_nonnull(ctx->query);
+    lunet_free_nonnull(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
   lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_query_work_cb, db_query_after_cb);
   if (ret < 0) {
     lunet_coref_release(L, ctx->co_ref);
     lunet_free_nonnull(ctx->query);
+    free_params(ctx->params, ctx->nparams);
     lunet_free_nonnull(ctx);
     lua_pushnil(L);
     lua_pushstring(L, uv_strerror(ret));
@@ -620,7 +633,7 @@ typedef struct {
 
   lunet_sqlite_conn_t* wrapper;
   char* query;
-  
+
   param_t* params;
   int nparams;
 
@@ -768,12 +781,25 @@ int lunet_db_exec(lua_State* L) {
     return 2;
   }
 
+  /* Bind trailing arguments as parameters, same as db.exec_params. Without
+   * this, db.exec(conn, sql, ...) silently discarded its parameters and left
+   * every '?' unbound (i.e. NULL), which the sqlite3 API reports as success. */
+  ctx->params = collect_params(L, 3, &ctx->nparams);
+  if (ctx->nparams < 0) {
+    lunet_free_nonnull(ctx->query);
+    lunet_free_nonnull(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
   lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_exec_work_cb, db_exec_after_cb);
   if (ret < 0) {
     lunet_coref_release(L, ctx->co_ref);
     lunet_free_nonnull(ctx->query);
+    free_params(ctx->params, ctx->nparams);
     lunet_free_nonnull(ctx);
     lua_pushnil(L);
     lua_pushstring(L, uv_strerror(ret));
@@ -781,26 +807,6 @@ int lunet_db_exec(lua_State* L) {
   }
 
   return lua_yield(L, 0);
-}
-
-int lunet_db_escape(lua_State* L) {
-  luaL_checkstring(L, 1);
-  lua_getglobal(L, "string");
-  lua_getfield(L, -1, "gsub");
-  lua_remove(L, -2); /* remove string table */
-
-  if (!lua_isfunction(L, -1)) {
-    return luaL_error(L, "string.gsub is not available");
-  }
-
-  lua_pushvalue(L, 1);
-  lua_pushstring(L, "'");
-  lua_pushstring(L, "''");
-
-  if (lua_pcall(L, 3, 1, 0) != LUA_OK) {
-    return lua_error(L);
-  }
-  return 1;
 }
 
 int lunet_db_query_params(lua_State* L) {

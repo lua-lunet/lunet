@@ -11,3 +11,12 @@ tmp/
 # Rust build artifacts for ext/lnt_shared, ext/jsonic
 ext/lnt_shared/target/
 ext/jsonic/target/
+.DS_Store
+# Alternate xmake build dirs (build/ and build_* covered above)
+build-*/
+# SDK example outputs: generated blob dir and self-contained app binaries
+/generated/
+sdk-embedded-app*
+my-lunet-app*
+*.run
+.env

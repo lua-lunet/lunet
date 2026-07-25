@@ -117,6 +117,7 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1
 | 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + prepared statements (`$1`) | `xmake build lunet-postgres` + Postgres server | `"$LUNET_BIN" examples/05_db_postgres.lua` |
 | 08 | [`examples/08_lnt_shared.lua`](examples/08_lnt_shared.lua) | lunet-style shared dictionary via Rust FFI | `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_lnt_shared.lua` |
 | 09 | [`examples/09_jsonic_demo.lua`](examples/09_jsonic_demo.lua) | dkjson-style JSON encode/decode via Rust FFI | `xmake build-jsonic` | `"$LUNET_BIN" examples/09_jsonic_demo.lua` |
+| 10 | [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) | **Canonical tiny MCP server**: SSE transport + OpenAlex API via `lunet.httpc`, no DB, loopback only | `xmake build lunet-httpc` + `OPEN_ALEX_API_KEY` in `.env` | `"$LUNET_BIN" examples/mcp_openalex_sse/main.lua` |
 
 See also [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app) for a complete RealWorld "Conduit" API implementation.
 

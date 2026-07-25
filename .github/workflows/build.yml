@@ -448,8 +448,18 @@ jobs:
           # libucrt.lib ... is imported by" warnings, which are the tell).
           cl /nologo /std:c11 /MD /I include /I generated /I "$env:VCPKG_ROOT\installed\x64-windows\include" examples\sdk_embed\main.c lib\lunet-static.lib /link /LIBPATH:"$env:VCPKG_ROOT\installed\x64-windows\lib" lua51.lib uv.lib zlib.lib ws2_32.lib iphlpapi.lib userenv.lib psapi.lib advapi32.lib user32.lib shell32.lib ole32.lib dbghelp.lib /OUT:sdk-embedded-app.exe
           if ($LASTEXITCODE -ne 0) { throw "SDK example compile failed" }
+          # /MD plus the dynamic vcpkg triplet means the exe loads lua51.dll,
+          # uv.dll and zlib1.dll at runtime. They live in vcpkg's bin, not in
+          # the SDK archive, so without this the process dies before main()
+          # with STATUS_DLL_NOT_FOUND (0xC0000135) and prints nothing at all.
+          $env:PATH = "$env:VCPKG_ROOT\installed\x64-windows\bin;$env:PATH"
           & .\sdk-embedded-app.exe
-          if ($LASTEXITCODE -ne 0) { throw "SDK example execution failed" }
+          $appExit = $LASTEXITCODE
+          if ($appExit -ne 0) {
+            # Report the code: a bare "execution failed" with no stdout is
+            # indistinguishable from a loader failure, which cost a CI cycle.
+            throw ("SDK example execution failed (exit code {0} / 0x{1:X8})" -f $appExit, $appExit)
+          }
         } finally {
           Pop-Location
         }

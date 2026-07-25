@@ -77,6 +77,11 @@ cl /nologo /std:c11 /I include /I generated `
 .\my-lunet-app.exe
 ```
 
+Name the output after your appliance. The convention used by downstream
+projects is `<app>-<os>-<arch>.run` (for example `webdav-linux-amd64.run`):
+a single self-contained executable that users run directly, with no
+extracted script tree and nothing else installed.
+
 ## C API and lifecycle
 
 `include/lunet.h` exposes an opaque `lunet_runtime_t` and four functions:

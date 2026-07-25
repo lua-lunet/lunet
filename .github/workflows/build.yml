@@ -1,4 +1,18 @@
 name: Build
+#
+# AppVeyor checks are a FALSE ALARM. Ignore them.
+#
+# The "continuous-integration/appveyor/pr" and ".../branch" checks that appear
+# red on pull requests are not this workflow and are not a real signal. The
+# AppVeyor account was deleted before its jobs were removed, so the webhooks
+# are orphaned: they report failure without ever building anything, and there
+# is no account left to switch them off. Clearing them needs a repo deepclean
+# (or a recreate), which is deferred until closer to 1.0.0.
+#
+# They are deliberately excluded from the required status checks on main. The
+# GitHub Actions jobs below are the only build signal that counts.
+#
+# This is also documented in the release quality gate in AGENTS.md.
 
 on:
   push:
@@ -61,7 +75,9 @@ jobs:
     - name: Install Dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        brew install pkg-config libuv luajit zlib sqlite3 libsodium curl libpq mysql-client
+        # coreutils provides gtimeout: macOS has no GNU timeout, and the
+        # "(Unix)" steps below need one. The easy-memory job already does this.
+        brew install pkg-config libuv luajit zlib sqlite3 libsodium curl libpq mysql-client coreutils
         echo "PKG_CONFIG_PATH=$(brew --prefix zlib)/lib/pkgconfig:$(brew --prefix curl)/lib/pkgconfig:$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mysql-client)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
 
     - name: Setup vcpkg (Windows)
@@ -151,7 +167,8 @@ jobs:
       run: |
         SDK_API_TEST=$(find build -type f -name sdk-api-test | head -n 1)
         if [ -z "$SDK_API_TEST" ]; then echo "sdk-api-test not found" >&2; exit 1; fi
-        timeout 10 "$SDK_API_TEST"
+        if command -v gtimeout &>/dev/null; then TMO=gtimeout; else TMO=timeout; fi
+        $TMO 10 "$SDK_API_TEST"
 
     - name: C SDK lifecycle test (Windows)
       if: runner.os == 'Windows'
@@ -403,7 +420,8 @@ jobs:
             $(pkg-config --cflags luajit libuv zlib) \
             examples/sdk_embed/main.c lib/liblunet-static.a \
             $(pkg-config --libs luajit libuv zlib) -o sdk-embedded-app
-          timeout 10 ./sdk-embedded-app
+          if command -v gtimeout &>/dev/null; then TMO=gtimeout; else TMO=timeout; fi
+          $TMO 10 ./sdk-embedded-app
         )
 
     - name: Verify packaged SDK (Windows)
@@ -421,10 +439,27 @@ jobs:
           $env:LUNET_EMBED_PROJECT_ROOT = $verify
           xmake lua bin\generate_embed_scripts.lua
           if ($LASTEXITCODE -ne 0) { throw "SDK blob generation failed" }
-          cl /nologo /std:c11 /I include /I generated /I "$env:VCPKG_ROOT\installed\x64-windows\include" examples\sdk_embed\main.c lib\lunet-static.lib /link /LIBPATH:"$env:VCPKG_ROOT\installed\x64-windows\lib" lua51.lib uv.lib zlib.lib ws2_32.lib iphlpapi.lib userenv.lib psapi.lib advapi32.lib user32.lib shell32.lib ole32.lib dbghelp.lib /OUT:sdk-embedded-app.exe
+          # /MD is required, not optional: lunet-static.lib is built against the
+          # dynamic CRT, so its objects reference __imp_ CRT symbols, and the
+          # vcpkg x64-windows triplet is dynamic too. Without /MD, cl defaults to
+          # the static CRT and the link dies with LNK2019 on __imp__fullpath,
+          # __imp_fopen, __imp_fwrite, __imp_realloc, __imp_strerror and
+          # __imp__mkdir (preceded by a wall of LNK4217/LNK4286 "defined in
+          # libucrt.lib ... is imported by" warnings, which are the tell).
+          cl /nologo /std:c11 /MD /I include /I generated /I "$env:VCPKG_ROOT\installed\x64-windows\include" examples\sdk_embed\main.c lib\lunet-static.lib /link /LIBPATH:"$env:VCPKG_ROOT\installed\x64-windows\lib" lua51.lib uv.lib zlib.lib ws2_32.lib iphlpapi.lib userenv.lib psapi.lib advapi32.lib user32.lib shell32.lib ole32.lib dbghelp.lib /OUT:sdk-embedded-app.exe
           if ($LASTEXITCODE -ne 0) { throw "SDK example compile failed" }
+          # /MD plus the dynamic vcpkg triplet means the exe loads lua51.dll,
+          # uv.dll and zlib1.dll at runtime. They live in vcpkg's bin, not in
+          # the SDK archive, so without this the process dies before main()
+          # with STATUS_DLL_NOT_FOUND (0xC0000135) and prints nothing at all.
+          $env:PATH = "$env:VCPKG_ROOT\installed\x64-windows\bin;$env:PATH"
           & .\sdk-embedded-app.exe
-          if ($LASTEXITCODE -ne 0) { throw "SDK example execution failed" }
+          $appExit = $LASTEXITCODE
+          if ($appExit -ne 0) {
+            # Report the code: a bare "execution failed" with no stdout is
+            # indistinguishable from a loader failure, which cost a CI cycle.
+            throw ("SDK example execution failed (exit code {0} / 0x{1:X8})" -f $appExit, $appExit)
+          }
         } finally {
           Pop-Location
         }

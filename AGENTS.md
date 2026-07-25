@@ -47,6 +47,21 @@ Before creating or announcing a release:
    - `## Quick Start`
 4. **Verify before sign-off:** Check the published release page and confirm notes formatting plus all assets are present.
 5. **If anything is missing:** Fix workflow/release and republish before telling downstream users to consume the tag.
+6. **Ignore the AppVeyor checks.** `continuous-integration/appveyor/pr` and
+   `.../branch` are orphaned webhooks: the AppVeyor account was deleted before
+   its jobs were removed, so they report failure without building anything and
+   there is no account left to disable them. They are excluded from the
+   required status checks on `main`, and clearing them needs a repo deepclean
+   deferred until closer to 1.0.0. GitHub Actions is the only build signal.
+
+**Branch protection:** `main` requires the GitHub Actions build, embed-scripts
+and easy-memory checks across Linux/macOS/Windows, with `strict` set so a
+branch must be up to date before it merges. `Publish release` is deliberately
+*not* required, because it is skipped on non-tag pushes and a skipped required
+check would deadlock every merge. Without these, a PR with auto-merge enabled
+merges instantly and its CI jobs die at checkout with
+`couldn't find remote ref refs/pull/<n>/merge` — which is how #120 landed with
+no CI signal at all.
 
 ## Example Application
 

@@ -1,0 +1,19 @@
+# TODO when back on fast networks fix debian make init checks
+#
+# Skeleton for the Debian (trixie) dev-setup verification from
+# https://github.com/lua-lunet/lunet/issues/123 — not wired up yet.
+#
+# Intent: prove that scripts/deps/debian.sh + `make init` install the full
+# lunet dev toolchain on a clean debian:trixie machine, the same list the
+# CI "Install Dependencies (Linux)" step uses. Deferred because pulling
+# base images on public wifi is rude; colima is aarch64 and its volume
+# mounts are broken, so `docker cp` scripts in rather than `-v` mounting.
+#
+# Intended shape once scripts/deps/debian.sh and the Makefile exist:
+# WORKDIR /lunet
+# COPY scripts/deps/debian.sh /lunet/scripts/deps/debian.sh
+# RUN /lunet/scripts/deps/debian.sh
+# COPY . /lunet
+# RUN make init && xmake build-release && xmake test
+FROM debian:trixie
+RUN echo "TODO when back on fast networks fix debian make init checks (issue #123)"

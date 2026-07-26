@@ -742,7 +742,27 @@ task("check")
         description = "Run luacheck static analysis"
     }
     on_run(function ()
-        os.exec("luacheck --config .luacheckrc test/ spec/ examples/ types/")
+        -- Prefer the luarocks user tree: a luacheck installed for the
+        -- system Lua (e.g. homebrew lua 5.5, which luacheck 1.2.0 cannot
+        -- run under) may shadow a working one on PATH. Install a working
+        -- copy with: luarocks --lua-version=5.1 --lua-dir=$(brew --prefix
+        -- luajit) install luacheck
+        local candidates = {
+            path.join(os.getenv("HOME") or "", ".luarocks", "bin", "luacheck"),
+            "luacheck",
+        }
+        local luacheck = nil
+        for _, candidate in ipairs(candidates) do
+            if candidate == "luacheck" or os.isfile(candidate) then
+                local ok = os.execv(candidate, {"--version"}, {try = true})
+                if ok == 0 then
+                    luacheck = candidate
+                    break
+                end
+            end
+        end
+        assert(luacheck, "no working luacheck found (see the comment in the check task for install instructions)")
+        os.execv(luacheck, {"--config", ".luacheckrc", "test/", "spec/", "examples/", "types/"})
     end)
 task_end()
 

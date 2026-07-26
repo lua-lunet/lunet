@@ -233,8 +233,13 @@ end
 local highlights = compute_highlights()
 local static_body = io.readfile(path.join(".github", "release-template.md"))
 
-print("## Highlights")
-print("")
-print(highlights)
-print("")
-print(static_body)
+local notes = table.concat({ "## Highlights", "", highlights, "", static_body }, "\n")
+
+-- `xmake lua` echoes the script chunk's result to stdout as an ANSI-coloured
+-- "{ }" when the chunk returns nothing, so stdout cannot be redirected into
+-- the release body (v0.5.0 shipped with that trailing "{ }"). The script
+-- writes the file itself; stdout is for the CI log only.
+local out_path = os.getenv("LUNET_RELEASE_NOTES_OUT") or "release-notes.md"
+io.writefile(out_path, notes)
+io.stderr:write("[release-notes] wrote " .. out_path .. "\n")
+print(notes)

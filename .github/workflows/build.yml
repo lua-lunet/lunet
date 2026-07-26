@@ -756,7 +756,7 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         LUNET_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}
       run: |
-        xmake lua bin/generate_release_notes.lua > release-notes.md
+        xmake lua bin/generate_release_notes.lua
         cat release-notes.md
 
     - name: Create or update GitHub release

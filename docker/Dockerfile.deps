@@ -1,19 +1,60 @@
-# TODO when back on fast networks fix debian make init checks
+# Verifies issue #123 acceptance: prove that `contributing/deps/debian.sh` +
+# `make init` install the full lunet dev toolchain on a clean debian:trixie
+# (arm64) machine — the same list the CI "Install Dependencies (Linux)" step
+# uses. This is the Phase E Docker check from the issue.
 #
-# Skeleton for the Debian (trixie) dev-setup verification from
-# https://github.com/lua-lunet/lunet/issues/123 — not wired up yet.
-#
-# Intent: prove that scripts/deps/debian.sh + `make init` install the full
-# lunet dev toolchain on a clean debian:trixie machine, the same list the
-# CI "Install Dependencies (Linux)" step uses. Deferred because pulling
-# base images on public wifi is rude; colima is aarch64 and its volume
-# mounts are broken, so `docker cp` scripts in rather than `-v` mounting.
-#
-# Intended shape once scripts/deps/debian.sh and the Makefile exist:
-# WORKDIR /lunet
-# COPY scripts/deps/debian.sh /lunet/scripts/deps/debian.sh
-# RUN /lunet/scripts/deps/debian.sh
-# COPY . /lunet
-# RUN make init && xmake build-release && xmake test
-FROM debian:trixie
-RUN echo "TODO when back on fast networks fix debian make init checks (issue #123)"
+# Build:  docker build --no-cache -f docker/Dockerfile.deps -t lunet-deps:trixie .
+# Run:    docker run --rm lunet-deps:trixie bash -c "xmake --version && luacheck --version"
+# (classic builder only — no BuildKit, no mounts; colima volume mounts are broken)
+
+FROM --platform=linux/arm64 debian:trixie
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# sudo is needed by debian.sh --ci (it sets SUDO="sudo"); curl+ca-certificates
+# are needed for the xmake installer download below.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      sudo curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only what init+build need (respect .dockerignore which covers build/,
+# .tmp/, .git/, .xmake/, etc).
+COPY contributing/ /lunet/contributing/
+COPY Makefile xmake.lua /lunet/
+COPY src/ /lunet/src/
+COPY include/ /lunet/include/
+COPY ext/ /lunet/ext/
+COPY bin/ /lunet/bin/
+COPY test/ /lunet/test/
+COPY spec/ /lunet/spec/
+COPY types/ /lunet/types/
+COPY examples/ /lunet/examples/
+COPY .luacheckrc /lunet/
+
+WORKDIR /lunet
+
+# Install system deps + luarocks QA tools (luacheck, busted, luafilesystem).
+# --ci sets SUDO="sudo" and --no-install-recommends for minimal image size.
+RUN bash contributing/deps/debian.sh --ci
+
+# xmake pinned to the same version as docker/Dockerfile.
+ARG XMAKE_VERSION=3.0.8
+RUN curl -fsSL -o /tmp/xmake.run "https://github.com/xmake-io/xmake/releases/download/v${XMAKE_VERSION}/xmake-v${XMAKE_VERSION}.gz.run" \
+    && bash /tmp/xmake.run \
+    && rm /tmp/xmake.run
+
+ENV PATH="/root/.local/bin:/root/.luarocks/bin:${PATH}"
+ENV XMAKE_ROOT=y
+
+# `make init` on Linux dispatches to contributing/debian/Makefile which runs
+# deps + qa-tools + verify (lint, build-release, test). We override ROOT=/lunet
+# because the Makefile uses `git rev-parse --show-toplevel` which fails without
+# .git in the container.
+RUN make init ROOT=/lunet
+
+# Explicit re-run for clearer failure stages in the Docker build log (the
+# verify target in contributing/debian/Makefile already ran these, but separate
+# RUN lines make it obvious which step failed if something breaks).
+RUN xmake lint
+RUN xmake build-release
+RUN xmake test

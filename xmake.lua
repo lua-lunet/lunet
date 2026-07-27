@@ -716,13 +716,17 @@ end
 task("init")
     set_menu {
         usage = "xmake init",
-        description = "Install local Lua QA dependencies via luarocks"
+        description = "Install Lua QA tools pinned to luajit (delegates to contributing/deps/qa-luarocks.sh)"
     }
     on_run(function ()
-        os.exec("luarocks install luafilesystem --local")
-        os.exec("luarocks install busted --local")
-        os.exec("luarocks install luacheck --local")
-        cprint("${green}Init complete.${clear} Add local rocks bin to PATH if needed.")
+        if is_host("windows") then
+            os.exec("luarocks install luafilesystem --local")
+            os.exec("luarocks install busted --local")
+            os.exec("luarocks install luacheck --local")
+            cprint("${green}Init complete.${clear} Add local rocks bin to PATH if needed.")
+        else
+            os.exec("bash contributing/deps/qa-luarocks.sh")
+        end
     end)
 task_end()
 

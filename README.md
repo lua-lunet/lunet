@@ -16,7 +16,7 @@ Lunet began as a way to write **tiny localhost MCP servers** — Model Context P
 |------|---------------|---------------|------------|
 | **Run Lua** | You write Lua apps; no C toolchain | A release archive for your OS | [Releases](https://github.com/lua-lunet/lunet/releases) |
 | **Package an appliance** | You ship one self-contained executable — your `main()` + Lunet + your app | The release SDK + a C compiler | [docs/EMBEDDING.md](docs/EMBEDDING.md) |
-| **Hack the core** | You develop Lunet itself, or want a minimal feature build | xmake + system dev libraries | [docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md) |
+| **Hack the core** | You develop Lunet itself, or want a minimal feature build | xmake + system dev libraries | `make init`, then [docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md) |
 
 ## Security posture: loopback by default
 

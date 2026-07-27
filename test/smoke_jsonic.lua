@@ -122,7 +122,7 @@ local function test_jsonic()
 
   -- ── Error handling ─────────────────────────────────────────────────────────
   do
-    local v, pos, err = json.decode("{not valid json}")
+    local v, _, err = json.decode("{not valid json}")
     check(v == nil, "invalid JSON should return nil value")
     check(type(err) == "string" and #err > 0, "invalid JSON should return an error message")
   end
@@ -137,7 +137,7 @@ local function test_jsonic()
   ok_step("decode of garbage does not raise")
 
   do
-    local ok_call, e = pcall(json.decode, 12345)
+    local ok_call, _ = pcall(json.decode, 12345)
     check(ok_call == false, "decode of a non-string must raise")
   end
   ok_step("decode of non-string argument raises")

@@ -30,7 +30,9 @@ function mysql.query(conn, query) end
 ---Execute a MySQL query
 ---@param conn lightuserdata The connection to execute the query on
 ---@param query string The query to execute
----@return table|nil result The result of the query or nil on error, affected_rows: The number of affected rows, last_insert_id: The last insert id
+---@return table|nil result The result of the query or nil on error,
+---affected_rows: The number of affected rows,
+---last_insert_id: The last insert id
 ---@return string|nil error Error message if failed
 function mysql.exec(conn, query) end
 

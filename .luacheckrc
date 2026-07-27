@@ -28,3 +28,8 @@ exclude_files = {
     -- extra globals (path, os.files, io.readfile, etc.) not in stock Lua 5.1
     "bin/**",
 }
+
+-- Type declaration stubs: unused arguments are inherent to the pattern
+files["types/"] = {
+    ignore = { "212" },
+}

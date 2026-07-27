@@ -45,9 +45,9 @@ print("[PAXE STRESS] PAXE initialized")
 for i = 1, num_keys do
     -- Generate deterministic test keys (NOT for production!)
     local key = string.char(i):rep(32)
-    local ok, err = paxe.keystore_set(i, key)
-    if not ok then
-        print("[ERROR] Failed to set key " .. i .. ": " .. tostring(err))
+    local ks_ok, ks_err = paxe.keystore_set(i, key)
+    if not ks_ok then
+        print("[ERROR] Failed to set key " .. i .. ": " .. tostring(ks_err))
         os.exit(1)
     end
 end
@@ -80,7 +80,7 @@ for i = 1, iterations do
         end
     else
         -- Decrypt
-        local decrypted, dec_key_id, flags = paxe.try_decrypt(ciphertext)
+        local decrypted, dec_key_id, _ = paxe.try_decrypt(ciphertext)
         if not decrypted then
             errors = errors + 1
             if errors <= 5 then

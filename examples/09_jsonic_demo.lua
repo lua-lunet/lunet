@@ -69,7 +69,10 @@ lunet.spawn(function()
 
   -- ── Encoding ───────────────────────────────────────────────────────────────
   print("-- Encode --")
-  local compact = json.encode({ a = 1, b = { 1, 2, 3 }, c = "hi", d = json.null }, { keyorder = { "a", "b", "c", "d" } })
+  local compact = json.encode(
+    { a = 1, b = { 1, 2, 3 }, c = "hi", d = json.null },
+    { keyorder = { "a", "b", "c", "d" } }
+  )
   print("compact: " .. compact)
 
   local pretty = json.encode({ a = 1, nested = { b = 2 } }, { indent = true, keyorder = { "a", "nested" } })

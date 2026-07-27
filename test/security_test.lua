@@ -20,7 +20,7 @@ local function test_bind_public()
     socket.close(listener)
     os.exit(1)
   end
-  
+
   if string.find(err or "", "requires --dangerously", 1, true) then
     print("PASS: Rejected bind to 0.0.0.0: " .. err)
   else

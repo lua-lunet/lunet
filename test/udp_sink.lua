@@ -1,12 +1,12 @@
 --[[
   UDP Sink
-  
+
   Listens on 127.0.0.1:20002 and logs all received packets to
   .tmp/udp_sink.20002.log with arrival timestamps.
-  
+
   Usage:
     ./build/lunet test/udp_sink.lua
-    
+
   Note: This process stays alive until killed.
 ]]
 

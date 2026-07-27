@@ -66,12 +66,13 @@ lunet.spawn(function()
     end
     print("Connected to MySQL database: lunet_demo")
 
-    local result, err = db.exec(conn, "DROP TABLE IF EXISTS users")
+    local _, result
+    _, err = db.exec(conn, "DROP TABLE IF EXISTS users")
     if err then
         print("Warning: Could not drop existing table:", err)
     end
 
-    local result, err = db.exec(conn, [[
+    _, err = db.exec(conn, [[
         CREATE TABLE users (
             id INT AUTO_INCREMENT PRIMARY KEY,
             name VARCHAR(255) NOT NULL,
@@ -93,7 +94,7 @@ lunet.spawn(function()
     }
 
     for _, user in ipairs(users) do
-        local result, err = db.exec_params(
+        result, err = db.exec_params(
             conn,
             "INSERT INTO users (name, email, age) VALUES (?, ?, ?)",
             user.name,
@@ -109,7 +110,8 @@ lunet.spawn(function()
     print()
 
     print("Querying all users:")
-    local rows, err = db.query(conn, "SELECT id, name, email, age FROM users ORDER BY id")
+    local rows
+    rows, err = db.query(conn, "SELECT id, name, email, age FROM users ORDER BY id")
     if err then
         print("Query failed:", err)
     else
@@ -120,7 +122,7 @@ lunet.spawn(function()
     print()
 
     print("Querying one user (query_params):")
-    local rows, err = db.query_params(conn, "SELECT id, name, email FROM users WHERE name = ?", "Alice")
+    rows, err = db.query_params(conn, "SELECT id, name, email FROM users WHERE name = ?", "Alice")
     if err then
         print("Query failed:", err)
     else
@@ -131,7 +133,7 @@ lunet.spawn(function()
     print()
 
     print("Updating Bob's age to 36...")
-    local result, err = db.exec_params(conn, "UPDATE users SET age = ? WHERE name = ?", 36, "Bob")
+    result, err = db.exec_params(conn, "UPDATE users SET age = ? WHERE name = ?", 36, "Bob")
     if err then
         print("Update failed:", err)
     else
@@ -140,7 +142,7 @@ lunet.spawn(function()
     print()
 
     print("Deleting O'Brien...")
-    local result, err = db.exec_params(conn, "DELETE FROM users WHERE name = ?", "O'Brien")
+    result, err = db.exec_params(conn, "DELETE FROM users WHERE name = ?", "O'Brien")
     if err then
         print("Delete failed:", err)
     else
@@ -149,7 +151,7 @@ lunet.spawn(function()
     print()
 
     print("Final user list:")
-    local rows, err = db.query(conn, "SELECT id, name, email, age FROM users ORDER BY id")
+    rows, err = db.query(conn, "SELECT id, name, email, age FROM users ORDER BY id")
     if err then
         print("Query failed:", err)
     else

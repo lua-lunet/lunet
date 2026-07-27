@@ -47,8 +47,8 @@ local function test_lnt_shared()
 
   -- ── Open a dictionary ──────────────────────────────────────────────────────
   print("2. Opening dictionary (512 KiB) ...")
-  local ok, result = pcall(function() return lnt.store("smoke_test", 512 * 1024) end)
-  if not ok then
+  local store_ok, result = pcall(function() return lnt.store("smoke_test", 512 * 1024) end)
+  if not store_ok then
     print("FAIL: " .. tostring(result))
     __lunet_exit_code = 1
     return
@@ -248,7 +248,7 @@ local function test_lnt_shared()
     __lunet_exit_code = 1
     error("__smoke_abort__", 0)
   end
-  local function ok(msg)
+  local function ok_step(msg)
     step = step + 1
     print(("   OK (%d): %s"):format(step, msg))
   end
@@ -257,69 +257,72 @@ local function test_lnt_shared()
   end
   local aborted = select(2, pcall(function()
 
-  -- ── Missing-key error contracts ────────────────────────────────────────────
-  local v, e = cache:get("never_set")
-  check(v == nil and e == "not found", "get missing: want nil,'not found', got " .. tostring(v) .. "," .. tostring(e))
-  ok("get missing key -> nil, 'not found'")
+  local miss_v, miss_e = cache:get("never_set")
+  check(miss_v == nil and miss_e == "not found",
+    "get missing: want nil,'not found', got " .. tostring(miss_v) .. "," .. tostring(miss_e))
+  ok_step("get missing key -> nil, 'not found'")
 
   local d_ok, d_err = cache:delete("never_set")
   check(d_ok == nil and d_err == "not found", "delete missing should fail with 'not found'")
-  ok("delete missing key -> nil, 'not found'")
+  ok_step("delete missing key -> nil, 'not found'")
 
   local r_ok, r_err = cache:replace("never_set", "x")
   check(r_ok == nil and r_err == "not found", "replace missing should fail with 'not found'")
-  ok("replace missing key -> nil, 'not found'")
+  ok_step("replace missing key -> nil, 'not found'")
 
   local x_ok, x_err = cache:expire("never_set", 5)
   check(x_ok == nil and x_err == "not found", "expire missing should fail with 'not found'")
-  ok("expire missing key -> nil, 'not found'")
+  ok_step("expire missing key -> nil, 'not found'")
 
   local t_ok, t_err = cache:ttl("never_set")
   check(t_ok == nil and t_err == "not found", "ttl missing should fail with 'not found'")
-  ok("ttl missing key -> nil, 'not found'")
+  ok_step("ttl missing key -> nil, 'not found'")
 
   -- ── Type errors ────────────────────────────────────────────────────────────
   cache:set("str_for_incr", "not_a_number")
   local i_ok, i_err = cache:incr("str_for_incr", 1)
-  check(i_ok == nil and i_err == "type mismatch", "incr on string should fail with 'type mismatch', got " .. tostring(i_err))
-  ok("incr on string -> nil, 'type mismatch'")
+  check(
+    i_ok == nil and i_err == "type mismatch",
+    "incr on string should fail with 'type mismatch', got " .. tostring(i_err)
+  )
+  ok_step("incr on string -> nil, 'type mismatch'")
 
-  local set_ok, set_err = pcall(function() cache:set("bad", { 1 }) end)
+  local set_ok, _ = pcall(function() cache:set("bad", { 1 }) end)
   check(not set_ok, "set with table value should raise an error")
-  ok("set table value -> Lua error raised")
+  ok_step("set table value -> Lua error raised")
 
   -- ── Value type round-trips ─────────────────────────────────────────────────
   cache:set("bool_false", false)
   check(cache:get("bool_false") == false, "boolean false round-trip failed")
-  ok("boolean false round-trip")
+  ok_step("boolean false round-trip")
 
   cache:set("neg_float", -1234.5)
   local nf = cache:get("neg_float")
   check(type(nf) == "number" and math.abs(nf - (-1234.5)) < 1e-9, "negative float round-trip failed")
-  ok("negative float round-trip")
+  ok_step("negative float round-trip")
 
   cache:set("empty_str", "")
   check(cache:get("empty_str") == "", "empty string round-trip failed")
-  ok("empty string round-trip")
+  ok_step("empty string round-trip")
 
   cache:set("a\0b", "nul_key")
   check(cache:get("a\0b") == "nul_key", "binary key with NUL byte failed")
-  ok("binary key with embedded NUL")
+  ok_step("binary key with embedded NUL")
 
   local big = string.rep("z", 64 * 1024)
   cache:set("big_val", big)
   check(cache:get("big_val") == big, "64 KiB value round-trip failed")
-  ok("64 KiB value round-trip")
+  ok_step("64 KiB value round-trip")
 
   -- ── incr variants ──────────────────────────────────────────────────────────
   cache:flush_all()
-  local dv = cache:incr("ctr_default", nil, 0) -- delta omitted -> 1
-  check(dv == 1, "incr with default delta should give 1, got " .. tostring(dv))
-  ok("incr default delta = 1")
+  local incr_dv = cache:incr("ctr_default", nil, 0) -- delta omitted -> 1
+  check(incr_dv == 1, "incr with default delta should give 1, got " .. tostring(incr_dv))
+  ok_step("incr default delta = 1")
 
   local noinit_ok, noinit_err = cache:incr("no_such", 1)
   check(noinit_ok == nil and noinit_err == "not found", "incr without init on missing key should fail with 'not found'")
-  ok("incr missing key without init -> nil, 'not found'")
+  ok_step("incr missing key without init -> nil, 'not found'")
 
   -- ── Real TTL expiry end-to-end ─────────────────────────────────────────────
   -- NB: lunet.sleep takes MILLISECONDS; dict TTLs are in seconds.
@@ -329,7 +332,7 @@ local function test_lnt_shared()
   check(evicted >= 1, "flush_expired should evict >= 1, got " .. tostring(evicted))
   local gone = cache:get("will_expire")
   check(gone == nil, "expired key should be absent after flush_expired")
-  ok("flush_expired evicts real expired entries (" .. tostring(evicted) .. ")")
+  ok_step("flush_expired evicts real expired entries (" .. tostring(evicted) .. ")")
 
   cache:set("ttl_a", "x", 0.05)
   cache:set("ttl_b", "x", 0.05)
@@ -337,18 +340,18 @@ local function test_lnt_shared()
   lunet.sleep(100)
   local ev1 = cache:flush_expired(2) -- max = 2
   check(ev1 == 2, "flush_expired(max=2) should evict exactly 2, got " .. tostring(ev1))
-  ok("flush_expired honours max limit")
+  ok_step("flush_expired honours max limit")
 
   -- ── add with TTL ───────────────────────────────────────────────────────────
-  local a_ok = cache:add("temp_add", "v", 30)
-  check(a_ok == true, "add with TTL failed")
+  local ttl_a_ok = cache:add("temp_add", "v", 30)
+  check(ttl_a_ok == true, "add with TTL failed")
   local at = cache:ttl("temp_add")
   check(type(at) == "number" and at > 0 and at <= 30, "add TTL should be in (0,30], got " .. tostring(at))
-  ok("add with TTL sets expiry")
+  ok_step("add with TTL sets expiry")
 
   -- ── tostring ───────────────────────────────────────────────────────────────
   check(tostring(cache):find("smoke_test", 1, true) ~= nil, "tostring should include dict name")
-  ok("tostring includes dict name")
+  ok_step("tostring includes dict name")
 
   -- ── close() lifecycle ──────────────────────────────────────────────────────
   local tmp = lnt.store("smoke_close", 65536)
@@ -356,14 +359,15 @@ local function test_lnt_shared()
   check(tmp:close() == true, "close() should return true")
   check(tmp:close() == true, "second close() should be a safe no-op returning true")
   local cv, cerr = tmp:get("k")
-  check(cv == nil and cerr == "not found", "get after close should fail gracefully, got " .. tostring(cv) .. "," .. tostring(cerr))
-  ok("close() + double-close + use-after-close is safe")
+  check(
+    cv == nil and cerr == "not found",
+    "get after close should fail gracefully, got " .. tostring(cv) .. "," .. tostring(cerr)
+  )
+  ok_step("close() + double-close + use-after-close is safe")
 
-  -- A fresh handle to the same region still sees old data (region outlives
-  -- individual handles).
   local tmp2 = lnt.store("smoke_close", 65536)
   check(tmp2:get("k") == "v", "region should outlive a closed handle")
-  ok("region persists after single handle close")
+  ok_step("region persists after single handle close")
 
   end)) -- end of protected extended block
   if aborted ~= "__smoke_abort__" and aborted ~= nil then

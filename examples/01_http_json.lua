@@ -81,7 +81,7 @@ local function parse_request_line(data)
 end
 
 local function handle_request(client)
-    local data, err = socket.read(client)
+    local data, _ = socket.read(client)
     if not data then
         socket.close(client)
         return
@@ -127,7 +127,7 @@ lunet.spawn(function()
     print("  curl http://127.0.0.1:18080/hello")
 
     while true do
-        local client, cerr = socket.accept(listener)
+        local client, _ = socket.accept(listener)
         if client then
             lunet.spawn(function()
                 handle_request(client)

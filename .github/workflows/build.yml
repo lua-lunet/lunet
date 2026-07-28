@@ -64,20 +64,16 @@ jobs:
     - name: Install xmake
       uses: xmake-io/github-action-setup-xmake@v1
       with:
-        xmake-version: latest
+        xmake-version: "3.0.8"
 
     - name: Install Dependencies (Linux)
       if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y pkg-config libuv1-dev luajit libluajit-5.1-dev zlib1g-dev libsqlite3-dev libsodium-dev libcurl4-openssl-dev libpq-dev default-libmysqlclient-dev
+      run: bash contributing/deps/debian.sh --ci
 
     - name: Install Dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        # coreutils provides gtimeout: macOS has no GNU timeout, and the
-        # "(Unix)" steps below need one. The easy-memory job already does this.
-        brew install pkg-config libuv luajit zlib sqlite3 libsodium curl libpq mysql-client coreutils
+        bash contributing/deps/macos.sh
         echo "PKG_CONFIG_PATH=$(brew --prefix zlib)/lib/pkgconfig:$(brew --prefix curl)/lib/pkgconfig:$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mysql-client)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
 
     - name: Setup vcpkg (Windows)
@@ -91,37 +87,7 @@ jobs:
     - name: Install Dependencies (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
-      run: |
-        function Invoke-VcpkgWithRetry {
-          param(
-            [Parameter(Mandatory = $true)][string]$PackageSpec,
-            [int]$MaxAttempts = 4
-          )
-
-          for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-            Write-Host "Installing $PackageSpec (attempt $attempt/$MaxAttempts)"
-            & vcpkg install $PackageSpec
-            if ($LASTEXITCODE -eq 0) {
-              return
-            }
-            if ($attempt -eq $MaxAttempts) {
-              throw "vcpkg install failed for $PackageSpec after $MaxAttempts attempts."
-            }
-            $delay = 5 * $attempt
-            Write-Host "Retrying $PackageSpec in $delay seconds..."
-            Start-Sleep -Seconds $delay
-          }
-        }
-
-        # Install workflow dependencies with retry for transient vcpkg/network hiccups.
-        Invoke-VcpkgWithRetry "libuv:x64-windows"
-        Invoke-VcpkgWithRetry "luajit:x64-windows"
-        Invoke-VcpkgWithRetry "zlib:x64-windows"
-        Invoke-VcpkgWithRetry "sqlite3:x64-windows"
-        Invoke-VcpkgWithRetry "libpq[lz4,openssl,zlib]:x64-windows"
-        Invoke-VcpkgWithRetry "libmysql:x64-windows"
-        Invoke-VcpkgWithRetry "curl:x64-windows"
-        Invoke-VcpkgWithRetry "libsodium:x64-windows"
+      run: pwsh contributing/deps/windows.ps1
 
     - name: Configure (Unix)
       if: runner.os != 'Windows'
@@ -553,18 +519,16 @@ jobs:
     - name: Install xmake
       uses: xmake-io/github-action-setup-xmake@v1
       with:
-        xmake-version: latest
+        xmake-version: "3.0.8"
 
     - name: Install Dependencies (Linux)
       if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y pkg-config libuv1-dev luajit libluajit-5.1-dev zlib1g-dev
+      run: bash contributing/deps/debian.sh --ci
 
     - name: Install Dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        brew install pkg-config libuv luajit zlib
+        bash contributing/deps/macos.sh
         echo "PKG_CONFIG_PATH=$(brew --prefix zlib)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
 
     - name: Configure embed scripts build
@@ -604,25 +568,16 @@ jobs:
     - name: Install xmake
       uses: xmake-io/github-action-setup-xmake@v1
       with:
-        xmake-version: latest
+        xmake-version: "3.0.8"
 
     - name: Install Dependencies (Linux)
       if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          pkg-config \
-          libuv1-dev \
-          luajit \
-          libluajit-5.1-dev \
-          libsqlite3-dev \
-          libpq-dev \
-          default-libmysqlclient-dev
+      run: bash contributing/deps/debian.sh --ci
 
     - name: Install Dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        brew install pkg-config libuv luajit libpq mysql-client coreutils
+        bash contributing/deps/macos.sh
         echo "PKG_CONFIG_PATH=$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mysql-client)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
 
     - name: Setup vcpkg (Windows)
@@ -635,10 +590,8 @@ jobs:
 
     - name: Install Dependencies (Windows)
       if: runner.os == 'Windows'
-      run: |
-        vcpkg install libuv:x64-windows
-        vcpkg install luajit:x64-windows
-        vcpkg install sqlite3:x64-windows
+      shell: pwsh
+      run: pwsh contributing/deps/windows.ps1
 
     - name: Configure EasyMem + ASAN (Unix)
       if: runner.os != 'Windows'
@@ -729,10 +682,27 @@ jobs:
           exit $LASTEXITCODE
         }
 
+  lua-qa:
+    name: Lua QA (luacheck + C lint)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install xmake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: "3.0.8"
+    - name: Install QA deps
+      run: |
+        bash contributing/deps/debian.sh --ci --qa-only
+    - name: xmake lint
+      run: xmake lint
+    - name: xmake check
+      run: xmake check
+
   publish-release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))
-    needs: [build, embed-scripts, easy-memory]
+    needs: [build, embed-scripts, easy-memory, lua-qa]
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
     - name: Checkout
@@ -743,6 +713,8 @@ jobs:
 
     - name: Setup xmake
       uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: "3.0.8"
 
     - name: Download release archives
       uses: actions/download-artifact@v4
@@ -756,7 +728,7 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         LUNET_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}
       run: |
-        xmake lua bin/generate_release_notes.lua > release-notes.md
+        xmake lua bin/generate_release_notes.lua
         cat release-notes.md
 
     - name: Create or update GitHub release

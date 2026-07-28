@@ -7,7 +7,7 @@ local db = require("lunet.postgres")
 
 local function test_postgres()
     print("=== PostgreSQL Smoke Test ===")
-    
+
     -- Test 1: Open connection
     print("1. Opening connection...")
     local conn, err = db.open({
@@ -24,30 +24,34 @@ local function test_postgres()
         return
     end
     print("   OK: Connection opened")
-    
+
+    local _, rows
     -- Test 2: Create table
     print("2. Creating table...")
-    local result, err = db.exec(conn, "CREATE TABLE IF NOT EXISTS smoke_test (id SERIAL PRIMARY KEY, name VARCHAR(255))")
+    _, err = db.exec(
+      conn,
+      "CREATE TABLE IF NOT EXISTS smoke_test (id SERIAL PRIMARY KEY, name VARCHAR(255))"
+    )
     if err then
         print("FAIL: Could not create table: " .. tostring(err))
         __lunet_exit_code = 1
         return
     end
     print("   OK: Table created")
-    
+
     -- Test 3: Insert data
     print("3. Inserting data...")
-    result, err = db.exec(conn, "INSERT INTO smoke_test (name) VALUES ('hello')")
+    _, err = db.exec(conn, "INSERT INTO smoke_test (name) VALUES ('hello')")
     if err then
         print("FAIL: Could not insert: " .. tostring(err))
         __lunet_exit_code = 1
         return
     end
     print("   OK: Data inserted")
-    
+
     -- Test 4: Query data
     print("4. Querying data...")
-    local rows, err = db.query(conn, "SELECT * FROM smoke_test ORDER BY id DESC LIMIT 1")
+    rows, err = db.query(conn, "SELECT * FROM smoke_test ORDER BY id DESC LIMIT 1")
     if err then
         print("FAIL: Could not query: " .. tostring(err))
         __lunet_exit_code = 1
@@ -59,17 +63,17 @@ local function test_postgres()
         return
     end
     print("   OK: Query returned expected data")
-    
+
     -- Test 5: Clean up
     print("5. Cleaning up...")
     db.exec(conn, "DROP TABLE smoke_test")
     print("   OK: Table dropped")
-    
+
     -- Test 6: Close connection
     print("6. Closing connection...")
     db.close(conn)
     print("   OK: Connection closed")
-    
+
     print("")
     print("=== All PostgreSQL tests passed ===")
     __lunet_exit_code = 0

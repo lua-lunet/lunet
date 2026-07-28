@@ -16,7 +16,7 @@ Lunet 最初的用途是编写**微型 localhost MCP 服务器** —— 运行�
 |------|--------|----------|------------|
 | **运行 Lua** | 你写 Lua 应用；不想碰 C 工具链 | 对应 OS 的发布压缩包 | [发布页](https://github.com/lua-lunet/lunet/releases) |
 | **打包一体机** | 你要交付单一自包含可执行文件 —— 你的 `main()` + Lunet + 你的应用 | 发布版 SDK + 一个 C 编译器 | [docs/EMBEDDING-CN.md](docs/EMBEDDING-CN.md) |
-| **hack 核心** | 你开发 Lunet 本身，或想要最小化功能构建 | xmake + 系统开发库 | [docs/XMAKE_INTEGRATION-CN.md](docs/XMAKE_INTEGRATION-CN.md) |
+| **hack 核心** | 你开发 Lunet 本身，或想要最小化功能构建 | xmake + 系统开发库 | `make init`，然后 [docs/XMAKE_INTEGRATION-CN.md](docs/XMAKE_INTEGRATION-CN.md) |
 
 ## 安全姿态：默认仅回环
 

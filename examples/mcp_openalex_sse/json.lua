@@ -97,7 +97,7 @@ local string_escapes = {
 
 local parse_value  -- forward declaration
 
-local function parse_error(str, pos, msg)
+local function parse_error(_, pos, msg)
     error(string.format("JSON parse error at byte %d: %s", pos, msg), 0)
 end
 

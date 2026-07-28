@@ -42,19 +42,19 @@ local function json_encode(t)
 end
 
 local routes = {
-    { method = "GET", pattern = "/", handler = function(req, params)
+    { method = "GET", pattern = "/", handler = function(_, _)
         return { message = "Welcome to Lunet routing example!" }
     end },
-    { method = "GET", pattern = "/users", handler = function(req, params)
+    { method = "GET", pattern = "/users", handler = function(_, _)
         return { users = { { id = 1, name = "Alice" }, { id = 2, name = "Bob" } } }
     end },
-    { method = "GET", pattern = "/users/:id", handler = function(req, params)
+    { method = "GET", pattern = "/users/:id", handler = function(_, params)
         return { user = { id = tonumber(params.id), name = "User " .. params.id } }
     end },
-    { method = "GET", pattern = "/articles/:slug", handler = function(req, params)
+    { method = "GET", pattern = "/articles/:slug", handler = function(_, params)
         return { article = { slug = params.slug, title = "Article: " .. params.slug } }
     end },
-    { method = "GET", pattern = "/articles/:slug/comments/:id", handler = function(req, params)
+    { method = "GET", pattern = "/articles/:slug/comments/:id", handler = function(_, params)
         return { comment = { article_slug = params.slug, comment_id = params.id } }
     end },
 }
@@ -100,7 +100,7 @@ local function parse_request(data)
 end
 
 local function handle_request(client)
-    local data, err = socket.read(client)
+    local data, _ = socket.read(client)
     if not data then
         socket.close(client)
         return
@@ -149,7 +149,7 @@ lunet.spawn(function()
     print("  curl http://127.0.0.1:18081/articles/my-post/comments/5")
 
     while true do
-        local client, cerr = socket.accept(listener)
+        local client, _ = socket.accept(listener)
         if client then
             lunet.spawn(function()
                 handle_request(client)

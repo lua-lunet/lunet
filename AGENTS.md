@@ -8,12 +8,14 @@ You MUST NOT do any git reset or stash or an git rm or rm or anything that might
 
 ## **Operational Rules (STRICT)**
 
+0.  **DEVELOPER SETUP:** New machines run `make init` (delegates per-OS under `contributing/`). `xmake init` remains as the QA-tools-only entry and delegates to the same `contributing/deps/qa-luarocks.sh` script on Unix. xmake version is pinned via `.mise.toml` and CI uses the same pin.
 1.  **TIMEOUTS:** All commands interacting with servers or DB must have a timeout (`timeout 3` or `curl --max-time 3`).
 2.  **NO DATA LOSS:** Never use `rm -rf` to clear directories. Move them to `.tmp/` with a timestamp: `mv dir .tmp/dir.YYYYMMDD_HHMMSS`.
 3.  **LOGGING:** All test runs must log stdout/stderr to `.tmp/logs/YYYYMMDD_HHMMSS/`.
 4.  **SECURE BINDING:** Never bind to `0.0.0.0` or public interfaces. Use Unix sockets (preferred) or `127.0.0.1` (development). Only bypass this rule if the user explicitly requests it via CLI flag `--dangerously-skip-loopback-restriction`.
 5.  **MANDATORY LOCAL CI PARITY BEFORE PUSH:** Before any push, agents MUST run locally all steps from `.github/workflows/build.yml` for their current OS matrix entry (Linux/macOS/Windows), including configure, build, and packaging commands. If any required step cannot be run locally or fails, do not push until fixed or explicitly approved by the user.
     - Minimum local gate for this repo: `xmake lint`, `xmake test` (or CI-equivalent Lua test step), `xmake preflight-easy-memory`, and `xmake build-release` (which also builds the `lunet-static` and `sdk-api-test` SDK targets).
+    - CI installs deps via `contributing/deps/*` (dev/CI parity, issue #123). The same scripts `make init` uses on developer machines drive the `build`, `embed-scripts`, `easy-memory`, and `lua-qa` jobs.
     - If the change affects examples, packaging, or specialized jobs, run the corresponding local equivalents for the current OS as well.
     - macOS local notes: Homebrew's `zlib`, `curl`, `libpq`, and `mysql-client` are keg-only — export `PKG_CONFIG_PATH` with each `$(brew --prefix <pkg>)/lib/pkgconfig` before building drivers or running preflight (same as CI). As of 2026-07-25, ASan-instrumented debug binaries hang in `__malloc_init` at dyld time on macOS 26 (observed on 26.5.2, even for hello-world scripts; release and non-ASan debug/trace builds are unaffected). This blocks the ASan legs of `xmake preflight-easy-memory` locally — environmental, CI is unaffected.
 
@@ -54,8 +56,8 @@ Before creating or announcing a release:
    required status checks on `main`, and clearing them needs a repo deepclean
    deferred until closer to 1.0.0. GitHub Actions is the only build signal.
 
-**Branch protection:** `main` requires the GitHub Actions build, embed-scripts
-and easy-memory checks across Linux/macOS/Windows, with `strict` set so a
+**Branch protection:** `main` requires the GitHub Actions build, embed-scripts,
+easy-memory and lua-qa checks across Linux/macOS/Windows, with `strict` set so a
 branch must be up to date before it merges. `Publish release` is deliberately
 *not* required, because it is skipped on non-tag pushes and a skipped required
 check would deadlock every merge. Without these, a PR with auto-merge enabled

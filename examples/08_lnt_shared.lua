@@ -54,7 +54,7 @@ lunet.spawn(function()
   -- ── Numeric storage and atomic increment ───────────────────────────────────
   print("-- Atomic counters --")
   -- incr with init creates the key if absent.
-  for i = 1, 5 do
+  for _ = 1, 5 do
     cache:incr("page_views", 1, 0)
   end
   print("page_views = " .. tostring(cache:get("page_views")))

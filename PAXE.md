@@ -1,248 +1,196 @@
 # PAXE: Packet Encryption Extension Module
 
-PAXE (Packet Encryption) is a secure packet encryption extension for Lunet, designed for applications that need to handle peer-to-peer encryption/decryption at the application level.
+PAXE (Packet Encryption) is a secure datagram encryption extension for Lunet, designed for clusters that need authenticated, encrypted peer-to-peer UDP traffic at the application level.
 
-## Architecture
+This document is the authoritative specification of the PAXE wire protocol. Implementations are written against this document; where it and any older description disagree, this document wins. PAXE follows the wire format of the reference implementation ([trex-paxe](https://github.com/trex-paxos/trex-paxos-jvm/blob/main/trex-paxe/README.md)) except where a divergence is explicitly documented below.
+
+## Status
+
+As at the time of writing, **PAXE does not yet protect socket traffic**. The implementation is being written against this specification; the wire format, key model, limits and failure semantics below are the contract it will implement. The Lua-facing API, the build wiring and the examples land with that implementation, not before.
+
+## Overview
 
 PAXE is an **extension module** that:
-- Requires **libsodium** for cryptographic operations
-- Uses **AES-256-GCM** for authenticated encryption
-- Supports both standard and DEK (Data Encryption Key) modes
-- Performs **in-place decryption** to minimize memory copying
-- Provides native **Lua bindings** for easy integration
+
+- Uses **libsodium** for all cryptographic operations
+- Encrypts payloads with **AES-256-GCM** (authenticated encryption)
+- Supports two frame modes — **standard** and **DEK** (Data Encryption Key) — selected automatically by payload size
+- Authenticates the header and flags of every frame as additional authenticated data (AAD)
+- Uses **one 32-byte shared key per link** (per unordered node pair), injected out of band
+- Locates keys by **peer node identity plus a 5-bit key epoch** carried in the flags byte
+
+## Wire Format
+
+All multi-byte integer fields are **big-endian**. A frame is a single UDP datagram.
+
+### Header (8 bytes)
+
+Every frame begins with an 8-byte header:
+
+| Bytes | Field | Size | Meaning |
+|-------|-------|------|---------|
+| 0–1 | `fromId` | 2 | Source node identifier |
+| 2–3 | `toId` | 2 | Destination node identifier |
+| 4–5 | `channel` | 2 | Channel identifier (multiplexing) |
+| 6–7 | `length` | 2 | **Plaintext payload length** in bytes |
+
+`length` is the length of the **plaintext payload**, not the length of the frame on the wire. The frame is longer than `length` by the mode's per-frame overhead (37 or 83 bytes).
+
+### Flags (1 byte, offset 8)
+
+| Bits | Value | Meaning |
+|------|-------|---------|
+| 0 | 0 or 1 | DEK flag: 0 = standard frame, 1 = DEK frame |
+| 1 | must be 0 | Fixed pattern bit |
+| 2 | must be 1 | Fixed pattern bit |
+| 3–7 | 0–31 | 5-bit key epoch |
+
+A receiver MUST reject any frame in which bit 1 is set or bit 2 is clear. This fixed pattern exists so that all-zero and all-ones garbage is rejected by inspecting a single byte — cheaply, before any cryptographic work, on a receive path that accepts unsolicited datagrams from anyone.
+
+The epoch selects which key decrypts the frame; see [Key Management](#key-management). Because the epoch rides inside the authenticated span (see [Associated Data](#associated-data-aad)), it cannot be altered without failing authentication.
+
+### Standard Frame
+
+Used when the DEK flag is 0 (payloads below 64 bytes):
 
 ```
-App Layer (Lua)
-    ↓ require("lunet.paxe")
-PAXE Lua Bindings (C)
-    ↓
-PAXE Core (C)
-    ↓
-libsodium (AES-256-GCM)
+Header(8) ‖ Flags(1) ‖ Nonce(12) ‖ Ciphertext(N) ‖ Tag(16)
 ```
 
-## Building PAXE
+| Bytes | Field | Size |
+|-------|-------|------|
+| 0–7 | Header | 8 |
+| 8 | Flags | 1 |
+| 9–20 | Nonce | 12 |
+| 21–20+N | Ciphertext | N |
+| 21+N – end of frame | Tag | 16 |
 
-### Prerequisites
-- libsodium development headers (`libsodium-dev` on Linux, via Homebrew on macOS)
-- LuaJIT and libuv (standard Lunet dependencies)
+Total frame size: **N + 37**. Per-frame overhead: **37 bytes**.
 
-### Configuration and Build
+### DEK Frame
 
-```bash
-# Install libsodium (macOS)
-brew install libsodium
+Used when the DEK flag is 1 (payloads of 64 bytes and above):
 
-# Install libsodium (Linux)
-apt-get install libsodium-dev
-
-# Build PAXE extension module
-xmake build lunet-paxe
+```
+Header(8) ‖ Flags(1) ‖ KEK Nonce(12) ‖ Wrapped DEK(32) ‖ DEK Nonce(12) ‖ Length(2) ‖ Ciphertext(N) ‖ Tag(16)
 ```
 
-### Build Artifacts
-- Release: `build/macosx/arm64/release/lunet/paxe.so`
-- Debug: `build/macosx/arm64/debug/lunet/paxe.so`
+| Bytes | Field | Size |
+|-------|-------|------|
+| 0–7 | Header | 8 |
+| 8 | Flags | 1 |
+| 9–20 | KEK Nonce | 12 |
+| 21–52 | Wrapped DEK | 32 |
+| 53–64 | DEK Nonce | 12 |
+| 65–66 | Length | 2 |
+| 67–66+N | Ciphertext | N |
+| 67+N – end of frame | Tag | 16 |
 
-## Fail-Fast Dependency Checking
+Total frame size: **N + 83**. Per-frame overhead: **83 bytes**.
 
-If libsodium is not available, the build will **fail at configuration time** with a clear error:
+The inner `Length` field at bytes 65–66 duplicates the header `length` (the plaintext payload length). A receiver MUST reject a frame in which the two disagree. The duplication is redundant — the header length is already authenticated — and is retained only for compatibility with the reference implementation.
 
-```bash
-$ xmake build lunet-paxe
-# ERROR: libsodium package not found
-#   Install via: brew install libsodium (macOS)
-#   Install via: apt-get install libsodium-dev (Linux)
-#   Install via: vcpkg install libsodium (Windows)
-```
+### Associated Data (AAD)
 
-## Lua API
+The AES-GCM additional authenticated data is **9 bytes: the header followed by the flags byte** (bytes 0–8 of the frame).
 
-```lua
-local paxe = require("lunet.paxe")
+**Intentional divergence from the reference.** The reference places the flags byte outside the authenticated span. But bit 0 of the flags selects the parse geometry — the 37-byte versus the 83-byte layout — so an unauthenticated flags byte would let an attacker flip how a receiver interprets a frame: a mode-confusion vector. PAXE therefore authenticates the flags byte. The same span authenticates the key epoch, which is what makes epoch-based rotation safe.
 
--- Initialization
-local ok, err = paxe.init()          -- Initialize PAXE + libsodium
-paxe.shutdown()                       -- Cleanup
+## Mode Selection
 
--- Enable/Disable
-paxe.set_enabled(true)                -- Enable encryption
-local enabled = paxe.is_enabled()     -- Check if enabled
+The sender selects the frame mode by payload size:
 
--- Key Management (keys must be exactly 32 bytes)
-local ok, err = paxe.keystore_set(key_id, key_string)
-paxe.keystore_clear()                 -- Wipe all keys securely
+| Payload size | Mode |
+|--------------|------|
+| Below 64 bytes | Standard |
+| 64 bytes and above | DEK |
 
--- Failure Policy: "DROP", "LOG_ONCE", or "VERBOSE"
-paxe.set_fail_policy("DROP")
+64 bytes is one CPU cache line. The threshold is fixed by the protocol — not a tuning knob — so that sender and receiver always agree on the layout.
 
--- Encryption (standard mode)
-local ciphertext, err = paxe.encrypt(plaintext, key_id)
+## Cryptography
 
--- Decryption
-local plaintext, key_id, flags = paxe.try_decrypt(ciphertext)
--- Returns nil, error_string on failure
+- **Payload**: AES-256-GCM with a fresh random 12-byte nonce per frame (generated via libsodium) and a 16-byte authentication tag. The AAD is the 9-byte header-plus-flags span described above.
+- **DEK wrap** (DEK mode only): the per-frame 32-byte data encryption key is wrapped by XOR with a ChaCha20 stream keyed by the link key acting as KEK, using the KEK nonce. A stream XOR has no authentication tag, so **the wrap is unauthenticated by construction**. A corrupted wrapped DEK does not produce a wrap error; it produces a wrong DEK, and the frame fails later at the payload tag check. Corruption therefore surfaces as a payload tag failure, not a wrap failure. This is deliberate, and a reviewer should not read it as a missing check.
 
--- Statistics
-local stats = paxe.stats()
--- stats.rx_total, stats.rx_ok, stats.rx_auth_fail, etc.
+## Key Management
 
--- Constants
-paxe.OVERHEAD_STANDARD  -- 36 bytes (header + nonce + tag)
-paxe.OVERHEAD_DEK       -- 82 bytes (DEK mode overhead)
-paxe.VERSION            -- Module version string
-```
+### One Key Per Link
 
-## C API
+Keys are 32-byte shared symmetric keys — **one per link, meaning per unordered node pair** — injected out of band by an operator (for example, provisioned over ssh). There is no on-wire key negotiation.
 
-### Initialization
-```c
-int paxe_init(void);                    // Initialize PAXE + libsodium
-void paxe_shutdown(void);                // Cleanup
-int paxe_is_enabled(void);               // Check if enabled
-void paxe_set_enabled(int enabled);      // Enable/disable
-```
+Per-link granularity is the load-bearing security property of the design. `fromId` is authenticated (it sits inside the AAD), but authentication only binds `fromId` to *whoever holds the key*. Under a single cluster-wide key, every node holds the same key, so any node could seal a frame claiming any `fromId` — the AAD would prevent nothing. With one key per unordered pair, a third node cannot forge a frame claiming `fromId=A` addressed to `toId=B`, because it does not hold the A↔B key. Per-link keys are what make a forged `fromId` impossible rather than merely unauthenticated.
 
-### Key Management
-```c
-int paxe_keystore_set(uint32_t key_id, const uint8_t key[32]);
-int paxe_keystore_clear(void);           // Wipe keys from memory
-```
+**SRP v6a is deliberately not implemented.** The reference establishes its per-pair session keys with SRP (RFC 5054) handshakes plus HKDF; that machinery existed to avoid certificates. For a cluster whose operator can inject shared keys out of band it is not worth carrying, and its absence here is a decision, not an omission.
 
-### Packet Operations
-```c
-ssize_t paxe_try_decrypt(uint8_t *buf, size_t len,
-                         uint32_t *out_key_id,
-                         uint8_t *out_flags);
-// Returns: plaintext length on success, -1 on failure
-// Decrypts in-place, moving plaintext to start of buffer
-```
+### Key Location
 
-### Statistics & Policy
-```c
-typedef struct {
-    uint64_t rx_total;          // Total packets received
-    uint64_t rx_ok;             // Successfully decrypted
-    uint64_t rx_short;          // Packet too short
-    uint64_t rx_len_mismatch;   // Length mismatch
-    uint64_t rx_no_key;         // Key not found
-    uint64_t rx_auth_fail;      // Authentication failed
-    uint64_t rx_reserved_nonzero;
-} paxe_stats_t;
+A receiver locates the decryption key by **(peer node id, epoch)**: the peer is the `fromId` in the header, the epoch is flags bits 3–7, and the local node's own id is configured once at initialisation.
 
-void paxe_stats_get(paxe_stats_t *out);
-void paxe_set_fail_policy(paxe_fail_policy_t policy);  // DROP, LOG_ONCE, VERBOSE
-```
+### Rotation
 
-## Packet Format
+Dropping SRP removed the reference's implicit rotation mechanism — there, sessions were re-established, so keys turned over naturally. Injected shared keys have no such property, which is why the 5-bit epoch exists: 32 epochs (0–31), making rotation a procedure rather than an event:
 
-### Standard Mode (AES-256-GCM)
-```
-Header (8) | Nonce (12) | Ciphertext+Tag (N+16)
-```
+1. Install the new key under a new epoch on both peers; the old epoch remains installed.
+2. Switch senders over to the new epoch.
+3. Retire the old epoch once no sender is using it.
 
-### DEK Mode (with Data Encryption Key)
-```
-Header (8) | KEK_Nonce (12) | Enc_DEK (32) | DEK_Nonce (12) | DEK_Len (2) | Ciphertext+Tag (N+16)
-```
+Old and new keys coexist throughout, so a rolling restart rotates the whole cluster with no flag day and no dropped traffic. The epoch costs nothing on the wire: bits 3–7 are reserved and unused in the reference, and PAXE puts them to work.
 
-## Examples
+## Limits
 
-See the `examples/` directory for working code:
+The largest possible UDP datagram is 65507 bytes. The maximum plaintext payload follows from the per-frame overhead:
 
-- **`examples/06_paxe_encryption.lua`** - Complete API walkthrough with round-trip encryption/decryption
-- **`examples/07_paxe_stress.lua`** - Stress test with configurable iterations, packet size, and key count
+| Mode | Overhead | Maximum payload |
+|------|----------|-----------------|
+| Standard | 37 | 65507 − 37 = **65470 bytes** |
+| DEK | 83 | 65507 − 83 = **65424 bytes** |
 
-### Quick Start
+A sender MUST reject an oversized payload with an error. It must never truncate the length field to make a frame fit: a truncated length produces a frame the peer is guaranteed to reject, with no error surfaced to the caller. An earlier implementation did exactly that, and it is a debugging trap — do not reintroduce it.
 
-```lua
-local paxe = require("lunet.paxe")
+## Failure Handling
 
--- Initialize
-paxe.init()
+A receiver that cannot parse, authenticate or decrypt a frame **drops it**. The rejection reason is deliberately not returned to the caller and never signalled to the sender: a receiver that explains *why* a forgery failed is a decryption oracle.
 
--- Set up a key (32 bytes required)
-paxe.keystore_set(1, string.rep("K", 32))
+Drops are governed by a global failure policy:
 
--- Encrypt
-local ciphertext = paxe.encrypt("Hello, PAXE!", 1)
+| Policy | Behaviour |
+|--------|-----------|
+| `DROP` (silent) | Discard; count only |
+| `LOG_ONCE` | Log the first drop of each kind, then count silently |
+| `VERBOSE` | Log every drop |
 
--- Decrypt
-local plaintext, key_id, flags = paxe.try_decrypt(ciphertext)
-print(plaintext)  -- "Hello, PAXE!"
+The statistics counters are the intended diagnostic channel. They count total frames received and each rejection cause — too short, flags constraint violation, length disagreement, unknown key or epoch, authentication failure — so an operator can distinguish attack traffic from misconfiguration without opening an oracle.
 
--- Cleanup
-paxe.keystore_clear()
-paxe.shutdown()
-```
+**Intentional divergence from the reference**, which throws `SecurityException` on authentication failure: there is no caller to throw to for a datagram you are dropping anyway. Drop-with-policy is the correct semantics for UDP.
 
-## Testing
+## Channels
 
-### Run Examples
-```bash
-# Run the encryption demo
-./build/macosx/arm64/release/lunet-run examples/06_paxe_encryption.lua
+Per the reference: channels 1–99 are reserved for system traffic, and application channels start at 100. The channel field is authenticated (it sits inside the AAD) but not encrypted.
 
-# Run stress test (1000 iterations default)
-./build/macosx/arm64/release/lunet-run examples/07_paxe_stress.lua
-```
+## Intentional Divergences from the Reference
 
-### Stress Testing
-```bash
-# High-volume test
-ITERATIONS=10000 PACKET_SIZE=1500 NUM_KEYS=256 \
-  ./build/macosx/arm64/release/lunet-run examples/07_paxe_stress.lua
-```
+Each divergence below is documented with its reasoning in the section linked from the table:
 
-### With Tracing
-```bash
-# Build with verbose tracing
-xmake f -c -y --lunet_trace=y --lunet_verbose_trace=y
-xmake build lunet-paxe
-
-# Run with stderr logging
-./build/macosx/arm64/debug/lunet-run examples/06_paxe_encryption.lua 2>&1 | grep PAXE
-```
-
-## Performance
-
-Benchmarks (macOS arm64, Apple Silicon, release build):
-- Throughput: ~400,000 ops/sec (encrypt + decrypt cycles)
-- Bandwidth: ~400 MB/sec (1KB packets)
-- Overhead: 36 bytes per packet (standard mode)
-- Hardware AES-256-GCM acceleration
+| Aspect | Reference | PAXE (this document) | Reason |
+|--------|-----------|----------------------|--------|
+| Flags byte | Outside the authenticated span | Inside the AAD (9 bytes: header + flags) | Bit 0 selects the parse geometry; an unauthenticated flags byte is a mode-confusion vector |
+| Flags bits 3–7 | Reserved | 5-bit key epoch (0–31) | Rotation without flag days, replacing the implicit turnover lost with SRP |
+| Key establishment | SRP v6a (RFC 5054) + HKDF | Per-link shared keys injected out of band | Operator-provisioned cluster; session machinery not worth carrying |
+| Authentication failure | `SecurityException` | Drop under a global policy | No caller to throw to for a dropped datagram |
 
 ## Security Considerations
 
-1. **Key Derivation**: Keys must be 32 bytes (256-bit). Derive from secrets using a KDF (HKDF, Argon2).
-2. **Nonce Handling**: PAXE generates random 12-byte nonces per packet via libsodium.
-3. **Authentication**: Failed decryption is always dropped (no oracle attacks).
-4. **Key Wiping**: `keystore_clear()` uses `sodium_memzero()` to prevent key recovery.
-5. **Policy-Based Logging**: Use `LOG_ONCE` to detect attacks without noise.
-
-## Build Flags
-
-| Flag | Purpose | When to Use |
-|------|---------|------------|
-| `LUNET_PAXE` | Enable PAXE compilation | Always (set by xmake target) |
-| `LUNET_TRACE` | Debug tracing + counters | Development/debugging |
-| `LUNET_TRACE_VERBOSE` | Per-event stderr logging | Detailed debugging |
-
-## Limitations
-
-- **Single-Threaded**: Keystore is not thread-safe. Protect with locks if needed.
-- **No Key Rotation API**: Clear and re-add keys for rotation.
-- **No Compression**: PAXE is encryption-only. Combine with other modules for compression.
-
-## Future Enhancements
-
-- [ ] Per-peer key rotation with versioning
-- [ ] Hardware AES detection + fallback
-- [ ] ChaCha20-Poly1305 support (alternative to AES-GCM)
-- [ ] Perfetto tracing integration
+1. **Key size and storage**: keys are exactly 32 bytes and long-term shared secrets. Protect them at rest and inject them out of band.
+2. **Nonce handling**: a fresh random 12-byte nonce per frame, generated via libsodium.
+3. **Authentication failure**: always a drop under the failure policy — never an error that explains the failure to a caller or sender (no decryption oracle).
+4. **Header exposure**: the header and flags are authenticated, not encrypted. `fromId`, `toId`, `channel`, `length` and the epoch are visible to a passive observer.
+5. **Wrapped DEK**: unauthenticated by construction; corruption surfaces at the payload tag check.
 
 ## References
 
+- Reference implementation (trex-paxe): https://github.com/trex-paxos/trex-paxos-jvm/blob/main/trex-paxe/README.md
 - libsodium: https://doc.libsodium.org/
 - AES-256-GCM: https://en.wikipedia.org/wiki/Galois/Counter_Mode
+- ChaCha20 (libsodium): https://doc.libsodium.org/advanced/stream_ciphers/chacha20
+- SRP (not implemented; see Key Management): RFC 5054, https://www.rfc-editor.org/rfc/rfc5054
 - Lunet Architecture: See README.md and AGENTS.md

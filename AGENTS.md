@@ -36,11 +36,13 @@ This includes badges, links, examples, and section structure.  A missing or stal
 Before creating or announcing a release:
 
 1. **Tag-triggered CI only:** Release tags (`v*`) must go through GitHub Actions builds (Linux/macOS/Windows). Do not handcraft a release from local output.
-2. **Assets required:** The release must include all six archives:
+2. **Assets required:** The release must include all eight archives:
    - `lunet-linux-amd64.tar.gz`
+   - `lunet-linux-arm64.tar.gz`
    - `lunet-macos.tar.gz`
    - `lunet-windows-amd64.zip`
    - `lunet-linux-amd64-sdk.tar.gz`
+   - `lunet-linux-arm64-sdk.tar.gz`
    - `lunet-macos-sdk.tar.gz`
    - `lunet-windows-amd64-sdk.zip`
 3. **Readable release notes:** Notes must include at minimum:

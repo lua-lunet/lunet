@@ -1,248 +1,196 @@
 # PAXE：数据包加密扩展模块
 
-PAXE（Packet Encryption，数据包加密）是 Lunet 的安全数据包加密扩展，专为需要在应用层进行点对点加密/解密的应用而设计。
+PAXE（Packet Encryption，数据包加密）是 Lunet 的安全数据报加密扩展，专为需要在应用层实现经过认证的端到端加密 UDP 流量的集群而设计。
 
-## 架构
+本文档是 PAXE 线路协议的权威规范。实现均依据本文档编写；若本文档与任何旧有描述不一致，以本文档为准。除下文明确记录的分歧之外，PAXE 遵循参考实现（[trex-paxe](https://github.com/trex-paxos/trex-paxos-jvm/blob/main/trex-paxe/README.md)）的线路格式。
+
+## 现状
+
+截至撰写之时，**PAXE 尚未保护 socket 流量**。实现正依据本规范编写；下文的线路格式、密钥模型、限制与失败语义即是该实现必须遵守的契约。面向 Lua 的 API、构建接线和示例将随该实现一并落地，在此之前不会提供。
+
+## 概述
 
 PAXE 是一个**扩展模块**，具有以下特点：
-- 依赖 **libsodium** 进行加密操作
-- 使用 **AES-256-GCM** 进行认证加密
-- 支持标准模式和 DEK（数据加密密钥）模式
-- 执行**原地解密**以减少内存拷贝
-- 提供原生 **Lua 绑定**，易于集成
+
+- 使用 **libsodium** 完成全部加密操作
+- 使用 **AES-256-GCM** 加密负载（认证加密）
+- 支持两种帧模式——**标准模式**与 **DEK（数据加密密钥）模式**——按负载大小自动选择
+- 将每个帧的头部与标志字节作为附加认证数据（AAD）进行认证
+- 使用**每链路（即每无序节点对）一个 32 字节共享密钥**，由带外方式注入
+- 通过**对端节点身份加标志字节中的 5 位密钥纪元**定位密钥
+
+## 线路格式
+
+所有多字节整数字段均为**大端序**。一个帧即一个 UDP 数据报。
+
+### 头部（8 字节）
+
+每个帧以 8 字节头部开始：
+
+| 字节 | 字段 | 大小 | 含义 |
+|------|------|------|------|
+| 0–1 | `fromId` | 2 | 源节点标识符 |
+| 2–3 | `toId` | 2 | 目标节点标识符 |
+| 4–5 | `channel` | 2 | 通道标识符（多路复用） |
+| 6–7 | `length` | 2 | **明文负载长度**（字节） |
+
+`length` 是**明文负载**的长度，而非线路上帧的长度。帧比 `length` 多出该模式的每帧开销（37 或 83 字节）。
+
+### 标志字节（1 字节，偏移 8）
+
+| 位 | 取值 | 含义 |
+|----|------|------|
+| 0 | 0 或 1 | DEK 标志：0 = 标准帧，1 = DEK 帧 |
+| 1 | 必须为 0 | 固定模式位 |
+| 2 | 必须为 1 | 固定模式位 |
+| 3–7 | 0–31 | 5 位密钥纪元 |
+
+接收方必须拒绝任何位 1 被置位或位 2 被清零的帧。这一固定模式的存在，使得全零和全一的垃圾数据只需检查一个字节即可被拒绝——成本低廉、先于任何加密运算，适用于一个会接收来自任何人的、未经请求的数据报的接收路径。
+
+纪元选择用哪个密钥解密帧；参见[密钥管理](#密钥管理)。由于纪元位于认证区间之内（参见[附加认证数据](#附加认证数据-aad)），任何篡改都会导致认证失败。
+
+### 标准帧
+
+当 DEK 标志为 0 时使用（负载小于 64 字节）：
 
 ```
-应用层 (Lua)
-    ↓ require("lunet.paxe")
-PAXE Lua 绑定 (C)
-    ↓
-PAXE 核心 (C)
-    ↓
-libsodium (AES-256-GCM)
+Header(8) ‖ Flags(1) ‖ Nonce(12) ‖ Ciphertext(N) ‖ Tag(16)
 ```
 
-## 构建 PAXE
+| 字节 | 字段 | 大小 |
+|------|------|------|
+| 0–7 | 头部 | 8 |
+| 8 | 标志字节 | 1 |
+| 9–20 | Nonce | 12 |
+| 21–20+N | 密文 | N |
+| 21+N – 帧尾 | 认证标签 | 16 |
 
-### 前置条件
-- libsodium 开发头文件（Linux 上为 `libsodium-dev`，macOS 通过 Homebrew 安装）
-- LuaJIT 和 libuv（标准 Lunet 依赖）
+帧总大小：**N + 37**。每帧开销：**37 字节**。
 
-### 配置与构建
+### DEK 帧
 
-```bash
-# 安装 libsodium (macOS)
-brew install libsodium
+当 DEK 标志为 1 时使用（负载为 64 字节及以上）：
 
-# 安装 libsodium (Linux)
-apt-get install libsodium-dev
-
-# 构建 PAXE 扩展模块
-xmake build lunet-paxe
+```
+Header(8) ‖ Flags(1) ‖ KEK Nonce(12) ‖ Wrapped DEK(32) ‖ DEK Nonce(12) ‖ Length(2) ‖ Ciphertext(N) ‖ Tag(16)
 ```
 
-### 构建产物
-- 发布版：`build/macosx/arm64/release/lunet/paxe.so`
-- 调试版：`build/macosx/arm64/debug/lunet/paxe.so`
+| 字节 | 字段 | 大小 |
+|------|------|------|
+| 0–7 | 头部 | 8 |
+| 8 | 标志字节 | 1 |
+| 9–20 | KEK Nonce | 12 |
+| 21–52 | 封装 DEK | 32 |
+| 53–64 | DEK Nonce | 12 |
+| 65–66 | Length | 2 |
+| 67–66+N | 密文 | N |
+| 67+N – 帧尾 | 认证标签 | 16 |
 
-## 快速失败的依赖检查
+帧总大小：**N + 83**。每帧开销：**83 字节**。
 
-如果 libsodium 不可用，构建会在**配置阶段立即失败**并给出清晰的错误信息：
+位于字节 65–66 的内部 `Length` 字段与头部 `length`（明文负载长度）重复。若两者不一致，接收方必须拒绝该帧。这种重复是冗余的——头部长度已被认证——仅为与参考实现兼容而保留。
 
-```bash
-$ xmake build lunet-paxe
-# ERROR: libsodium package not found
-#   Install via: brew install libsodium (macOS)
-#   Install via: apt-get install libsodium-dev (Linux)
-#   Install via: vcpkg install libsodium (Windows)
-```
+### 附加认证数据（AAD）
 
-## Lua API
+AES-GCM 的附加认证数据为 **9 字节：头部后跟标志字节**（帧的字节 0–8）。
 
-```lua
-local paxe = require("lunet.paxe")
+**与参考实现的有意分歧。** 参考实现将标志字节置于认证区间之外。但标志字节的位 0 决定解析几何——37 字节布局还是 83 字节布局——因此未经认证的标志字节会让攻击者翻转接收方对帧的解释方式：这是一个模式混淆攻击向量。因此 PAXE 对标志字节进行认证。同一区间还认证了密钥纪元，这正是基于纪元的轮换之所以安全的原因。
 
--- 初始化
-local ok, err = paxe.init()          -- 初始化 PAXE + libsodium
-paxe.shutdown()                       -- 清理
+## 模式选择
 
--- 启用/禁用
-paxe.set_enabled(true)                -- 启用加密
-local enabled = paxe.is_enabled()     -- 检查是否启用
+发送方按负载大小选择帧模式：
 
--- 密钥管理（密钥必须恰好为 32 字节）
-local ok, err = paxe.keystore_set(key_id, key_string)
-paxe.keystore_clear()                 -- 安全擦除所有密钥
+| 负载大小 | 模式 |
+|----------|------|
+| 小于 64 字节 | 标准模式 |
+| 64 字节及以上 | DEK 模式 |
 
--- 失败策略："DROP"、"LOG_ONCE" 或 "VERBOSE"
-paxe.set_fail_policy("DROP")
+64 字节即一条 CPU 缓存行。该阈值由协议固定——不是调优旋钮——以确保收发双方始终就布局达成一致。
 
--- 加密（标准模式）
-local ciphertext, err = paxe.encrypt(plaintext, key_id)
+## 密码学
 
--- 解密
-local plaintext, key_id, flags = paxe.try_decrypt(ciphertext)
--- 失败时返回 nil, error_string
+- **负载**：AES-256-GCM，每帧使用经 libsodium 生成的全新随机 12 字节 nonce，认证标签 16 字节。AAD 即上文所述的 9 字节头部加标志字节区间。
+- **DEK 封装**（仅 DEK 模式）：每帧的 32 字节数据加密密钥通过与 ChaCha20 流进行 XOR 完成封装，该流以充当 KEK 的链路密钥为密钥，使用 KEK nonce。流 XOR 没有认证标签，因此**封装在构造上就是不带认证的**。被损坏的封装 DEK 不会产生封装错误；它会产生一个错误的 DEK，而该帧随后会在负载标签校验处失败。因此，损坏表现为负载标签失败，而非封装失败。这是有意为之，审阅者不应将其误读为缺失的检查。
 
--- 统计信息
-local stats = paxe.stats()
--- stats.rx_total, stats.rx_ok, stats.rx_auth_fail 等
+## 密钥管理
 
--- 常量
-paxe.OVERHEAD_STANDARD  -- 36 字节（头部 + 随机数 + 标签）
-paxe.OVERHEAD_DEK       -- 82 字节（DEK 模式开销）
-paxe.VERSION            -- 模块版本字符串
-```
+### 每链路一个密钥
 
-## C API
+密钥为 32 字节共享对称密钥——**每链路一个，即每无序节点对一个**——由运维人员带外注入（例如通过 ssh 下发）。线路上没有密钥协商。
 
-### 初始化
-```c
-int paxe_init(void);                    // 初始化 PAXE + libsodium
-void paxe_shutdown(void);                // 清理
-int paxe_is_enabled(void);               // 检查是否启用
-void paxe_set_enabled(int enabled);      // 启用/禁用
-```
+每链路粒度是本设计赖以成立的安全属性。`fromId` 经过认证（它位于 AAD 之内），但认证只能将 `fromId` 绑定到*持有密钥的人*。若整个集群使用单一密钥，则每个节点都持有同一密钥，任何节点都可以封装一个声称任意 `fromId` 的帧——AAD 将毫无意义。当每个无序节点对持有一个密钥时，第三方节点无法伪造声称 `fromId=A`、发往 `toId=B` 的帧，因为它并不持有 A↔B 密钥。每链路密钥使伪造的 `fromId` 不可能实现，而不仅仅是未经认证。
 
-### 密钥管理
-```c
-int paxe_keystore_set(uint32_t key_id, const uint8_t key[32]);
-int paxe_keystore_clear(void);           // 从内存中擦除密钥
-```
+**SRP v6a 被有意地不予实现。** 参考实现通过 SRP（RFC 5054）握手加 HKDF 建立节点对会话密钥；那套机制的存在是为了避免证书。对于运维人员可以带外注入共享密钥的集群而言，它不值得保留。此处的缺失是一个决定，而非疏漏。
 
-### 数据包操作
-```c
-ssize_t paxe_try_decrypt(uint8_t *buf, size_t len,
-                         uint32_t *out_key_id,
-                         uint8_t *out_flags);
-// 返回值：成功时返回明文长度，失败时返回 -1
-// 原地解密，将明文移动到缓冲区起始位置
-```
+### 密钥定位
 
-### 统计与策略
-```c
-typedef struct {
-    uint64_t rx_total;          // 接收的总数据包数
-    uint64_t rx_ok;             // 成功解密的数据包数
-    uint64_t rx_short;          // 数据包过短
-    uint64_t rx_len_mismatch;   // 长度不匹配
-    uint64_t rx_no_key;         // 未找到密钥
-    uint64_t rx_auth_fail;      // 认证失败
-    uint64_t rx_reserved_nonzero;
-} paxe_stats_t;
+接收方通过**（对端节点 id，纪元）**定位解密密钥：对端即头部中的 `fromId`，纪元即标志字节的位 3–7，本节点自身的 id 在初始化时配置一次。
 
-void paxe_stats_get(paxe_stats_t *out);
-void paxe_set_fail_policy(paxe_fail_policy_t policy);  // DROP, LOG_ONCE, VERBOSE
-```
+### 轮换
 
-## 数据包格式
+放弃 SRP 的同时也放弃了参考实现的隐式轮换机制——在那里，会话会被重新建立，密钥随之自然更替。注入式共享密钥不具备这种性质，这正是 5 位纪元存在的原因：32 个纪元（0–31），使轮换成为一个过程而非一次事件：
 
-### 标准模式 (AES-256-GCM)
-```
-头部 (8) | 随机数 (12) | 密文+标签 (N+16)
-```
+1. 在两个对端上以新纪元安装新密钥；旧纪元保持安装状态。
+2. 将发送方切换到新纪元。
+3. 在没有任何发送方使用旧纪元后将其退役。
 
-### DEK 模式（含数据加密密钥）
-```
-头部 (8) | KEK_随机数 (12) | 加密的DEK (32) | DEK_随机数 (12) | DEK_长度 (2) | 密文+标签 (N+16)
-```
-
-## 示例
-
-请参阅 `examples/` 目录中的可运行代码：
-
-- **`examples/06_paxe_encryption.lua`** - 完整的 API 演练，包含加密/解密往返
-- **`examples/07_paxe_stress.lua`** - 可配置迭代次数、数据包大小和密钥数量的压力测试
-
-### 快速开始
-
-```lua
-local paxe = require("lunet.paxe")
-
--- 初始化
-paxe.init()
-
--- 设置密钥（需要 32 字节）
-paxe.keystore_set(1, string.rep("K", 32))
-
--- 加密
-local ciphertext = paxe.encrypt("Hello, PAXE!", 1)
-
--- 解密
-local plaintext, key_id, flags = paxe.try_decrypt(ciphertext)
-print(plaintext)  -- "Hello, PAXE!"
-
--- 清理
-paxe.keystore_clear()
-paxe.shutdown()
-```
-
-## 测试
-
-### 运行示例
-```bash
-# 运行加密演示
-./build/macosx/arm64/release/lunet-run examples/06_paxe_encryption.lua
-
-# 运行压力测试（默认 1000 次迭代）
-./build/macosx/arm64/release/lunet-run examples/07_paxe_stress.lua
-```
-
-### 压力测试
-```bash
-# 高负载测试
-ITERATIONS=10000 PACKET_SIZE=1500 NUM_KEYS=256 \
-  ./build/macosx/arm64/release/lunet-run examples/07_paxe_stress.lua
-```
-
-### 使用追踪功能
-```bash
-# 使用详细追踪构建
-xmake f -c -y --lunet_trace=y --lunet_verbose_trace=y
-xmake build lunet-paxe
-
-# 运行并通过 stderr 查看日志
-./build/macosx/arm64/debug/lunet-run examples/06_paxe_encryption.lua 2>&1 | grep PAXE
-```
-
-## 性能
-
-基准测试（macOS arm64，Apple Silicon，发布版构建）：
-- 吞吐量：约 400,000 次/秒（加密 + 解密周期）
-- 带宽：约 400 MB/秒（1KB 数据包）
-- 开销：每个数据包 36 字节（标准模式）
-- 硬件 AES-256-GCM 加速
-
-## 安全注意事项
-
-1. **密钥派生**：密钥必须为 32 字节（256 位）。使用 KDF（HKDF、Argon2）从密码派生。
-2. **随机数处理**：PAXE 通过 libsodium 为每个数据包生成随机 12 字节随机数。
-3. **认证**：解密失败的数据包始终被丢弃（防止预言攻击）。
-4. **密钥擦除**：`keystore_clear()` 使用 `sodium_memzero()` 防止密钥被恢复。
-5. **基于策略的日志**：使用 `LOG_ONCE` 在不产生噪音的情况下检测攻击。
-
-## 构建标志
-
-| 标志 | 用途 | 使用场景 |
-|------|------|---------|
-| `LUNET_PAXE` | 启用 PAXE 编译 | 始终（由 xmake 目标设置） |
-| `LUNET_TRACE` | 调试追踪 + 计数器 | 开发/调试 |
-| `LUNET_TRACE_VERBOSE` | 逐事件 stderr 日志 | 详细调试 |
+新旧密钥在整个过程中共存，因此一次滚动重启即可完成整个集群的轮换——无需切换日（flag day），也不丢弃流量。纪元在线路上零成本：位 3–7 在参考实现中是保留且未使用的，PAXE 让它们发挥了作用。
 
 ## 限制
 
-- **单线程**：密钥存储不是线程安全的。如需多线程使用，请加锁保护。
-- **无密钥轮换 API**：通过清除并重新添加密钥来实现轮换。
-- **无压缩**：PAXE 仅提供加密功能。如需压缩请结合其他模块使用。
+最大的 UDP 数据报为 65507 字节。最大明文负载由每帧开销推导得出：
 
-## 未来增强
+| 模式 | 开销 | 最大负载 |
+|------|------|----------|
+| 标准模式 | 37 | 65507 − 37 = **65470 字节** |
+| DEK 模式 | 83 | 65507 − 83 = **65424 字节** |
 
-- [ ] 带版本控制的逐对等端密钥轮换
-- [ ] 硬件 AES 检测 + 回退
-- [ ] ChaCha20-Poly1305 支持（AES-GCM 的替代方案）
-- [ ] Perfetto 追踪集成
+发送方必须以错误拒绝超大负载。绝不允许通过截断长度字段使帧"放得下"：被截断的长度会产生一个对端必然拒绝的帧，而调用方看不到任何错误。早期实现正是这样做的，这是一个调试陷阱——请勿重新引入。
+
+## 失败处理
+
+无法解析、认证或解密某个帧的接收方会**丢弃该帧**。拒绝原因被有意地不返回给调用方，也绝不向发送方发出信号：一个会解释伪造帧*为何*失败的接收方就是一个解密预言机。
+
+丢弃行为由全局失败策略控制：
+
+| 策略 | 行为 |
+|------|------|
+| `DROP`（静默） | 丢弃；仅计数 |
+| `LOG_ONCE` | 每类丢弃记录第一次，此后静默计数 |
+| `VERBOSE` | 记录每一次丢弃 |
+
+统计计数器是预期的诊断通道。它们统计接收到的帧总数以及每种拒绝原因——过短、标志字节约束违例、长度不一致、未知密钥或纪元、认证失败——使运维人员能够在不打开预言机的前提下区分攻击流量与配置错误。
+
+**与参考实现的有意分歧**：参考实现在认证失败时抛出 `SecurityException`。但对于一个你反正要丢弃的数据报，并不存在可以向其抛出异常的调用方。带策略的丢弃才是 UDP 的正确语义。
+
+## 通道
+
+遵循参考实现：通道 1–99 保留给系统流量，应用通道从 100 开始。通道字段经过认证（位于 AAD 之内）但不被加密。
+
+## 与参考实现的有意分歧
+
+下表所列每处分歧均在相应章节中附有推理说明：
+
+| 方面 | 参考实现 | PAXE（本文档） | 原因 |
+|------|----------|----------------|------|
+| 标志字节 | 位于认证区间之外 | 位于 AAD 之内（9 字节：头部 + 标志字节） | 位 0 决定解析几何；未认证的标志字节是模式混淆攻击向量 |
+| 标志字节位 3–7 | 保留 | 5 位密钥纪元（0–31） | 无需切换日的轮换，替代随 SRP 一同失去的隐式更替 |
+| 密钥建立 | SRP v6a（RFC 5054）+ HKDF | 每链路共享密钥，带外注入 | 运维下发的集群；会话机制不值得保留 |
+| 认证失败 | `SecurityException` | 按全局策略丢弃 | 被丢弃的数据报没有可抛出异常的调用方 |
+
+## 安全注意事项
+
+1. **密钥大小与存储**：密钥必须恰好为 32 字节，属于长期共享秘密。请在静止状态下妥善保护，并以带外方式注入。
+2. **Nonce 处理**：每帧使用经 libsodium 生成的全新随机 12 字节 nonce。
+3. **认证失败**：一律按失败策略丢弃——绝不出错并向调用方或发送方解释失败原因（不产生解密预言机）。
+4. **头部暴露**：头部与标志字节经过认证但不被加密。`fromId`、`toId`、`channel`、`length` 与纪元对被动观察者可见。
+5. **封装 DEK**：构造上不带认证；损坏会在负载标签校验处显现。
 
 ## 参考资料
 
+- 参考实现（trex-paxe）：https://github.com/trex-paxos/trex-paxos-jvm/blob/main/trex-paxe/README.md
 - libsodium：https://doc.libsodium.org/
 - AES-256-GCM：https://en.wikipedia.org/wiki/Galois/Counter_Mode
+- ChaCha20（libsodium）：https://doc.libsodium.org/advanced/stream_ciphers/chacha20
+- SRP（未实现；参见密钥管理）：RFC 5054，https://www.rfc-editor.org/rfc/rfc5054
 - Lunet 架构：参见 README.md 和 AGENTS.md

@@ -33,6 +33,19 @@ make init
 `xmake init` 仍作为仅安装 QA 工具的入口，在 Unix 上委托给同一个
 `contributing/deps/qa-luarocks.sh` 脚本。
 
+## 工具版本（mise）
+
+仓库根目录的 `.mise.toml` 通过 `github:xmake-io/xmake` 后端固定了
+**xmake** 的版本（当前为 `3.0.8`，xmake 不在 mise 的核心注册表中）。CI
+在每个 `xmake-io/github-action-setup-xmake` 步骤中使用相同的固定版本。
+如果你安装了 [mise](https://mise.jdx.dev/)，运行 `mise install` 会自动
+拉取正确的 xmake；否则 PATH 上任何 xmake 3.0.8 都可以。
+
+其他所有工具（luajit、luarocks、系统开发库）都来自 `contributing/deps/`
+下的 OS 依赖脚本。mise 的 luajit 插件已损坏（`list-all` 失败，无法列出
+版本），luarocks 也不是 mise 插件，xmake 本身也需要 `github:` 后端前缀，
+因此系统路径仍然是 Lua 工具链的受支持配置方式。
+
 ## macOS：PKG_CONFIG_PATH
 
 Homebrew 的 `zlib`、`curl`、`libpq`、`mysql-client` 是 keg-only。

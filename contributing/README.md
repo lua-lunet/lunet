@@ -35,6 +35,20 @@ the luajit interpreter — not the system Lua.
 `xmake init` remains as the QA-tools-only entry and delegates to the same
 `contributing/deps/qa-luarocks.sh` script on Unix.
 
+## Tool versions (mise)
+
+`.mise.toml` at the repo root pins **xmake** (currently `3.0.8`) via the
+`github:xmake-io/xmake` backend (xmake is not in mise's core registry). CI
+uses the same pin in every `xmake-io/github-action-setup-xmake` step. If you
+have [mise](https://mise.jdx.dev/) installed, `mise install` will fetch the
+right xmake automatically; otherwise any xmake 3.0.8 on `PATH` works.
+
+Everything else (luajit, luarocks, system dev libraries) comes from the OS
+dep scripts under `contributing/deps/`. mise's luajit plugin is broken
+(`list-all` fails, no version list), luarocks is not a mise plugin at all,
+and xmake itself requires the `github:` backend prefix, so the system path
+remains the supported way to provision the Lua toolchain.
+
 ## macOS: PKG_CONFIG_PATH
 
 Homebrew's `zlib`, `curl`, `libpq`, and `mysql-client` are keg-only. After

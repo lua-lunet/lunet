@@ -8,7 +8,7 @@ You MUST NOT do any git reset or stash or an git rm or rm or anything that might
 
 ## **Operational Rules (STRICT)**
 
-0.  **DEVELOPER SETUP:** New machines run `make init` (delegates per-OS under `contributing/`). `xmake init` remains as the QA-tools-only entry and delegates to the same `contributing/deps/qa-luarocks.sh` script on Unix.
+0.  **DEVELOPER SETUP:** New machines run `make init` (delegates per-OS under `contributing/`). `xmake init` remains as the QA-tools-only entry and delegates to the same `contributing/deps/qa-luarocks.sh` script on Unix. xmake version is pinned via `.mise.toml` and CI uses the same pin.
 1.  **TIMEOUTS:** All commands interacting with servers or DB must have a timeout (`timeout 3` or `curl --max-time 3`).
 2.  **NO DATA LOSS:** Never use `rm -rf` to clear directories. Move them to `.tmp/` with a timestamp: `mv dir .tmp/dir.YYYYMMDD_HHMMSS`.
 3.  **LOGGING:** All test runs must log stdout/stderr to `.tmp/logs/YYYYMMDD_HHMMSS/`.

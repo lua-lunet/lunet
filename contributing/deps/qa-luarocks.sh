@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+CI=0
+for arg in "$@"; do
+    case "$arg" in
+        --ci) CI=1 ;;
+        *)    echo "Unknown argument: $arg" >&2; exit 1 ;;
+    esac
+done
+
+if [[ "$CI" -eq 1 ]]; then
+    SUDO="sudo"
+else
+    SUDO=""
+fi
+
 LUAJIT_BIN=$(command -v luajit 2>/dev/null || true)
 if [[ -z "$LUAJIT_BIN" ]]; then
     echo "ERROR: luajit not found on PATH. Install it first:" >&2
@@ -13,9 +27,9 @@ LUAJIT_PREFIX="$(dirname "$(dirname "$LUAJIT_BIN")")"
 
 echo "Installing luarocks QA tools against luajit at $LUAJIT_PREFIX ..."
 
-luarocks --lua-version=5.1 --lua-dir="$LUAJIT_PREFIX" install luafilesystem
-luarocks --lua-version=5.1 --lua-dir="$LUAJIT_PREFIX" install busted
-luarocks --lua-version=5.1 --lua-dir="$LUAJIT_PREFIX" install luacheck
+$SUDO luarocks --lua-version=5.1 --lua-dir="$LUAJIT_PREFIX" install luafilesystem
+$SUDO luarocks --lua-version=5.1 --lua-dir="$LUAJIT_PREFIX" install busted
+$SUDO luarocks --lua-version=5.1 --lua-dir="$LUAJIT_PREFIX" install luacheck
 
 LUAHECK_CANDIDATES=(
     "$HOME/.luarocks/bin/luacheck"

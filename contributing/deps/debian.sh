@@ -33,4 +33,8 @@ else
         build-essential git curl ca-certificates libasan8
 fi
 
-exec bash "$(dirname "$0")/qa-luarocks.sh"
+if [[ "$CI" -eq 1 ]]; then
+    exec bash "$(dirname "$0")/qa-luarocks.sh" --ci
+else
+    exec bash "$(dirname "$0")/qa-luarocks.sh"
+fi

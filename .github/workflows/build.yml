@@ -50,13 +50,8 @@ jobs:
       - id: set-matrix
         run: |
           TARGETS="${{ github.event.inputs.targets }}"
-          # Full matrix definition
-          ALL='{"include":[
-            {"os":"ubuntu-latest","arch":"amd64","platform":"linux","target_key":"linux-amd64"},
-            {"os":"blacksmith-4vcpu-ubuntu-2404-arm","arch":"arm64","platform":"linux","target_key":"linux-arm64"},
-            {"os":"macos-latest","arch":"arm64","platform":"macos","target_key":"macos"},
-            {"os":"blacksmith-4vcpu-windows-2025","arch":"amd64","platform":"windows","target_key":"windows"}
-          ]}'
+          # Full matrix definition (compact JSON for GitHub Actions output)
+          ALL='{"include":[{"os":"ubuntu-latest","arch":"amd64","platform":"linux","target_key":"linux-amd64"},{"os":"blacksmith-4vcpu-ubuntu-2404-arm","arch":"arm64","platform":"linux","target_key":"linux-arm64"},{"os":"macos-latest","arch":"arm64","platform":"macos","target_key":"macos"},{"os":"blacksmith-4vcpu-windows-2025","arch":"amd64","platform":"windows","target_key":"windows"}]}'
           if [ -z "$TARGETS" ]; then
             echo "matrix=$ALL" >> "$GITHUB_OUTPUT"
           else

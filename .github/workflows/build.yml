@@ -27,6 +27,10 @@ on:
         description: 'Branch or tag to build'
         required: false
         default: ''
+      targets:
+        description: 'Comma-separated targets to build (empty = all): linux-amd64, linux-arm64, macos, windows'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -39,11 +43,31 @@ concurrency:
 jobs:
   build:
     name: ${{ matrix.os }}
+    if: >-
+      github.event_name != 'workflow_dispatch'
+      || !github.event.inputs.targets
+      || contains(github.event.inputs.targets, matrix.target_key)
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
       matrix:
-        os: [ubuntu-latest, macos-latest, blacksmith-4vcpu-windows-2025]
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+            platform: linux
+            target_key: linux-amd64
+          - os: blacksmith-4vcpu-ubuntu-2404-arm
+            arch: arm64
+            platform: linux
+            target_key: linux-arm64
+          - os: macos-latest
+            arch: arm64
+            platform: macos
+            target_key: macos
+          - os: blacksmith-4vcpu-windows-2025
+            arch: amd64
+            platform: windows
+            target_key: windows
 
     steps:
     - name: Checkout
@@ -208,7 +232,7 @@ jobs:
         & $lunet.FullName examples/06_paxe_encryption.lua
 
     - name: Package release archive (Linux)
-      if: runner.os == 'Linux'
+      if: matrix.platform == 'linux'
       run: |
         set -euo pipefail
         DIST_DIR="$(mktemp -d)"
@@ -228,7 +252,7 @@ jobs:
         # DB transaction wrappers (#119): one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
-        tar -C "$DIST_DIR" -czf lunet-linux-amd64.tar.gz .
+        tar -C "$DIST_DIR" -czf "lunet-linux-${{ matrix.arch }}.tar.gz" .
 
     - name: Package release archive (macOS)
       if: runner.os == 'macOS'
@@ -254,7 +278,7 @@ jobs:
         tar -C "$DIST_DIR" -czf lunet-macos.tar.gz .
 
     - name: Package release SDK (Linux)
-      if: runner.os == 'Linux'
+      if: matrix.platform == 'linux'
       run: |
         set -euo pipefail
         SDK_DIR="$(mktemp -d)"
@@ -267,7 +291,7 @@ jobs:
         cp docs/EMBEDDING.md "$SDK_DIR/README.md"
         cp docs/EMBEDDING-CN.md "$SDK_DIR/README-CN.md"
         cp LICENSE "$SDK_DIR/"
-        tar -C "$SDK_DIR" -czf lunet-linux-amd64-sdk.tar.gz .
+        tar -C "$SDK_DIR" -czf "lunet-linux-${{ matrix.arch }}-sdk.tar.gz" .
 
     - name: Package release SDK (macOS)
       if: runner.os == 'macOS'
@@ -325,8 +349,8 @@ jobs:
       if: runner.os != 'Windows'
       run: |
         set -euo pipefail
-        if [ "$RUNNER_OS" = "Linux" ]; then
-          ARCHIVE=lunet-linux-amd64.tar.gz
+        if [ "${{ matrix.platform }}" = "linux" ]; then
+          ARCHIVE="lunet-linux-${{ matrix.arch }}.tar.gz"
         else
           ARCHIVE=lunet-macos.tar.gz
         fi
@@ -349,11 +373,11 @@ jobs:
     # Keep these steps byte-identical to the documented commands in
     # docs/EMBEDDING.md so CI verifies exactly what users are told to run.
     - name: Verify packaged SDK (Linux)
-      if: runner.os == 'Linux'
+      if: matrix.platform == 'linux'
       run: |
         set -euo pipefail
         VERIFY_DIR="$(mktemp -d)"
-        tar -C "$VERIFY_DIR" -xzf lunet-linux-amd64-sdk.tar.gz
+        tar -C "$VERIFY_DIR" -xzf "lunet-linux-${{ matrix.arch }}-sdk.tar.gz"
         (
           cd "$VERIFY_DIR"
           mkdir generated
@@ -431,10 +455,10 @@ jobs:
         }
 
     - name: Upload artifact (Linux)
-      if: runner.os == 'Linux'
+      if: matrix.platform == 'linux'
       uses: actions/upload-artifact@v4
       with:
-        name: lunet-linux-amd64
+        name: lunet-linux-${{ matrix.arch }}
         path: |
           build/**/lunet-run
           build/**/lunet.so
@@ -461,11 +485,11 @@ jobs:
           build/**/lunet/*.dll
 
     - name: Upload release archive (Linux)
-      if: runner.os == 'Linux'
+      if: matrix.platform == 'linux'
       uses: actions/upload-artifact@v4
       with:
-        name: release-linux
-        path: lunet-linux-amd64.tar.gz
+        name: release-linux-${{ matrix.arch }}
+        path: lunet-linux-${{ matrix.arch }}.tar.gz
 
     - name: Upload release archive (macOS)
       if: runner.os == 'macOS'
@@ -482,11 +506,11 @@ jobs:
         path: lunet-windows-amd64.zip
 
     - name: Upload release SDK (Linux)
-      if: runner.os == 'Linux'
+      if: matrix.platform == 'linux'
       uses: actions/upload-artifact@v4
       with:
-        name: release-sdk-linux
-        path: lunet-linux-amd64-sdk.tar.gz
+        name: release-sdk-linux-${{ matrix.arch }}
+        path: lunet-linux-${{ matrix.arch }}-sdk.tar.gz
 
     - name: Upload release SDK (macOS)
       if: runner.os == 'macOS'
@@ -738,8 +762,10 @@ jobs:
         body_path: release-notes.md
         files: |
           release-assets/lunet-linux-amd64.tar.gz
+          release-assets/lunet-linux-arm64.tar.gz
           release-assets/lunet-macos.tar.gz
           release-assets/lunet-windows-amd64.zip
           release-assets/lunet-linux-amd64-sdk.tar.gz
+          release-assets/lunet-linux-arm64-sdk.tar.gz
           release-assets/lunet-macos-sdk.tar.gz
           release-assets/lunet-windows-amd64-sdk.zip

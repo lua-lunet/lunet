@@ -1281,3 +1281,28 @@ task("jsonic-smoke")
         os.execv(runner, {"test/smoke_jsonic.lua"})
     end)
 task_end()
+
+-- =============================================================================
+-- paxe extension (Rust, optional) - PAXE datagram encryption via LuaJIT FFI
+-- =============================================================================
+-- Build:   xmake build-paxe
+-- Zero-dependency cdylib living in ext/paxe/, loaded at runtime by
+-- lunet.paxe via LuaJIT FFI. Not linked into lunet-run. The toolchain is
+-- pinned by ext/paxe/rust-toolchain.toml, so cargo must run with the crate
+-- dir as cwd (rustup resolves the pin from cwd, not --manifest-path).
+-- NOTE: the legacy C-based "lunet-paxe" target above is deliberately left
+-- broken (it lists the deleted src/paxe.c); item10 removes it. Do not
+-- "repair" it here.
+
+task("build-paxe")
+    set_menu {
+        usage = "xmake build-paxe",
+        description = "Build the paxe Rust extension (ext/paxe)"
+    }
+    on_run(function ()
+        local crate_dir = path.join(os.scriptdir(), "ext", "paxe")
+        print("[paxe] cargo build --release ...")
+        os.execv("cargo", {"build", "--release"}, {curdir = crate_dir})
+        print("[paxe] built: " .. path.join(crate_dir, "target", "release"))
+    end)
+task_end()

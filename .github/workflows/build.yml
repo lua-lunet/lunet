@@ -41,33 +41,67 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  setup-matrix:
+    name: Setup build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          TARGETS="${{ github.event.inputs.targets }}"
+          # Full matrix definition
+          ALL='{"include":[
+            {"os":"ubuntu-latest","arch":"amd64","platform":"linux","target_key":"linux-amd64"},
+            {"os":"blacksmith-4vcpu-ubuntu-2404-arm","arch":"arm64","platform":"linux","target_key":"linux-arm64"},
+            {"os":"macos-latest","arch":"arm64","platform":"macos","target_key":"macos"},
+            {"os":"blacksmith-4vcpu-windows-2025","arch":"amd64","platform":"windows","target_key":"windows"}
+          ]}'
+          if [ -z "$TARGETS" ]; then
+            echo "matrix=$ALL" >> "$GITHUB_OUTPUT"
+          else
+            # Filter matrix entries based on targets (comma-separated)
+            FILTERED='{"include":['
+            FIRST=true
+            IFS=',' read -ra TARGET_LIST <<< "$TARGETS"
+            for target in "${TARGET_LIST[@]}"; do
+              target=$(echo "$target" | xargs)  # trim whitespace
+              case "$target" in
+                linux-amd64)
+                  ENTRY='{"os":"ubuntu-latest","arch":"amd64","platform":"linux","target_key":"linux-amd64"}'
+                  ;;
+                linux-arm64)
+                  ENTRY='{"os":"blacksmith-4vcpu-ubuntu-2404-arm","arch":"arm64","platform":"linux","target_key":"linux-arm64"}'
+                  ;;
+                macos)
+                  ENTRY='{"os":"macos-latest","arch":"arm64","platform":"macos","target_key":"macos"}'
+                  ;;
+                windows)
+                  ENTRY='{"os":"blacksmith-4vcpu-windows-2025","arch":"amd64","platform":"windows","target_key":"windows"}'
+                  ;;
+                *)
+                  echo "Unknown target: $target" >&2
+                  continue
+                  ;;
+              esac
+              if [ "$FIRST" = true ]; then
+                FILTERED="$FILTERED$ENTRY"
+                FIRST=false
+              else
+                FILTERED="$FILTERED,$ENTRY"
+              fi
+            done
+            FILTERED="$FILTERED]}"
+            echo "matrix=$FILTERED" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: ${{ matrix.os }}
-    if: >-
-      github.event_name != 'workflow_dispatch'
-      || !github.event.inputs.targets
-      || contains(github.event.inputs.targets, matrix.target_key)
+    needs: setup-matrix
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
-      matrix:
-        include:
-          - os: ubuntu-latest
-            arch: amd64
-            platform: linux
-            target_key: linux-amd64
-          - os: blacksmith-4vcpu-ubuntu-2404-arm
-            arch: arm64
-            platform: linux
-            target_key: linux-arm64
-          - os: macos-latest
-            arch: arm64
-            platform: macos
-            target_key: macos
-          - os: blacksmith-4vcpu-windows-2025
-            arch: amd64
-            platform: windows
-            target_key: windows
+      matrix: ${{ fromJson(needs.setup-matrix.outputs.matrix) }}
 
     steps:
     - name: Checkout

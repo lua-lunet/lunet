@@ -223,6 +223,32 @@ jobs:
         cargo build --release --manifest-path ext/lnt_shared/Cargo.toml
         cargo build --release --manifest-path ext/jsonic/Cargo.toml
 
+    # PAXE Rust scaffold (ext/paxe): zero-dependency cdylib. The
+    # three-platform claim is tested here, not asserted — this step runs on
+    # Windows too, unlike the ext modules above. Cargo is preinstalled on
+    # the GH runners; ext/paxe/rust-toolchain.toml pins the toolchain and
+    # rustup auto-installs the pinned version on first use. Cargo must run
+    # with ext/paxe as the working directory: rustup resolves
+    # rust-toolchain.toml from the cwd, not from --manifest-path.
+    - name: Build PAXE Rust crate
+      working-directory: ext/paxe
+      run: cargo build --release
+
+    # Windows cdylib naming differs from Unix (.dll, no "lib" prefix), so
+    # confirm the artefact under the expected per-platform name rather than
+    # assuming it.
+    - name: Verify PAXE cdylib artefact
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ runner.os }}" in
+          Windows) ART=ext/paxe/target/release/lunet_paxe.dll ;;
+          macOS)   ART=ext/paxe/target/release/liblunet_paxe.dylib ;;
+          *)       ART=ext/paxe/target/release/liblunet_paxe.so ;;
+        esac
+        if [ ! -f "$ART" ]; then echo "missing artefact: $ART" >&2; exit 1; fi
+        echo "PAXE cdylib OK: $ART"
+
     - name: Examples compile check (Unix)
       if: runner.os != 'Windows'
       run: |

@@ -20,6 +20,18 @@
 #include "lunet_mem.h"
 #include "uv.h"
 
+/* The pointee type of MYSQL_BIND.is_null comes from the client header and
+   differs between the supported variants: MySQL 8.0+ (including the vcpkg
+   libmysql used on Windows) removed my_bool and declares it `bool *`, while
+   MariaDB Connector/C and MySQL 5.x declare it `my_bool *` (char). Take the
+   indicator element type from the header so the result binding below is
+   type-correct against whichever client library this is compiled with. */
+#if !defined(MARIADB_BASE_VERSION) && defined(MYSQL_VERSION_ID) && (MYSQL_VERSION_ID >= 80000)
+typedef bool lunet_mysql_null_indicator_t;
+#else
+typedef my_bool lunet_mysql_null_indicator_t;
+#endif
+
 #define LUNET_MYSQL_CONN_MT "lunet.mysql.conn"
 
 static int g_mysql_library_initialized = 0;
@@ -544,8 +556,9 @@ static void db_query_work_cb(uv_work_t* req) {
   ctx->col_names = lunet_alloc(sizeof(char*) * ctx->ncols);
   ctx->col_types = lunet_alloc(sizeof(int) * ctx->ncols);
   MYSQL_BIND* result_bind = lunet_alloc(sizeof(MYSQL_BIND) * ctx->ncols);
-  // Use char for is_null to match my_bool on older MySQL/MariaDB (char vs bool)
-  char* is_null = lunet_alloc(sizeof(char) * ctx->ncols);
+  // Element type matches the client header's MYSQL_BIND.is_null pointee
+  // (bool on MySQL 8.0+/vcpkg, my_bool==char on MariaDB/MySQL 5.x).
+  lunet_mysql_null_indicator_t* is_null = lunet_alloc(sizeof(lunet_mysql_null_indicator_t) * ctx->ncols);
   unsigned long* length = lunet_alloc(sizeof(unsigned long) * ctx->ncols);
   
   if (!ctx->col_names || !ctx->col_types || !result_bind || !is_null || !length) {

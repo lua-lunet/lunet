@@ -64,6 +64,7 @@ local function main()
     pass("Connection opened")
 
     -- Scratch table for the exec_params positive/usability checks.
+    local _
     _, err = db.exec(conn,
         "CREATE TABLE IF NOT EXISTS item18_mismatch (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255))")
     if err then

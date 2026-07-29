@@ -75,11 +75,30 @@
 //! `sodium_free` (which itself zeroes, verifies the canary, unlocks and
 //! releases). BUT the crate is built `panic = "abort"`: on an abort,
 //! destructors do not run, so drop-ordering erasure cannot be the only
-//! protection. The protection that survives an abort is `sodium_mlock`:
-//! locked pages are excluded from core dumps and never reach swap, so a
-//! crashed process does not disclose key material even though nothing was
-//! erased. mlock is the load-bearing defence; Drop erasure covers normal
-//! exit, clear and retirement.
+//! protection. What survives an abort is PLATFORM-SPLIT — item15
+//! verified both halves against real crash state, and item15b closed
+//! the macOS half:
+//!
+//! - **Swap:** `sodium_mlock` pins the guarded pages in RAM on every
+//!   supported platform; locked pages never reach swap.
+//! - **Core dumps, Linux:** libsodium's `sodium_mlock` sets
+//!   `MADV_DONTDUMP`, so the guarded pages are excluded from the kernel
+//!   core. Verified: a 32-byte guarded key pattern appeared 0 times in
+//!   a real post-abort core while a heap control pattern was found.
+//! - **Core dumps, macOS:** mlock gives NO exclusion — Darwin has no
+//!   `MADV_DONTDUMP`, and item15 recovered the full key from dumpable
+//!   post-abort memory (guard pages on either side verified intact, so
+//!   the region was a genuine guarded one). The abort-time defence on
+//!   Darwin is item15b's `setrlimit(RLIMIT_CORE, 0)` at
+//!   `lunet_paxe_init` — the kernel then writes no core at all, so no
+//!   page, guarded or not, can disclose material through one. Default
+//!   on, with `LUNET_PAXE_ALLOW_CORE_DUMPS=1` as the documented
+//!   debugging opt-out (see lib.rs and PAXE.md "Security
+//!   Considerations").
+//!
+//! Drop erasure covers normal exit, clear and retirement; the
+//! platform-split mechanisms above cover the crash-without-destructors
+//! case.
 //!
 //! ## Thread safety: single-threaded by construction
 //!
@@ -199,8 +218,11 @@ impl StoredKey {
     /// pages. The explicit `mlock` is load-bearing even though
     /// `sodium_malloc` locks implicitly: it makes lock failure a hard,
     /// reportable error here rather than a silent best-effort, and locked
-    /// pages are what keep material out of swap and core dumps (the
-    /// protection that survives `panic = "abort"`; see module docs).
+    /// pages are what keep material out of swap on every platform and out
+    /// of core dumps ON LINUX (`MADV_DONTDUMP`). On macOS mlock excludes
+    /// nothing from cores — the core-dump defence there is the init-time
+    /// `RLIMIT_CORE` suppression (item15b). See the module docs for the
+    /// full platform split that survives `panic = "abort"`.
     ///
     /// On any failure the partial allocation is dropped — `sodium_free`
     /// zeroes and releases it — so no error path leaks guarded memory.
@@ -406,8 +428,11 @@ impl KeyStore {
 // output contains no material. Guaranteed by construction (and stated,
 // not tested): every removal path drops the `StoredKey`, whose
 // destructor runs `sodium_memzero` and then `sodium_free` (which zeroes
-// again); `sodium_mlock` keeps the pages out of swap and core dumps for
-// the whole lifetime — the protection that survives `panic = "abort"`.
+// again); `sodium_mlock` keeps the pages out of swap on every platform
+// and out of core dumps on Linux (`MADV_DONTDUMP`) — and on macOS the
+// init-time `RLIMIT_CORE` suppression (item15b) keeps the kernel from
+// writing a core at all. Those are the protections that survive
+// `panic = "abort"`; the module docs carry the full platform split.
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]

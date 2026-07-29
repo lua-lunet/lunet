@@ -6,19 +6,21 @@
 //! the deleted `src/paxe.c`; it is a pure opt-in extension and is never
 //! linked into `lunet-run`.
 //!
-//! This is the scaffold commit: build plumbing plus one exported symbol
-//! ([`lunet_paxe_version`]) proving the end-to-end path — cargo builds the
-//! cdylib, the Lua loader finds it, `require` succeeds, and a call returns.
-//! There is no protocol logic, no cryptography and no keystore yet.
+//! This crate so far: build plumbing, the libsodium FFI boundary
+//! ([`sodium`], item02), and one exported symbol ([`lunet_paxe_version`])
+//! proving the end-to-end path — cargo builds the cdylib, the Lua loader
+//! finds it, `require` succeeds, and a call returns. There is no protocol
+//! logic, no keystore and no Lua-facing API yet (items 03–07).
 //!
 //! ## Dependency policy: zero crates
 //!
 //! This crate has **no** crate dependencies — not even `libc`. All
-//! cryptography and all secure-memory handling will come from libsodium via
-//! `extern "C"` declarations (item02), **statically linked into this
-//! cdylib** (owner decision): `sodium_malloc` / `sodium_mlock` /
-//! `sodium_memzero` provide guarded, locked, reliably-zeroed key storage,
-//! which is exactly where sysadmin-injected shared cluster keys belong.
+//! cryptography and all secure-memory handling comes from libsodium via
+//! hand-written `extern "C"` declarations in [`sodium`], **statically
+//! linked into this cdylib** (owner decision, implemented in `build.rs`):
+//! `sodium_malloc` / `sodium_mlock` / `sodium_memzero` provide guarded,
+//! locked, reliably-zeroed key storage, which is exactly where
+//! sysadmin-injected shared cluster keys belong.
 //!
 //! ## NO PANIC ON ANY INPUT — hard constraint
 //!
@@ -39,6 +41,25 @@
 //! This constraint is written here now, while the crate is empty, so the
 //! codec, keystore and AEAD items that follow are designed under it from
 //! their first line rather than having it retrofitted.
+//!
+//! ## FFI containment (item02)
+//!
+//! [`sodium`] is the ONLY module in this crate that may contain an
+//! `extern "C"` block or call libsodium, and the only module permitted
+//! `unsafe` code (enforced below by `#![deny(unsafe_code)]` with a single
+//! module-level exception). It declares the libsodium primitives by hand
+//! — zero crate dependencies, not even `libc` — each with its contract
+//! written at the declaration, and exposes safe wrappers: fixed-size
+//! key/nonce/tag newtypes, slice-derived pointer+length pairs, a startup
+//! ABI size check, CSPRNG-only nonce generation, guarded allocations, and
+//! AES-GCM unavailability as a reportable error. libsodium is statically
+//! linked into this cdylib by `build.rs` (owner decision).
+
+// Every module except sodium.rs is plain safe Rust; unsafe is denied here
+// and re-allowed by inner attribute inside sodium.rs alone.
+#![deny(unsafe_code)]
+
+mod sodium;
 
 use std::os::raw::c_char;
 
@@ -52,6 +73,10 @@ static VERSION: &[u8] = concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes();
 /// The pointer borrows a `'static` allocation; the caller must NOT free it.
 /// Cannot fail and cannot panic: no input, no allocation, no indexing. This
 /// is the scaffold symbol proving the build → `require` → call path.
+// `#[no_mangle]` is an unsafe attribute (RFC 3325) and so falls under the
+// crate's deny(unsafe_code); exporting C ABI symbols is the one legitimate
+// use beside sodium.rs, allowed here per-symbol.
+#[allow(unsafe_code)]
 #[no_mangle]
 pub extern "C" fn lunet_paxe_version() -> *const c_char {
     VERSION.as_ptr() as *const c_char
@@ -59,6 +84,10 @@ pub extern "C" fn lunet_paxe_version() -> *const c_char {
 
 #[cfg(test)]
 mod tests {
+    // Reading back the exported C string inherently dereferences a raw
+    // pointer; test-only, and it never ships in the cdylib.
+    #![allow(unsafe_code)]
+
     use super::*;
     use std::ffi::CStr;
 

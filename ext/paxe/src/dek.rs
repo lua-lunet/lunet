@@ -951,9 +951,13 @@ mod tests {
             return;
         }
         let l = link();
-        // Span the 83-byte overhead region (64..128), typical datagram
-        // sizes, and the documented DEK maximum 65507 - 83 = 65424.
-        for n in [64usize, 65, 82, 83, 84, 100, 128, 1400, 8192, DEK_MAX_PAYLOAD] {
+        // Span the fixed 67-byte head length (66/67/68 — the payload
+        // sizes around which the deleted C's in-place decrypt+memmove
+        // began to overlap; out-of-place decryption removes that boundary
+        // by construction, and the straddle pins it), the 83-byte
+        // overhead region (64..128), typical datagram sizes, and the
+        // documented DEK maximum 65507 - 83 = 65424.
+        for n in [64usize, 65, 66, 67, 68, 82, 83, 84, 100, 128, 1400, 8192, DEK_MAX_PAYLOAD] {
             let pt = payload(n);
             let frame = seal(&l.a, NODE_B, CHAN, ep(EPOCH), &pt).expect("seal");
             assert_eq!(frame.len(), n + DEK_OVERHEAD, "frame must be N + 83 exactly (n={n})");

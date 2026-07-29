@@ -474,6 +474,23 @@ mod tests {
         (0..n).map(|i| (i % 256) as u8).collect()
     }
 
+    /// Fixed-seed pseudo-random payload: hand-rolled xorshift64 (the same
+    /// zero-dependency discipline as the codec property test — no external
+    /// crate). The seed is a FIXED constant, so every run exercises the
+    /// identical byte pattern: this is a byte-pattern case, not a
+    /// randomness experiment.
+    fn prand_payload(n: usize) -> Vec<u8> {
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                (x & 0xFF) as u8
+            })
+            .collect()
+    }
+
     #[test]
     fn overhead_and_limits_are_the_documented_numbers() {
         assert_eq!(OVERHEAD, 37);
@@ -488,8 +505,21 @@ mod tests {
             return;
         }
         let ks = loopback_store(0x11);
-        for &n in &[0usize, 1, 36, 37, 38, 1400] {
-            for payload in [ascending_payload(n), vec![0x00u8; n], vec![0xFFu8; n]] {
+        // Lengths: 0 and 1 (degenerate); 35/36/37/38 straddling the
+        // deleted C's 36-byte in-place overlap boundary from BOTH sides
+        // (the Rust design is separate-output, so no such boundary exists
+        // by construction — the straddle pins that decision); 1400 (a
+        // typical full datagram). Patterns: embedded NULs and high bytes
+        // (ascending), all-zero, all-0xFF, all-0xDE, and a fixed-seed
+        // pseudo-random fill.
+        for &n in &[0usize, 1, 35, 36, 37, 38, 1400] {
+            for payload in [
+                ascending_payload(n),
+                vec![0x00u8; n],
+                vec![0xFFu8; n],
+                vec![0xDEu8; n],
+                prand_payload(n),
+            ] {
                 let mut frame = vec![0u8; n + OVERHEAD];
                 let written = seal(&ks, LOCAL, 100, ep(3), &payload, &mut frame).expect("seal");
                 assert_eq!(written, n + OVERHEAD, "frame size for payload {n}");

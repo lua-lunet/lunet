@@ -1318,41 +1318,97 @@ mod ffi_tests {
         assert_eq!(rc, RC_OK);
         assert_eq!(frame63_e4[8] >> 3, 4, "newest epoch seals");
 
-        // B holds the A-key under epoch 3 ONLY.
-        become_node_b(3);
-
-        // rx_short: fewer bytes than the 9-byte prefix.
-        assert_one_drop(b"1234", R::TooShort);
-        // rx_short via the DEK minimum: a 37-byte frame carrying the DEK
-        // bit (flags 0x1D = DEK | pattern | epoch 3).
-        let mut short_dek = vec![0u8; 37];
-        short_dek[8] = 0x1D;
-        assert_one_drop(&short_dek, R::TooShort);
-        // rx_bad_flags: the constant-bit gate (bit 2 clear here).
-        let mut bad_flags = vec![0u8; 37];
-        bad_flags[8] = 0x00;
-        assert_one_drop(&bad_flags, R::BadFlags);
-        // rx_len_mismatch: a real standard frame truncated by one byte.
-        assert_one_drop(&frame63[..frame63.len() - 1], R::LenMismatch);
-        // rx_dek_len_mismatch: patch the inner Length (bytes 65-66), which
-        // sits outside the AAD — only the equality check catches it.
-        let mut forged_inner = frame64.clone();
-        forged_inner[65] ^= 0xFF;
-        assert_one_drop(&forged_inner, R::DekLenMismatch);
-        // rx_no_epoch: B knows peer A but not epoch 4 — a ROTATION
-        // problem, counted separately from an unknown peer.
-        assert_one_drop(&frame63_e4, R::NoEpoch);
-        // rx_auth_fail: one flipped ciphertext byte.
-        let mut forged_ct = frame63.clone();
-        forged_ct[30] ^= 0x01;
-        assert_one_drop(&forged_ct, R::AuthFailed);
-
-        // rx_no_peer: a node with NO key for A under any epoch — a
-        // TOPOLOGY problem. (Reconfigure as node C, then restore B.)
-        lunet_paxe_shutdown();
-        assert_eq!(lunet_paxe_set_local_id(300), RC_OK);
-        assert_one_drop(&frame63, R::NoPeer);
-        become_node_b(3);
+        // THE reason -> trigger mapping, EXHAUSTIVE BY CONSTRUCTION: the
+        // match below iterates RejectReason::ALL and has no wildcard arm,
+        // so adding a RejectReason variant without adding its triggering
+        // case here is a COMPILE ERROR (non-exhaustive pattern), not a
+        // forgotten list entry. The enum's own tripwires (the ALL array
+        // literal, the exhaustive line() match, the COUNT assertion in
+        // stats.rs) guard the reason-to-COUNTER mapping; this match
+        // guards the reason-to-TEST mapping — one arm per enumerated
+        // reason, each asserting the rejection AND that exactly its own
+        // counter moved. B holds the A-key under epoch 3 ONLY; each arm
+        // (re)establishes the receiver configuration it needs.
+        for reason in stats::RejectReason::ALL {
+            match reason {
+                // rx_plaintext: the item09 protected-socket gate (not
+                // open()): a datagram whose toId is not this node, with
+                // a flags byte that deliberately PASSES the constant-bit
+                // filter — only the explicit addressing check rejects it.
+                R::Plaintext => {
+                    become_node_b(3);
+                    let d = datagram_to(0x270F, 40, 0x04);
+                    let before = stats::snapshot();
+                    assert_eq!(lunet_paxe_frame_for_us(d.as_ptr(), d.len()), 0);
+                    let after = stats::snapshot();
+                    assert_eq!(after.rx_total - before.rx_total, 1, "{reason:?}: rx_total +1");
+                    assert_eq!(after.rx_ok - before.rx_ok, 0, "{reason:?}: rx_ok untouched");
+                    for r in stats::RejectReason::ALL {
+                        let moved = after.reject(r) - before.reject(r);
+                        if r == reason {
+                            assert_eq!(moved, 1, "{reason:?}: its counter +1");
+                        } else {
+                            assert_eq!(moved, 0, "{reason:?}: {r:?} must not move");
+                        }
+                    }
+                    assert_invariant(&after, "after a plaintext drop");
+                }
+                // rx_short, both forms: fewer bytes than the 9-byte
+                // prefix, and a 37-byte frame carrying the DEK bit
+                // (flags 0x1D = DEK | pattern | epoch 3) rejected at the
+                // DEK minimum-size gate.
+                R::TooShort => {
+                    become_node_b(3);
+                    assert_one_drop(b"1234", reason);
+                    let mut short_dek = vec![0u8; 37];
+                    short_dek[8] = 0x1D;
+                    assert_one_drop(&short_dek, reason);
+                }
+                // rx_bad_flags: the constant-bit gate (bit 2 clear here).
+                R::BadFlags => {
+                    become_node_b(3);
+                    let mut bad_flags = vec![0u8; 37];
+                    bad_flags[8] = 0x00;
+                    assert_one_drop(&bad_flags, reason);
+                }
+                // rx_len_mismatch: a real standard frame truncated by
+                // one byte.
+                R::LenMismatch => {
+                    become_node_b(3);
+                    assert_one_drop(&frame63[..frame63.len() - 1], reason);
+                }
+                // rx_no_peer: a node with NO key for A under any epoch —
+                // a TOPOLOGY problem, counted separately from NoEpoch.
+                R::NoPeer => {
+                    lunet_paxe_shutdown();
+                    assert_eq!(lunet_paxe_set_local_id(300), RC_OK);
+                    assert_one_drop(&frame63, reason);
+                }
+                // rx_no_epoch: B knows peer A but not epoch 4 — a
+                // ROTATION problem.
+                R::NoEpoch => {
+                    become_node_b(3);
+                    assert_one_drop(&frame63_e4, reason);
+                }
+                // rx_dek_len_mismatch: patch the inner Length (bytes
+                // 65-66), which sits outside the AAD — only the explicit
+                // equality check catches it.
+                R::DekLenMismatch => {
+                    become_node_b(3);
+                    let mut forged_inner = frame64.clone();
+                    forged_inner[65] ^= 0xFF;
+                    assert_one_drop(&forged_inner, reason);
+                }
+                // rx_auth_fail: one flipped ciphertext byte.
+                R::AuthFailed => {
+                    become_node_b(3);
+                    let mut forged_ct = frame63.clone();
+                    forged_ct[30] ^= 0x01;
+                    assert_one_drop(&forged_ct, reason);
+                }
+            }
+        }
+        // The final arm (AuthFailed, last in ALL) left node B configured.
 
         // Success: rx_total AND rx_ok advance; the invariant holds.
         let before = stats::snapshot();

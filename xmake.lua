@@ -485,6 +485,15 @@ target("lunet-mysql")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
     add_defines("LUNET_HAS_DB", "LUNET_DB_MYSQL")
+
+    -- item19: the MYSQL_BIND.is_null type confusion was caught by this
+    -- warning class; make the next instance fail the build. clang/gcc only:
+    -- MSVC's equivalent (C4133) fires on different constructs and the
+    -- Windows/vcpkg build cannot be verified from this machine. GCC >= 14
+    -- already treats this diagnostic as an error by default.
+    if not is_plat("windows") then
+        add_cflags("-Werror=incompatible-pointer-types", {force = true})
+    end
     
     if is_plat("macosx") then
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})

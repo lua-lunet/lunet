@@ -11,10 +11,34 @@
 //! cryptography-free header/flags codec ([`codec`], item04), standard-mode
 //! seal/open with the single AAD construction point ([`standard`],
 //! item05), DEK-mode seal/open plus the automatic mode-selection layer
-//! ([`dek`], item06), and one exported symbol ([`lunet_paxe_version`])
-//! proving the end-to-end path — cargo builds the cdylib, the Lua loader
-//! finds it, `require` succeeds, and a call returns. The Lua-facing API
-//! (item07) has not landed yet.
+//! ([`dek`], item06), and the Lua-facing C ABI ([`lunet_paxe_init`] and
+//! friends, item07) consumed by `paxe.lua` through the LuaJIT FFI.
+//!
+//! ## The item07 C ABI
+//!
+//! All module state (the keystore, i.e. ALL key material) lives behind
+//! the FFI in thread-local storage; Lua never holds keys except
+//! transiently when passing one into `lunet_paxe_keystore_set` (the
+//! VM-transit limitation documented in PAXE.md). Buffers cross as
+//! (pointer, length); ids and epochs cross as u32 so out-of-range values
+//! are representable and rejected with a named constraint rather than
+//! silently truncated. Return codes:
+//!
+//! - `RC_OK` (0): success.
+//! - `RC_OK_ABSENT` (1): success, but the addressed slot did not exist
+//!   (keystore_retire of an absent `(peer, epoch)`).
+//! - `RC_ERR` (-1): OPERATIONAL failure. The message is in the
+//!   last-error buffer; `paxe.lua` returns `nil, message`.
+//! - `RC_INVAL` (-2): MALFORMED ARGUMENT — a bug in the calling script.
+//!   The message (naming the constraint) is in the last-error buffer;
+//!   `paxe.lua` RAISES it as a Lua error.
+//! - `RC_DROP` (-3): `open` rejected the frame. EVERY frame-level
+//!   failure — parse, unknown key, authentication, even an unconfigured
+//!   keystore — collapses to this ONE opaque outcome, and the typed
+//!   in-crate reason is never written to the last-error buffer: a
+//!   receiver that explains why a forgery failed is a decryption oracle
+//!   (PAXE.md "Failure Handling"). The typed [`dek::OpenError`] variants
+//!   stay in-crate for item08's counters.
 //!
 //! ## Dependency policy: zero crates
 //!
@@ -46,12 +70,17 @@
 //! codec, keystore and AEAD items that follow are designed under it from
 //! their first line rather than having it retrofitted.
 //!
-//! ## FFI containment (item02)
+//! ## FFI containment (item02, extended in item07)
 //!
 //! [`sodium`] is the ONLY module in this crate that may contain an
-//! `extern "C"` block or call libsodium, and the only module permitted
-//! `unsafe` code (enforced below by `#![deny(unsafe_code)]` with a single
-//! module-level exception). It declares the libsodium primitives by hand
+//! `extern "C"` block or call libsodium, and the only module with a
+//! module-level `unsafe` allowance (enforced below by
+//! `#![deny(unsafe_code)]`). The item07 exported symbols in THIS file
+//! carry per-function `#[allow(unsafe_code)]` for the LuaJIT-facing
+//! pointer glue (raw pointer ⇄ slice conversion at the trust boundary) —
+//! the same per-symbol pattern [`lunet_paxe_version`] established. Every
+//! export validates every pointer and length before any unsafe block
+//! runs. [`sodium`] declares the libsodium primitives by hand
 //! — zero crate dependencies, not even `libc` — each with its contract
 //! written at the declaration, and exposes safe wrappers: fixed-size
 //! key/nonce/tag newtypes, slice-derived pointer+length pairs, a startup
@@ -69,7 +98,567 @@ mod keystore;
 mod sodium;
 mod standard;
 
-use std::os::raw::c_char;
+use std::cell::RefCell;
+use std::os::raw::{c_char, c_int};
+
+// ---------------------------------------------------------------------------
+// Module state. ALL crypto state (the keystore = all key material) lives
+// here behind the FFI, never in Lua. Single-threaded by construction
+// (keystore.rs: every caller runs on the one LuaJIT VM thread), so
+// thread-local RefCells are the honest structure — and fully safe code.
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// THE keystore. `None` until `set_local_id` configures the node
+    /// identity, and again after `shutdown`. `KeyStore` is `!Send`/
+    /// `!Sync` (item03), matching the single-VM-thread call model.
+    static STORE: RefCell<Option<keystore::KeyStore>> = const { RefCell::new(None) };
+
+    /// The last RC_ERR / RC_INVAL message. Read via
+    /// [`lunet_paxe_last_error`]; copied out by paxe.lua immediately.
+    /// RC_DROP never writes here (oracle avoidance, see its doc below).
+    static LAST_ERROR: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Success.
+const RC_OK: c_int = 0;
+/// Success with information: the addressed slot did not exist
+/// (keystore_retire of an absent `(peer, epoch)` — paxe.lua returns
+/// `false`, not an error).
+const RC_OK_ABSENT: c_int = 1;
+/// OPERATIONAL failure — a condition the script handles. Message in the
+/// last-error buffer; paxe.lua returns `nil, message`.
+const RC_ERR: c_int = -1;
+/// MALFORMED ARGUMENT — a bug in the calling script. Message (naming the
+/// constraint) in the last-error buffer; paxe.lua RAISES a Lua error.
+const RC_INVAL: c_int = -2;
+/// `open` rejected the frame. THE single opaque outcome for EVERY
+/// frame-level failure (parse, unknown key, authentication, unconfigured
+/// keystore): the typed in-crate [`dek::OpenError`] reason is dropped
+/// right here and NEVER written to the last-error buffer, because a
+/// receiver that explains why a forgery failed is a decryption oracle
+/// (PAXE.md "Failure Handling"). The reasons survive only in-crate, for
+/// item08's counters.
+const RC_DROP: c_int = -3;
+
+/// Record an OPERATIONAL failure message and return its code.
+fn fail(msg: &str) -> c_int {
+    set_last_error(msg.as_bytes());
+    RC_ERR
+}
+
+/// Record a MALFORMED ARGUMENT message and return its code.
+fn invalid(msg: String) -> c_int {
+    set_last_error(msg.as_bytes());
+    RC_INVAL
+}
+
+/// Write the last-error buffer. A RefCell borrow conflict is impossible
+/// by construction (no export holds the borrow across a call into
+/// anything that writes it) and handled defensively anyway: the code is
+/// still returned, so no path can panic.
+fn set_last_error(msg: &[u8]) {
+    LAST_ERROR.with(|e| {
+        if let Ok(mut e) = e.try_borrow_mut() {
+            e.clear();
+            e.extend_from_slice(msg);
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Argument validation — EVERY value crossing the boundary is untrusted.
+// Each check names its constraint; each returns, never panics. Ids and
+// epochs arrive as u32 precisely so out-of-range values are representable
+// here and rejected with a message instead of being silently truncated
+// by the FFI conversion (paxe.lua separately guarantees the value is an
+// integer within u32 so the conversion itself is exact).
+// ---------------------------------------------------------------------------
+
+/// u32 → u16 with a named-constraint message (node ids, channels).
+fn check_u16(v: u32, what: &str) -> Result<u16, String> {
+    u16::try_from(v).map_err(|_| format!("{what} {v} out of range: must be 0-65535"))
+}
+
+/// u32 → bounded [`keystore::Epoch`] (0-31, the 5-bit wire field).
+fn check_epoch(v: u32) -> Result<keystore::Epoch, String> {
+    keystore::Epoch::new(
+        u8::try_from(v).map_err(|_| epoch_message(v))?,
+    )
+    .map_err(|_| epoch_message(v))
+}
+
+fn epoch_message(v: u32) -> String {
+    format!("epoch {v} out of range: must be 0-{}", keystore::MAX_EPOCH)
+}
+
+/// Seal-side channel validation: channels 1-99 are RESERVED for system
+/// traffic (PAXE.md "Channels"); the application API seals on channel 0
+/// and 100-65535 only. (Receive-side there is no such gate: `open`
+/// reports whatever channel the authenticated header carries.)
+fn check_channel(v: u32) -> Result<u16, String> {
+    let c = check_u16(v, "channel")?;
+    if (1..=99).contains(&c) {
+        return Err(format!(
+            "channel {c} is reserved: 1-99 are system channels, application channels start at 100"
+        ));
+    }
+    Ok(c)
+}
+
+/// Borrow a Lua buffer as a slice for the duration of one call.
+///
+/// Null with length 0 is an empty slice (LuaJIT may hand NULL for an
+/// empty string); null with a non-zero length is a malformed argument.
+/// The returned slice borrows the CALLER's memory and is never stored —
+/// the soundness contract of this FFI is that the pointer is valid for
+/// `len` bytes for the duration of the call, which paxe.lua guarantees
+/// by passing live Lua strings / ffi buffers straight through.
+#[allow(unsafe_code)]
+fn buf_in<'a>(ptr: *const u8, len: usize, what: &str) -> Result<&'a [u8], String> {
+    if len == 0 {
+        return Ok(&[]);
+    }
+    if ptr.is_null() {
+        return Err(format!("{what}: null pointer with non-zero length {len}"));
+    }
+    // SAFETY: non-null checked above; the caller contract (above) keeps
+    // the pointee alive and unaliased for this call; read-only use.
+    Ok(unsafe { std::slice::from_raw_parts(ptr, len) })
+}
+
+/// Borrow a Lua output buffer as a mutable slice for one call. Same
+/// contract as [`buf_in`]; null with capacity 0 is an empty slice.
+#[allow(unsafe_code)]
+fn buf_out<'a>(ptr: *mut u8, cap: usize, what: &str) -> Result<&'a mut [u8], String> {
+    if cap == 0 {
+        return Ok(&mut []);
+    }
+    if ptr.is_null() {
+        return Err(format!("{what}: null output pointer with capacity {cap}"));
+    }
+    // SAFETY: non-null checked above; caller contract per buf_in.
+    Ok(unsafe { std::slice::from_raw_parts_mut(ptr, cap) })
+}
+
+// ---------------------------------------------------------------------------
+// Constants — exported from the SAME values the codec/standard/dek layers
+// compute with, never restated as literals in paxe.lua (the deleted C
+// hard-coded 36/82 in a #define and in the docs; both were wrong).
+// ---------------------------------------------------------------------------
+
+/// Standard-mode per-frame overhead in bytes (37), from `standard.rs`.
+// Per-symbol unsafe allowance: see lunet_paxe_version.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_overhead_standard() -> u32 {
+    standard::OVERHEAD as u32
+}
+
+/// DEK-mode per-frame overhead in bytes (83), from `dek.rs`.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_overhead_dek() -> u32 {
+    dek::DEK_OVERHEAD as u32
+}
+
+/// Maximum standard-mode plaintext payload (65470), from `standard.rs`.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_max_payload_standard() -> u32 {
+    standard::MAX_PAYLOAD as u32
+}
+
+/// Maximum DEK-mode plaintext payload (65424), from `dek.rs`.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_max_payload_dek() -> u32 {
+    dek::DEK_MAX_PAYLOAD as u32
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle.
+// ---------------------------------------------------------------------------
+
+/// Initialise the module: libsodium init, the startup ABI size check, and
+/// the AES-256-GCM hardware-availability requirement. Idempotent.
+/// Unavailability is an OPERATIONAL failure (environment property) —
+/// never a panic, never a silent fallback to another cipher.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_init() -> c_int {
+    if let Err(e) = sodium::init() {
+        return fail(&format!("libsodium initialisation failed: {e}"));
+    }
+    if let Err(e) = sodium::check_sizes() {
+        return fail(&format!("libsodium ABI check failed: {e}"));
+    }
+    if let Err(e) = sodium::require_aes_gcm() {
+        return fail(&format!(
+            "AES-256-GCM hardware path unavailable; PAXE cannot operate on this host: {e}"
+        ));
+    }
+    RC_OK
+}
+
+/// Configure this node's identity — ONCE. Creates the keystore. Calling
+/// again without an intervening `shutdown` is a malformed use (a bug in
+/// the script): silently re-creating the store would erase installed
+/// keys, so the second call is RC_INVAL, never a silent wipe.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_set_local_id(node_id: u32) -> c_int {
+    let id = match check_u16(node_id, "node id") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    STORE.with(|s| {
+        let mut s = match s.try_borrow_mut() {
+            Ok(s) => s,
+            Err(_) => return fail("internal: keystore borrow conflict"),
+        };
+        if s.is_some() {
+            return invalid(
+                "local node id already configured; call shutdown() before reconfiguring"
+                    .to_string(),
+            );
+        }
+        match keystore::KeyStore::new(id) {
+            Ok(store) => {
+                *s = Some(store);
+                RC_OK
+            }
+            Err(e) => fail(&format!("could not create keystore: {e}")),
+        }
+    })
+}
+
+/// Shut the module down: drop the keystore — every StoredKey is
+/// `sodium_memzero`'d and `sodium_free`d on the drop (item03) — and clear
+/// the last-error buffer. Afterwards `set_local_id` may configure afresh.
+/// Safe to call when unconfigured (a no-op).
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_shutdown() {
+    STORE.with(|s| {
+        if let Ok(mut s) = s.try_borrow_mut() {
+            // The drop of the KeyStore IS the zeroisation.
+            *s = None;
+        }
+    });
+    LAST_ERROR.with(|e| {
+        if let Ok(mut e) = e.try_borrow_mut() {
+            e.clear();
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Keystore operations. Keys are addressed by (peer node id, epoch) — no
+// key_id anywhere; the old addressing model did not survive.
+// ---------------------------------------------------------------------------
+
+/// Install a 32-byte per-link key shared with `peer` under `epoch`.
+/// `key` must point at EXACTLY 32 bytes; the material is copied into a
+/// guarded, mlocked allocation inside Rust and the caller's buffer is
+/// never retained. Overwriting an occupied slot erases the old key.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_keystore_set(
+    peer: u32,
+    epoch: u32,
+    key: *const u8,
+    key_len: usize,
+) -> c_int {
+    let peer = match check_u16(peer, "peer node id") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    let epoch = match check_epoch(epoch) {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    let key = match buf_in(key, key_len, "key") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    if key.len() != sodium::KEYBYTES {
+        return invalid(format!(
+            "key must be exactly {} bytes, got {}",
+            sodium::KEYBYTES,
+            key.len()
+        ));
+    }
+    // Cannot fail after the length check; mapped anyway, never unwrapped.
+    let material: &[u8; sodium::KEYBYTES] = match key.try_into() {
+        Ok(a) => a,
+        Err(_) => return invalid(format!("key must be exactly {} bytes", sodium::KEYBYTES)),
+    };
+    STORE.with(|s| {
+        let mut s = match s.try_borrow_mut() {
+            Ok(s) => s,
+            Err(_) => return fail("internal: keystore borrow conflict"),
+        };
+        let store = match s.as_mut() {
+            Some(st) => st,
+            None => {
+                return fail("local node id not configured: call set_local_id() first")
+            }
+        };
+        match store.install(peer, epoch, material) {
+            Ok(()) => RC_OK,
+            Err(e) => fail(&format!("could not install key: {e}")),
+        }
+    })
+}
+
+/// Retire one `(peer, epoch)` slot, erasing its key. RC_OK if a key was
+/// retired, RC_OK_ABSENT if the slot was empty (informational, not an
+/// error), RC_ERR if the store is unconfigured.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_keystore_retire(peer: u32, epoch: u32) -> c_int {
+    let peer = match check_u16(peer, "peer node id") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    let epoch = match check_epoch(epoch) {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    STORE.with(|s| {
+        let mut s = match s.try_borrow_mut() {
+            Ok(s) => s,
+            Err(_) => return fail("internal: keystore borrow conflict"),
+        };
+        let store = match s.as_mut() {
+            Some(st) => st,
+            None => {
+                return fail("local node id not configured: call set_local_id() first")
+            }
+        };
+        if store.retire(peer, epoch) {
+            RC_OK
+        } else {
+            RC_OK_ABSENT
+        }
+    })
+}
+
+/// Erase every installed key. Tolerant by design: clearing an
+/// unconfigured store is a successful no-op (cleanup must never fail).
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_keystore_clear() -> c_int {
+    STORE.with(|s| {
+        if let Ok(mut s) = s.try_borrow_mut() {
+            if let Some(store) = s.as_mut() {
+                store.clear();
+            }
+        }
+        RC_OK
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Seal / open.
+// ---------------------------------------------------------------------------
+
+/// Seal `payload` for `to_id` on `channel`, choosing the frame mode by
+/// payload size ([`dek::select_mode`]: standard below 64 bytes, DEK at
+/// and above). The frame's `fromId` is the configured local id — never a
+/// parameter, so no caller can spoof a source. The send epoch is the
+/// NEWEST epoch installed for `to_id` (PAXE.md "Rotation": installing a
+/// new epoch switches senders to it); sealing under a retired/absent key
+/// is therefore impossible by construction.
+///
+/// `out` must hold at least `payload_len + 83` bytes (paxe.lua allocates
+/// exactly that); the frame size is written to `out_len`. An oversized
+/// payload is an OPERATIONAL failure naming the selected mode's maximum
+/// — never a truncated length field (PAXE.md "Limits").
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_seal(
+    payload: *const u8,
+    payload_len: usize,
+    to_id: u32,
+    channel: u32,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> c_int {
+    let to_id = match check_u16(to_id, "destination node id") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    let channel = match check_channel(channel) {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    let payload = match buf_in(payload, payload_len, "payload") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    if out_len.is_null() {
+        return invalid("frame length output pointer must not be null".to_string());
+    }
+    let out = match buf_out(out, out_cap, "frame output") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    // Payload bound against the SELECTED mode's maximum. Below the
+    // 64-byte threshold the standard maximum applies; at and above it,
+    // the DEK maximum — so a 65425..65470-byte offer fails against DEK's
+    // 65424, naming the mode and the number.
+    let (mode_name, max) = match dek::select_mode(payload.len()) {
+        codec::Mode::Standard => ("standard", standard::MAX_PAYLOAD),
+        codec::Mode::Dek => ("DEK", dek::DEK_MAX_PAYLOAD),
+    };
+    if payload.len() > max {
+        return fail(&format!(
+            "payload too large: {} bytes exceeds the {mode_name}-mode maximum of {max}",
+            payload.len()
+        ));
+    }
+    STORE.with(|s| {
+        let s = match s.try_borrow() {
+            Ok(s) => s,
+            Err(_) => return fail("internal: keystore borrow conflict"),
+        };
+        let store = match s.as_ref() {
+            Some(st) => st,
+            None => {
+                return fail("local node id not configured: call set_local_id() first")
+            }
+        };
+        // The send epoch: the NEWEST epoch installed for this peer.
+        let (epoch, _) = match store.key_for_send_current(to_id) {
+            Some(e) => e,
+            None => {
+                return fail(&format!(
+                    "no key installed for peer {to_id} under any epoch"
+                ))
+            }
+        };
+        match dek::seal(store, to_id, channel, epoch, payload) {
+            Ok(frame) => {
+                if frame.len() > out.len() {
+                    // paxe.lua always supplies payload_len + 83, so a
+                    // short buffer here is a loader bug — malformed use.
+                    return invalid(format!(
+                        "frame output buffer too small: need {}, have {}",
+                        frame.len(),
+                        out.len()
+                    ));
+                }
+                // Bounds checked above; the copy cannot panic.
+                out[..frame.len()].copy_from_slice(&frame);
+                // SAFETY: non-null checked at entry; single u32 write.
+                unsafe { *out_len = frame.len() };
+                RC_OK
+            }
+            Err(e) => fail(&format!("seal failed: {e}")),
+        }
+    })
+}
+
+/// Open one received frame. Success: the payload in `out` (length in
+/// `out_len`), plus `from_id`, `channel` and `mode` (0 = standard,
+/// 1 = DEK) through the out-pointers. `fromId` is authenticated (it sits
+/// inside the AAD), so it is trustworthy information and is surfaced —
+/// that is the point of the header design.
+///
+/// ANY frame-level failure returns RC_DROP with NO message: the opaque
+/// collapse documented at RC_DROP. Only malformed C-level arguments
+/// (null out-pointers — a loader bug, unreachable from paxe.lua) return
+/// RC_INVAL.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_open(
+    frame: *const u8,
+    frame_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+    from_id: *mut u32,
+    channel: *mut u32,
+    mode: *mut u32,
+) -> c_int {
+    let frame = match buf_in(frame, frame_len, "frame") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    if out_len.is_null() || from_id.is_null() || channel.is_null() || mode.is_null() {
+        return invalid("open: output pointers must not be null".to_string());
+    }
+    let out = match buf_out(out, out_cap, "payload output") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    STORE.with(|s| {
+        let s = match s.try_borrow() {
+            Ok(s) => s,
+            // Unreachable by construction; still just a drop.
+            Err(_) => return RC_DROP,
+        };
+        let store = match s.as_ref() {
+            Some(st) => st,
+            // An unconfigured receiver drops like any other failure:
+            // "not configured" reveals nothing about the frame, and one
+            // outcome keeps the surface uniform.
+            None => return RC_DROP,
+        };
+        match dek::open(store, frame) {
+            Ok((h, f, plain)) => {
+                if plain.len() > out.len() {
+                    // paxe.lua supplies frame_len bytes, always enough —
+                    // a short buffer here is a loader bug.
+                    return invalid(format!(
+                        "payload output buffer too small: need {}, have {}",
+                        plain.len(),
+                        out.len()
+                    ));
+                }
+                out[..plain.len()].copy_from_slice(&plain);
+                // SAFETY: all four pointers checked non-null at entry.
+                unsafe {
+                    *out_len = plain.len();
+                    *from_id = u32::from(h.from_id);
+                    *channel = u32::from(h.channel);
+                    *mode = match f.mode() {
+                        codec::Mode::Standard => 0,
+                        codec::Mode::Dek => 1,
+                    };
+                }
+                RC_OK
+            }
+            // The typed reason dies here: no last-error write, one code.
+            Err(_) => RC_DROP,
+        }
+    })
+}
+
+/// The last RC_ERR / RC_INVAL message for this thread: a borrowed
+/// pointer plus length (NOT NUL-terminated; use the length). Valid until
+/// the next fallible call on this thread — paxe.lua copies it out with
+/// `ffi.string` immediately. Never carries an open() rejection reason.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_last_error(len: *mut usize) -> *const u8 {
+    LAST_ERROR.with(|e| {
+        let e = match e.try_borrow() {
+            Ok(e) => e,
+            Err(_) => return std::ptr::null(),
+        };
+        if !len.is_null() {
+            // SAFETY: non-null checked; single usize write.
+            unsafe { *len = e.len() };
+        }
+        // The Vec lives in the thread-local; its buffer stays valid until
+        // the next set_last_error on this thread (documented contract).
+        e.as_ptr()
+    })
+}
 
 /// Crate version as a NUL-terminated static string, baked into the cdylib's
 /// read-only data. Built from `CARGO_PKG_VERSION` at compile time so this
@@ -105,5 +694,364 @@ mod tests {
         assert!(!ptr.is_null());
         let s = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap();
         assert_eq!(s, env!("CARGO_PKG_VERSION"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FFI boundary tests. These drive the EXPORTED symbols exactly as
+// paxe.lua does — pointer/length buffers, u32 ids, out-pointers — and pin
+// the two item07 integration properties: the standard/DEK dispatch is
+// wired for both directions, and EVERY open failure collapses to RC_DROP
+// with nothing written to the last-error buffer.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod ffi_tests {
+    #![allow(unsafe_code)]
+
+    use super::*;
+
+    const NODE_A: u32 = 100;
+    const NODE_B: u32 = 200;
+    const CHAN: u32 = 137;
+    const KEY: [u8; 32] = [0x42; 32];
+
+    fn gcm() -> bool {
+        sodium::init().is_ok() && sodium::aes_gcm_available()
+    }
+
+    fn last_error_string() -> String {
+        let mut len: usize = 0;
+        let ptr = lunet_paxe_last_error(&mut len);
+        if ptr.is_null() || len == 0 {
+            return String::new();
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+
+    /// Configure node A with a link key for peer B under `epoch`.
+    fn setup_node_a(epoch: u32) {
+        assert_eq!(lunet_paxe_init(), RC_OK);
+        assert_eq!(lunet_paxe_set_local_id(NODE_A), RC_OK);
+        assert_eq!(
+            lunet_paxe_keystore_set(NODE_B, epoch, KEY.as_ptr(), KEY.len()),
+            RC_OK
+        );
+    }
+
+    /// Become the OTHER end of the link. The FFI holds ONE store per
+    /// process (one Lua VM = one node), and the send/receive addressing
+    /// asymmetry (item03: seal looks up by toId, open by fromId) means a
+    /// frame A sealed for B can only be opened by B's store — keyed under
+    /// peer A. Two genuinely different node ids: shutdown, reconfigure.
+    fn become_node_b(epoch: u32) {
+        lunet_paxe_shutdown();
+        assert_eq!(lunet_paxe_set_local_id(NODE_B), RC_OK);
+        assert_eq!(
+            lunet_paxe_keystore_set(NODE_A, epoch, KEY.as_ptr(), KEY.len()),
+            RC_OK
+        );
+    }
+
+    fn seal(payload: &[u8], to_id: u32, channel: u32) -> (c_int, Vec<u8>) {
+        let mut out = vec![0u8; payload.len() + 83];
+        let mut out_len: usize = 0;
+        let rc = lunet_paxe_seal(
+            payload.as_ptr(),
+            payload.len(),
+            to_id,
+            channel,
+            out.as_mut_ptr(),
+            out.len(),
+            &mut out_len,
+        );
+        out.truncate(out_len);
+        (rc, out)
+    }
+
+    fn open(frame: &[u8]) -> (c_int, Vec<u8>, u32, u32, u32) {
+        let mut out = vec![0u8; frame.len().max(1)];
+        let mut out_len: usize = 0;
+        let mut from_id: u32 = 0;
+        let mut channel: u32 = 0;
+        let mut mode: u32 = u32::MAX;
+        let rc = lunet_paxe_open(
+            frame.as_ptr(),
+            frame.len(),
+            out.as_mut_ptr(),
+            out.len(),
+            &mut out_len,
+            &mut from_id,
+            &mut channel,
+            &mut mode,
+        );
+        out.truncate(out_len);
+        (rc, out, from_id, channel, mode)
+    }
+
+    #[test]
+    fn constants_are_the_codec_side_values_not_literals() {
+        assert_eq!(lunet_paxe_overhead_standard(), standard::OVERHEAD as u32);
+        assert_eq!(lunet_paxe_overhead_dek(), dek::DEK_OVERHEAD as u32);
+        assert_eq!(lunet_paxe_max_payload_standard(), standard::MAX_PAYLOAD as u32);
+        assert_eq!(lunet_paxe_max_payload_dek(), dek::DEK_MAX_PAYLOAD as u32);
+        // ...and those values are the documented protocol numbers.
+        assert_eq!(lunet_paxe_overhead_standard(), 37);
+        assert_eq!(lunet_paxe_overhead_dek(), 83);
+        assert_eq!(lunet_paxe_max_payload_standard(), 65470);
+        assert_eq!(lunet_paxe_max_payload_dek(), 65424);
+    }
+
+    #[test]
+    fn malformed_arguments_are_rc_inval_with_named_constraints() {
+        assert_eq!(lunet_paxe_set_local_id(65536), RC_INVAL);
+        assert!(last_error_string().contains("0-65535"));
+        assert_eq!(lunet_paxe_set_local_id(u32::MAX), RC_INVAL);
+
+        assert_eq!(lunet_paxe_init(), RC_OK);
+        assert_eq!(lunet_paxe_set_local_id(NODE_A), RC_OK);
+        // Second configuration without shutdown: malformed use, no wipe.
+        assert_eq!(lunet_paxe_set_local_id(NODE_A), RC_INVAL);
+
+        // Epoch range.
+        assert_eq!(
+            lunet_paxe_keystore_set(NODE_B, 32, KEY.as_ptr(), KEY.len()),
+            RC_INVAL
+        );
+        assert!(last_error_string().contains("0-31"));
+        // Key length.
+        assert_eq!(
+            lunet_paxe_keystore_set(NODE_B, 3, KEY.as_ptr(), 31),
+            RC_INVAL
+        );
+        assert!(last_error_string().contains("exactly 32 bytes"));
+        // Peer id range.
+        assert_eq!(
+            lunet_paxe_keystore_set(70000, 3, KEY.as_ptr(), KEY.len()),
+            RC_INVAL
+        );
+        // Channels 1-99 are reserved; 0 and 100+ are fine.
+        let (rc, _) = seal(b"x", NODE_B, 99);
+        assert_eq!(rc, RC_INVAL);
+        assert!(last_error_string().contains("reserved"));
+        let (rc, _) = seal(b"x", NODE_B, 65536);
+        assert_eq!(rc, RC_INVAL);
+        // Null payload pointer with a non-zero length: malformed, no panic.
+        let mut out_len: usize = 0;
+        let mut buf = [0u8; 128];
+        let rc = lunet_paxe_seal(
+            std::ptr::null(),
+            5,
+            NODE_B,
+            CHAN,
+            buf.as_mut_ptr(),
+            buf.len(),
+            &mut out_len,
+        );
+        assert_eq!(rc, RC_INVAL);
+        // Retire validates too.
+        assert_eq!(lunet_paxe_keystore_retire(NODE_B, 200), RC_INVAL);
+    }
+
+    #[test]
+    fn dispatch_round_trips_both_modes_through_the_ffi() {
+        if !gcm() {
+            eprintln!("skipping: AES-GCM hardware path unavailable");
+            return;
+        }
+        setup_node_a(3);
+
+        // A seals both boundary sizes FOR B. 63 bytes -> standard on the
+        // wire (flags bit 0 clear), N + 37; 64 bytes -> DEK (bit 0 set),
+        // N + 83.
+        let payload63: Vec<u8> = (0..63u8).collect();
+        let (rc, frame63) = seal(&payload63, NODE_B, CHAN);
+        assert_eq!(rc, RC_OK, "seal 63: {}", last_error_string());
+        assert_eq!(frame63.len(), 63 + 37);
+        assert_eq!(frame63[8] & 0x01, 0, "63-byte payload must seal standard");
+        let payload64: Vec<u8> = (0..64u8).collect();
+        let (rc, frame64) = seal(&payload64, NODE_B, CHAN);
+        assert_eq!(rc, RC_OK, "seal 64: {}", last_error_string());
+        assert_eq!(frame64.len(), 64 + 83);
+        assert_eq!(frame64[8] & 0x01, 1, "64-byte payload must seal DEK");
+        // The wire epoch is the installed one (flags bits 3-7).
+        assert_eq!(frame64[8] >> 3, 3);
+
+        // B opens both: from_id is A's (genuinely different) id, the
+        // channel round-trips, and the mode is reported per frame.
+        become_node_b(3);
+        let (rc, plain, from_id, channel, mode) = open(&frame63);
+        assert_eq!(rc, RC_OK);
+        assert_eq!(plain, payload63);
+        assert_eq!(from_id, NODE_A);
+        assert_eq!(channel, CHAN);
+        assert_eq!(mode, 0, "standard mode reported as 0");
+        let (rc, plain, from_id, _, mode) = open(&frame64);
+        assert_eq!(rc, RC_OK);
+        assert_eq!(plain, payload64);
+        assert_eq!(from_id, NODE_A);
+        assert_eq!(mode, 1, "DEK mode reported as 1");
+    }
+
+    #[test]
+    fn seal_uses_the_newest_installed_epoch() {
+        if !gcm() {
+            eprintln!("skipping: AES-GCM hardware path unavailable");
+            return;
+        }
+        setup_node_a(1);
+        let wire_epoch = |frame: &[u8]| frame[8] >> 3;
+
+        let payload = [0u8; 10];
+        let (rc, frame) = seal(&payload, NODE_B, CHAN);
+        assert_eq!(rc, RC_OK);
+        assert_eq!(wire_epoch(&frame), 1);
+
+        // Rotation: install a newer epoch and the sender switches at once.
+        let key2 = [0x77u8; 32];
+        assert_eq!(
+            lunet_paxe_keystore_set(NODE_B, 6, key2.as_ptr(), key2.len()),
+            RC_OK
+        );
+        let (rc, frame) = seal(&payload, NODE_B, CHAN);
+        assert_eq!(rc, RC_OK);
+        assert_eq!(wire_epoch(&frame), 6);
+
+        // Retire the newest: the sender falls back to the next-highest.
+        assert_eq!(lunet_paxe_keystore_retire(NODE_B, 6), RC_OK);
+        let (rc, frame) = seal(&payload, NODE_B, CHAN);
+        assert_eq!(rc, RC_OK);
+        assert_eq!(wire_epoch(&frame), 1);
+
+        // Retire of an absent slot: informational, not an error.
+        assert_eq!(lunet_paxe_keystore_retire(NODE_B, 6), RC_OK_ABSENT);
+
+        // Retire the last: no key under any epoch -> operational failure.
+        assert_eq!(lunet_paxe_keystore_retire(NODE_B, 1), RC_OK);
+        let (rc, _) = seal(&payload, NODE_B, CHAN);
+        assert_eq!(rc, RC_ERR);
+        assert!(last_error_string().contains("no key installed"));
+    }
+
+    #[test]
+    fn every_open_failure_collapses_to_one_opaque_drop() {
+        if !gcm() {
+            eprintln!("skipping: AES-GCM hardware path unavailable");
+            return;
+        }
+        // Unconfigured receiver: even THIS is the same opaque drop.
+        let (rc, _, _, _, _) = open(b"whatever");
+        assert_eq!(rc, RC_DROP);
+
+        setup_node_a(3);
+        let payload = [0x55u8; 40];
+        let (rc, frame) = seal(&payload, NODE_B, CHAN);
+        assert_eq!(rc, RC_OK);
+        become_node_b(3);
+
+        let mut cases: Vec<Vec<u8>> = Vec::new();
+        // Corrupted ciphertext byte (tag failure).
+        let mut c1 = frame.clone();
+        c1[30] ^= 0x01;
+        cases.push(c1);
+        // Corrupted AAD (header byte).
+        let mut c2 = frame.clone();
+        c2[1] ^= 0x01;
+        cases.push(c2);
+        // Garbage flags byte.
+        let mut c3 = frame.clone();
+        c3[8] = 0x00;
+        cases.push(c3);
+        // Truncated.
+        cases.push(frame[..frame.len() - 1].to_vec());
+        // Too short to parse at all.
+        cases.push(vec![0u8; 4]);
+        // Empty.
+        cases.push(Vec::new());
+        for (i, bad) in cases.iter().enumerate() {
+            // Prime the last-error buffer with a REAL message; the drop
+            // must not overwrite it with a reason.
+            assert_eq!(lunet_paxe_set_local_id(NODE_A), RC_INVAL);
+            let before = last_error_string();
+            let (rc, _, _, _, _) = open(bad);
+            assert_eq!(rc, RC_DROP, "case {i} must be the opaque drop");
+            assert_eq!(
+                last_error_string(),
+                before,
+                "case {i}: the typed reason must never reach the error buffer"
+            );
+        }
+        // Control: the good frame still opens.
+        let (rc, plain, _, _, _) = open(&frame);
+        assert_eq!(rc, RC_OK);
+        assert_eq!(plain, payload);
+    }
+
+    #[test]
+    fn seal_operational_failures_are_rc_err_and_oversize_is_named() {
+        if !gcm() {
+            eprintln!("skipping: AES-GCM hardware path unavailable");
+            return;
+        }
+        assert_eq!(lunet_paxe_init(), RC_OK);
+        // Seal before set_local_id: operational, clear message.
+        let (rc, _) = seal(b"x", NODE_B, CHAN);
+        assert_eq!(rc, RC_ERR);
+        assert!(last_error_string().contains("set_local_id"));
+
+        assert_eq!(lunet_paxe_set_local_id(NODE_A), RC_OK);
+        // No key for the peer.
+        let (rc, _) = seal(b"x", NODE_B, CHAN);
+        assert_eq!(rc, RC_ERR);
+        assert!(last_error_string().contains("no key installed"));
+
+        // Oversize: above the DEK maximum (every payload >= 64 selects
+        // DEK). Operational failure naming the mode and the number.
+        assert_eq!(
+            lunet_paxe_keystore_set(NODE_B, 3, KEY.as_ptr(), KEY.len()),
+            RC_OK
+        );
+        let big = vec![0u8; dek::DEK_MAX_PAYLOAD + 1];
+        let (rc, _) = seal(&big, NODE_B, CHAN);
+        assert_eq!(rc, RC_ERR);
+        let msg = last_error_string();
+        assert!(msg.contains("DEK-mode maximum of 65424"), "message was: {msg}");
+        // Exactly the maximum seals.
+        let max = vec![0u8; dek::DEK_MAX_PAYLOAD];
+        let (rc, frame) = seal(&max, NODE_B, CHAN);
+        assert_eq!(rc, RC_OK, "seal max: {}", last_error_string());
+        assert_eq!(frame.len(), 65507);
+    }
+
+    #[test]
+    fn keystore_clear_and_shutdown_drop_all_state() {
+        if !gcm() {
+            eprintln!("skipping: AES-GCM hardware path unavailable");
+            return;
+        }
+        setup_node_a(3);
+        assert_eq!(lunet_paxe_keystore_clear(), RC_OK);
+        let (rc, _) = seal(b"x", NODE_B, CHAN);
+        assert_eq!(rc, RC_ERR, "cleared store has no keys");
+
+        assert_eq!(
+            lunet_paxe_keystore_set(NODE_B, 3, KEY.as_ptr(), KEY.len()),
+            RC_OK
+        );
+        lunet_paxe_shutdown();
+        // After shutdown the identity is gone: seal is operational
+        // failure, open is the opaque drop, and reconfiguration works.
+        let (rc, _) = seal(b"x", NODE_B, CHAN);
+        assert_eq!(rc, RC_ERR);
+        let (rc, _, _, _, _) = open(b"x");
+        assert_eq!(rc, RC_DROP);
+        assert_eq!(lunet_paxe_set_local_id(NODE_B), RC_OK);
+        // And the erased key no longer resolves.
+        let (rc, _) = seal(b"x", NODE_A, CHAN);
+        assert_eq!(rc, RC_ERR);
+        assert!(last_error_string().contains("no key installed"));
+        // Shutdown is idempotent.
+        lunet_paxe_shutdown();
     }
 }

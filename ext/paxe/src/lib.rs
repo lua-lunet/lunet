@@ -7,11 +7,12 @@
 //! linked into `lunet-run`.
 //!
 //! This crate so far: build plumbing, the libsodium FFI boundary
-//! ([`sodium`], item02), the secure keystore ([`keystore`], item03), and
-//! one exported symbol ([`lunet_paxe_version`]) proving the end-to-end
+//! ([`sodium`], item02), the secure keystore ([`keystore`], item03), the
+//! cryptography-free header/flags codec ([`codec`], item04), and one
+//! exported symbol ([`lunet_paxe_version`]) proving the end-to-end
 //! path — cargo builds the cdylib, the Lua loader finds it, `require`
-//! succeeds, and a call returns. There is no codec, no seal/open and no
-//! Lua-facing API yet (items 04–07).
+//! succeeds, and a call returns. There is no seal/open and no
+//! Lua-facing API yet (items 05–07).
 //!
 //! ## Dependency policy: zero crates
 //!
@@ -60,6 +61,7 @@
 // and re-allowed by inner attribute inside sodium.rs alone.
 #![deny(unsafe_code)]
 
+mod codec;
 mod keystore;
 mod sodium;
 

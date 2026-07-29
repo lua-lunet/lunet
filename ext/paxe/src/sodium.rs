@@ -236,6 +236,43 @@ mod ffi {
         /// keys) uses it. `==` on secret bytes is a timing side channel;
         /// this exists so nobody reaches for `==` later.
         pub fn sodium_memcmp(b1_: *const c_void, b2_: *const c_void, len: usize) -> c_int;
+
+        /// CONTRACT (ISO C, `stdlib.h`): registers `cb` to run at NORMAL
+        /// process termination (return from `main` / `exit()`), in
+        /// reverse registration order. Returns 0 on success, non-zero on
+        /// failure (glibc: ENOMEM). Not called on `abort()`/`SIGKILL` —
+        /// there is no hookable path there for anyone.
+        ///
+        /// This is libc, not libsodium: declared here because this module
+        /// is the crate's sole `extern "C"` containment boundary (item02),
+        /// and item09's runtime-owned key erasure at process exit needs
+        /// it. The callback must not touch Rust thread-locals through
+        /// panicking accessors — they may already be destroyed (see
+        /// lib.rs `shutdown_state`, which uses `try_with`).
+        pub fn atexit(cb: extern "C" fn()) -> c_int;
+    }
+}
+
+/// Register `cb` to run at normal process termination (item09: the
+/// runtime, not a script, owns key erasure at exit). Best-effort by
+/// contract: a registration failure (practically unreachable — glibc
+/// ENOMEM) is ignored, leaving erasure where it was before item09 — the
+/// thread-local destructor on platforms that run it for the main thread.
+/// Failing `init` over it would punish every platform for one platform's
+/// deficiency. Registered ONCE by the caller (an atomic guard); multiple
+/// registrations would still be harmless because the shutdown they run is
+/// idempotent.
+///
+/// The cdylib must never be dlclosed after registration (a dangling
+/// handler would crash the exiting process); the LuaJIT FFI loader holds
+/// the library for the process lifetime, so this cannot happen in
+/// practice.
+pub fn register_exit_hook(cb: extern "C" fn()) {
+    // SAFETY: `cb` is a valid function pointer with the exact ABI atexit
+    // requires; atexit itself is thread-safe per POSIX. The return value
+    // is deliberately discarded per the best-effort contract above.
+    unsafe {
+        ffi::atexit(cb);
     }
 }
 

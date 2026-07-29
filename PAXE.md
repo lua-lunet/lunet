@@ -8,7 +8,7 @@ This document is the authoritative specification of the PAXE wire protocol. Impl
 
 The wire format, key model, limits and failure semantics below ARE the implemented contract: the cryptographic core (header/flags codec, secure keystore, standard and DEK seal/open, automatic mode selection) and the Lua-facing API (`lunet.paxe`, see [Lua API](#lua-api-lunetpaxe)) are implemented and tested.
 
-**PAXE does not yet protect socket traffic**: nothing is wired between the module and lunet's UDP sockets. That integration lands separately, and with it `set_enabled`/`is_enabled` — which deliberately do not exist until they genuinely control behaviour. (An earlier implementation exposed `set_enabled` as a no-op while an example printed "PAXE enabled"; that defect is not being repeated.) The statistics counters and the failure policies of [Failure Handling](#failure-handling) are implemented (`paxe.stats()`, `paxe.set_fail_policy()`).
+**PAXE protects UDP socket traffic**: `paxe.protect()` opts an individual `lunet.udp` socket into sealing and opening, wired in the Lua layer (`ext/paxe/paxe.lua`) by intercepting the `lunet.udp` module table — `src/udp.c` is untouched (see [UDP socket protection](#udp-socket-protection)). Protection is per-socket; there is deliberately no process-global `set_enabled`/`is_enabled` — an earlier implementation's global switch printed "enabled" while protecting nothing, and one flag cannot express a process serving both an encrypted cluster port and an unencrypted local port. The statistics counters and the failure policies of [Failure Handling](#failure-handling) are implemented (`paxe.stats()`, `paxe.set_fail_policy()`), including `rx_plaintext` for unencrypted datagrams dropped on a protected socket.
 
 ## Overview
 
@@ -167,6 +167,7 @@ Because the rejection reason never reaches the caller, the **statistics counters
 |---------|---------|
 | `rx_total` | Frames presented to a configured receiver (opened + dropped) |
 | `rx_ok` | Frames successfully opened |
+| `rx_plaintext` | Dropped: not a PAXE frame addressed to this node at all — under the 9-byte prefix, or a header `toId` that is not the local id (plaintext, foreign-protocol or misaddressed traffic on a protected socket). Caught by the explicit addressing check at the socket boundary (see [UDP socket protection](#udp-socket-protection)), never by the flags byte |
 | `rx_short` | Dropped: too short to parse (under the 9-byte prefix, or under the 83-byte DEK minimum with the DEK bit set) |
 | `rx_bad_flags` | Dropped: flags constant-bit violation (bit 1 set or bit 2 clear) — the cheap garbage filter |
 | `rx_len_mismatch` | Dropped: declared plaintext length inconsistent with the actual frame size |
@@ -229,11 +230,14 @@ The module is a Rust cdylib (`ext/paxe`) loaded through the LuaJIT FFI by the lo
 | `paxe.keystore_clear()` | `true` | Erase every installed key. |
 | `paxe.seal(payload, to_id, channel)` | `frame` \| `nil, message` | Seal `payload` (string) for `to_id` on `channel`. `fromId` is the configured local id — never a parameter, so no caller can spoof a source. The mode is selected by payload size (standard below 64 bytes, DEK at and above). The send epoch is the newest epoch installed for `to_id` (see below). `channel` must fit 16 bits and must not be in the reserved system range 1–99 (application channels start at 100; channel 0 is permitted). |
 | `paxe.open(frame)` | `payload, from_id, channel, mode` \| `nil, message` | Open one received frame. On success: the payload, the authenticated `fromId`, the channel, and the mode (`"standard"` or `"dek"`). On ANY failure: `nil` plus ONE opaque message — see [Opaque open failure](#opaque-open-failure). |
-| `paxe.stats()` | table | Snapshot of the process-global cumulative counters (see [Failure Handling](#failure-handling)): `rx_total`, `rx_ok`, `rx_short`, `rx_bad_flags`, `rx_len_mismatch`, `rx_no_peer`, `rx_no_epoch`, `rx_dek_len_mismatch`, `rx_auth_fail`, `tx_total`, `tx_standard`, `tx_dek`, `tx_oversize`. Never reset; measure deltas between snapshots. |
+| `paxe.stats()` | table | Snapshot of the process-global cumulative counters (see [Failure Handling](#failure-handling)): `rx_total`, `rx_ok`, `rx_plaintext`, `rx_short`, `rx_bad_flags`, `rx_len_mismatch`, `rx_no_peer`, `rx_no_epoch`, `rx_dek_len_mismatch`, `rx_auth_fail`, `tx_total`, `tx_standard`, `tx_dek`, `tx_oversize`. Never reset; measure deltas between snapshots. |
 | `paxe.set_fail_policy(name)` | `true` \| `false` | Select the drop logging policy: `"silent"` (the default), `"log_once"`, `"verbose"` — case-insensitive. `false` for any other spelling or a non-string argument. |
-| `paxe.shutdown()` | — | Zero and free every key and forget the local identity. Idempotent; `set_local_id` may configure afresh afterwards. The statistics counters are NOT reset (they are cumulative for the process lifetime); the log-once memo is. |
+| `paxe.protect(udpsock, config)` | `true` | Opt ONE `lunet.udp` socket into protection: subsequent `udp.send` seals before transmission and `udp.recv` opens before delivery (see [UDP socket protection](#udp-socket-protection)). `config.peer` (required) is the node id this socket seals for; `config.channel` (optional, default `0`) is the seal channel. Raises on a non-handle socket, a malformed config, or when the module is not configured — arming an unconfigured socket would silently drop every datagram. |
+| `paxe.unprotect(udpsock)` | `true` | Remove protection from a socket. Idempotent. |
+| `paxe.is_protected(udpsock)` | `false` \| `true, peer, channel` | Query a socket's protection and its configured peer/channel. |
+| `paxe.shutdown()` | — | Zero and free every key and forget the local identity. Idempotent; `set_local_id` may configure afresh afterwards. The statistics counters are NOT reset (they are cumulative for the process lifetime); the log-once memo is. Key erasure at normal process exit does NOT depend on this call: `init` registers an `atexit` hook that zeroes the keystore even when a script never calls `shutdown()`. |
 
-There is no `key_id` anywhere: keys are addressed by `(peer node id, epoch)`. There is deliberately no `set_enabled`/`is_enabled` yet: they arrive with the socket integration, when they genuinely control transport protection. The statistics counters and the failure policy exist now and govern what the synchronous `open` reports; the UDP receive path will consult the same counters when the socket integration lands.
+There is no `key_id` anywhere: keys are addressed by `(peer node id, epoch)`. And there is deliberately no `set_enabled`/`is_enabled` at all: protection is per-socket via `paxe.protect` (see below), which genuinely controls behaviour.
 
 ### Error conventions
 
@@ -251,6 +255,25 @@ No input can crash the process: the library is built `panic = "abort"`, so a Rus
 ### Opaque open failure
 
 `open` collapses EVERY frame-level failure — too short, flags constraint violation, length disagreement, unknown key or epoch, authentication failure, even an unconfigured keystore — to one result: `nil, "lunet.paxe: frame rejected"`. The rejection reason is never returned to the caller and never signalled to the sender: a receiver that explains why a forgery failed is a decryption oracle (see [Failure Handling](#failure-handling)). The typed reasons are recorded into the statistics counters at the reject points, before the collapse; they never cross the FFI.
+
+### UDP socket protection
+
+`paxe.protect(udpsock, config)` opts ONE socket into PAXE. This is the recorded per-socket decision: there is no process-global enable flag and no `set_enabled`/`is_enabled`, because a single global cannot express a process serving both an encrypted cluster port and an unencrypted local port — and the deleted module's global switch was a no-op that printed "enabled". With per-socket protection as the only mechanism, there is no precedence question to document. `paxe.unprotect` disarms a socket, `paxe.is_protected` queries it, and `udp.close` also removes the socket's protection entry (a freed handle's pointer may be reused by a later bind and must never inherit stale protection).
+
+**The integration is Lua-side, not in `src/udp.c`** — the recorded integration-layer decision. The Rust core is already reachable from Lua through the FFI; `require("lunet.udp")` returns a plain Lua table of C functions, so `protect` intercepts `send`/`recv`/`close` on that shared table and routes only registered sockets through the crypto path — unprotected sockets pass straight through to the raw C functions. Wiring the C instead would have needed a new C ABI into Rust and would have run crypto in udp.c's receive callback, which executes on the libuv loop rather than a Lua coroutine — exactly the context the project's debugging notes (AGENTS.md) document for use-after-free crashes. The C callback and `udp_ctx_t` are untouched and never see key material.
+
+**Decryption happens at delivery time**, when Lua calls `udp.recv` — not at arrival time in the libuv callback (the recorded arrival-vs-delivery decision). The C receive queue therefore holds ciphertext, never plaintext: no opened payload lingers in C memory between arrival and `recv`, and no key material is needed at queue-drain time. A queue flush at `udp.close` discards ciphertext that was never authenticated — uncounted, because it never reached the gate below — which is the same end state as a drop, for frames that were undeliverable anyway.
+
+On receive, the order per datagram is:
+
+1. **The explicit plaintext gate.** A datagram is treated as a PAXE frame only if it carries at least the 9-byte prefix AND its header `toId` equals the configured local id. Anything else — plaintext, foreign-protocol or misaddressed traffic — is dropped and counted as `rx_plaintext`, by the addressing check, NEVER by the flags constant-bit gate: crafted plaintext could have a byte 8 that passes that gate, and when the two coincide (ordinary garbage) `rx_plaintext`, not `rx_bad_flags`, is the counter that moves.
+2. **Open.** A datagram addressed to this node goes to `open`. On success `udp.recv(sock)` returns `data, host, port, from_id, channel` — the plaintext, the transport-level sender address, and the AUTHENTICATED `fromId` and channel. On ANY failure the failure policy applies, the reason counter moves, and NOTHING is delivered — no data, no error indicator (decryption-oracle avoidance); `recv` simply keeps waiting for the next datagram. A close or error while waiting passes through unchanged (`nil, nil, message`).
+
+On send, `udp.send(sock, host, port, data [, peer [, channel]])` seals `data` before transmission: the peer from the call or the socket's configured peer, the channel likewise (default `0`), the frame mode by payload size (automatic selection), the send epoch the newest installed for the peer. A seal failure — unconfigured, no key for the peer, or an oversized payload — fails the send with a clear error naming the cause (for oversize: the selected mode's maximum); nothing is transmitted, and oversize moves `tx_oversize`.
+
+Drop visibility: datagram arrival is traced by udp.c's `UDP_TRACE_RX` in trace builds; every drop is counted in Rust and reported through the failure policy (`[PAXE] drop: <reason>` lines under `log_once`/`verbose`) — the same mechanism a synchronous `open` uses, not a parallel one.
+
+**Key erasure at process exit is owned by the runtime**: `paxe.init` registers an `atexit` hook that zeroes and frees the keystore at normal termination even when a script never calls `shutdown()`. No hook can run on `abort()`/`SIGKILL`; the guarded, mlocked storage is the mitigation there.
 
 ### Constants
 

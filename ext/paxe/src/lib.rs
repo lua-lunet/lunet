@@ -10,10 +10,11 @@
 //! ([`sodium`], item02), the secure keystore ([`keystore`], item03), the
 //! cryptography-free header/flags codec ([`codec`], item04), standard-mode
 //! seal/open with the single AAD construction point ([`standard`],
-//! item05), and one exported symbol ([`lunet_paxe_version`]) proving the
-//! end-to-end path — cargo builds the cdylib, the Lua loader finds it,
-//! `require` succeeds, and a call returns. DEK mode and mode selection
-//! (item06) and the Lua-facing API (item07) have not landed yet.
+//! item05), DEK-mode seal/open plus the automatic mode-selection layer
+//! ([`dek`], item06), and one exported symbol ([`lunet_paxe_version`])
+//! proving the end-to-end path — cargo builds the cdylib, the Lua loader
+//! finds it, `require` succeeds, and a call returns. The Lua-facing API
+//! (item07) has not landed yet.
 //!
 //! ## Dependency policy: zero crates
 //!
@@ -63,6 +64,7 @@
 #![deny(unsafe_code)]
 
 mod codec;
+mod dek;
 mod keystore;
 mod sodium;
 mod standard;

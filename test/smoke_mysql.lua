@@ -1,26 +1,32 @@
 -- Smoke test for MySQL driver
 -- Run: ./build/lunet test/smoke_mysql.lua
 -- Requires: MySQL/MariaDB running on localhost:3306
+-- Env overrides: LUNET_MYSQL_HOST/PORT/USER/PASSWORD/DATABASE
+-- Strictness: LUNET_DB_REQUIRED=1 makes an unreachable server a hard failure
 
 local lunet = require("lunet")
 local db = require("lunet.mysql")
+
+local source = debug.getinfo(1, "S").source:gsub("^@", "")
+local script_dir = source:match("^(.*)[/\\]") or "."
+local gate = dofile(script_dir .. "/db_smoke_gate.lua")
+
+local cfg = gate.config("MYSQL", {
+    host = "127.0.0.1",
+    port = 3306,
+    user = "root",
+    password = "root",
+    database = "test"
+})
 
 local function test_mysql()
     print("=== MySQL Smoke Test ===")
 
     -- Test 1: Open connection
     print("1. Opening connection...")
-    local conn, err = db.open({
-        host = "127.0.0.1",
-        port = 3306,
-        user = "root",
-        password = "root",
-        database = "test"
-    })
+    local conn, err = db.open(cfg)
     if not conn then
-        print("SKIP: Could not connect to MySQL: " .. tostring(err))
-        print("   (MySQL may not be running - this is OK for CI)")
-        __lunet_exit_code = 0
+        gate.open_failed("MySQL", cfg, err)
         return
     end
     print("   OK: Connection opened")

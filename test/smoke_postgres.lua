@@ -1,26 +1,32 @@
 -- Smoke test for PostgreSQL driver
 -- Run: ./build/lunet test/smoke_postgres.lua
 -- Requires: PostgreSQL running on localhost:5432
+-- Env overrides: LUNET_POSTGRES_HOST/PORT/USER/PASSWORD/DATABASE
+-- Strictness: LUNET_DB_REQUIRED=1 makes an unreachable server a hard failure
 
 local lunet = require("lunet")
 local db = require("lunet.postgres")
+
+local source = debug.getinfo(1, "S").source:gsub("^@", "")
+local script_dir = source:match("^(.*)[/\\]") or "."
+local gate = dofile(script_dir .. "/db_smoke_gate.lua")
+
+local cfg = gate.config("POSTGRES", {
+    host = "127.0.0.1",
+    port = 5432,
+    user = os.getenv("USER") or "postgres",
+    password = "",
+    database = "postgres"
+})
 
 local function test_postgres()
     print("=== PostgreSQL Smoke Test ===")
 
     -- Test 1: Open connection
     print("1. Opening connection...")
-    local conn, err = db.open({
-        host = "127.0.0.1",
-        port = 5432,
-        user = os.getenv("USER") or "postgres",
-        password = "",
-        database = "postgres"
-    })
+    local conn, err = db.open(cfg)
     if not conn then
-        print("SKIP: Could not connect to PostgreSQL: " .. tostring(err))
-        print("   (PostgreSQL may not be running - this is OK for CI)")
-        __lunet_exit_code = 0
+        gate.open_failed("PostgreSQL", cfg, err)
         return
     end
     print("   OK: Connection opened")

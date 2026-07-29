@@ -617,6 +617,17 @@ local function lunet_trim(s)
     return (s or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+-- Same truthiness semantics as test/db_smoke_gate.lua: unset, empty, "0",
+-- "false", "no" and "off" (any case) are false; anything else is true.
+local function lunet_env_truthy(name)
+    local v = os.getenv(name)
+    if not v then
+        return false
+    end
+    v = v:lower()
+    return v ~= "" and v ~= "0" and v ~= "false" and v ~= "no" and v ~= "off"
+end
+
 local function lunet_runner_path(mode)
     local runner_name = is_host("windows") and "lunet-run.exe" or "lunet-run"
     local matches = os.files("build/**/" .. mode .. "/" .. runner_name)
@@ -850,9 +861,16 @@ task("smoke")
         local runner = lunet_runner_path("release")
         os.execv(runner, {"test/smoke_sqlite3.lua"})
 
+        -- LUNET_DB_REQUIRED: in a release CI run a missing driver module is a
+        -- build failure, not a reason to do less work (mirrors the strictness
+        -- gate in test/db_smoke_gate.lua).
+        local db_required = lunet_env_truthy("LUNET_DB_REQUIRED")
+
         local mysql_modules = os.files("build/**/release/lunet/mysql.*")
         if #mysql_modules > 0 then
             os.execv(runner, {"test/smoke_mysql.lua"})
+        elseif db_required then
+            raise("[smoke] FAIL mysql: driver module not built (LUNET_DB_REQUIRED is set)")
         else
             print("[smoke] skip mysql: driver module not built")
         end
@@ -860,6 +878,8 @@ task("smoke")
         local postgres_modules = os.files("build/**/release/lunet/postgres.*")
         if #postgres_modules > 0 then
             os.execv(runner, {"test/smoke_postgres.lua"})
+        elseif db_required then
+            raise("[smoke] FAIL postgres: driver module not built (LUNET_DB_REQUIRED is set)")
         else
             print("[smoke] skip postgres: driver module not built")
         end

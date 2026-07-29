@@ -213,16 +213,9 @@ local function test_mysql()
     print("   OK: string parameters round-trip byte-exactly")
 
     -- 5.5 String with an embedded NUL. The write bind carries an explicit
-    -- buffer_length, so the full payload must reach the server; that is
-    -- asserted byte-exactly (including length) via HEX()/LENGTH() read back
-    -- through query_params. NOTE: the raw column value itself currently comes
-    -- back truncated at the NUL - the result path copies fetched values with
-    -- strlen semantics (lunet_strdup_local) and pushes them with
-    -- lua_pushstring, ignoring the fetched length. That is a known driver
-    -- defect in the shared result-binding path (plain db.query is affected
-    -- identically), reported as an item17 finding; the raw-value assertion
-    -- below pins the current behaviour and should flip to full byte-equality
-    -- once the driver is fixed.
+    -- buffer_length, so the full payload reaches the server; the read-back must
+    -- also be byte-exact including length, since the result path now uses the
+    -- client-reported column length and lua_pushlstring rather than strlen.
     print("   5.5 embedded NUL (1 param)...")
     local nul_payload = "ab" .. string.char(0x00) .. "cd" .. string.char(0x80, 0xFF)
     res, err = db.exec_params(conn,
@@ -244,11 +237,11 @@ local function test_mysql()
     expect(rows[1].s1_hex == to_hex(nul_payload),
         "NUL-string stored bytes: expected hex " .. to_hex(nul_payload)
             .. ", got " .. tostring(rows[1].s1_hex))
-    -- KNOWN DRIVER DEFECT (item17 finding): read-back truncates at NUL.
-    expect(rows[1].s1 == "ab",
-        "NUL-string read-back: expected current truncation to 'ab', got hex "
+    -- The raw column value must round-trip byte-exactly including the NUL.
+    expect(rows[1].s1 == nul_payload,
+        "NUL-string read-back: expected byte-exact round-trip, got hex "
             .. to_hex(rows[1].s1 or ""))
-    print("   OK: embedded NUL stored byte-exactly (read-back truncation pinned as known defect)")
+    print("   OK: embedded NUL round-trips byte-exactly")
 
     -- 5.6 Boolean parameters. Current contract: collect_params maps
     -- LUA_TBOOLEAN to PARAM_TYPE_INT, so a boolean is silently bound as the

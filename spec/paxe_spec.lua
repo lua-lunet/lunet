@@ -32,6 +32,12 @@
 -- protected-socket UDP send/recv end-to-end is item14; only the
 -- protect/unprotect behaviour reachable without the lunet runtime
 -- loop is covered here.
+--
+-- bit.bxor, NOT Lua 5.3's `~`: LuaJIT's parser is 5.1-based and some
+-- builds (Debian trixie's) reject `~` at parse time (item15 finding
+-- F1), which would skip this entire suite with zero checks run.
+
+local bit = require("bit")
 
 describe("PAXE Module #native", function()
   -- Module resolution: the FFI loader is the Lua file
@@ -484,7 +490,7 @@ describe("PAXE Module #native", function()
   describe("opaque rejection (no decryption oracle)", function()
     it("collapses EVERY frame-level failure to nil plus the ONE generic message", function()
       local frame = seal_as_a_for_b("uniform")
-      local corrupted = frame:sub(1, 29) .. string.char(frame:byte(30) ~ 1) .. frame:sub(31)
+      local corrupted = frame:sub(1, 29) .. string.char(bit.bxor(frame:byte(30), 1)) .. frame:sub(31)
       local causes = {
         corrupted,                                  -- authentication failure
         frame:sub(1, #frame - 1),                   -- truncated
@@ -513,7 +519,7 @@ describe("PAXE Module #native", function()
 
     it("reveals the rejection reason ONLY through counter deltas", function()
       local frame = seal_as_a_for_b("typed")
-      local corrupted = frame:sub(1, 29) .. string.char(frame:byte(30) ~ 1) .. frame:sub(31)
+      local corrupted = frame:sub(1, 29) .. string.char(bit.bxor(frame:byte(30), 1)) .. frame:sub(31)
       local function assert_one_reason(bad_frame, counter)
         local d = deltas(function()
           local plain, err = paxe.open(bad_frame)
@@ -539,7 +545,7 @@ describe("PAXE Module #native", function()
       -- flipped: the explicit equality check, not the auth tag.
       local frame64 = seal_as_a_for_b(string.rep("D", 64))
       local forged_inner = frame64:sub(1, 65)
-        .. string.char(frame64:byte(66) ~ 0xFF) .. frame64:sub(67)
+        .. string.char(bit.bxor(frame64:byte(66), 0xFF)) .. frame64:sub(67)
       assert_one_reason(forged_inner, "rx_dek_len_mismatch")
     end)
 
@@ -557,7 +563,7 @@ describe("PAXE Module #native", function()
 
     it("keeps the invariant rx_total == rx_ok + sum(reject reasons) across a mixed window", function()
       local good = seal_as_a_for_b("invariant")
-      local corrupted = good:sub(1, 29) .. string.char(good:byte(30) ~ 1) .. good:sub(31)
+      local corrupted = good:sub(1, 29) .. string.char(bit.bxor(good:byte(30), 1)) .. good:sub(31)
       local d = deltas(function()
         assert(paxe.open(good))           -- opens
         paxe.open(corrupted)              -- auth failure

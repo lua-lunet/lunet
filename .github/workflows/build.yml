@@ -163,7 +163,6 @@ jobs:
         xmake build lunet-static
         xmake build sdk-api-test
         xmake build lunet-sqlite3
-        xmake build lunet-paxe
         xmake build lunet-httpc
         xmake build lunet-postgres
         xmake build lunet-mysql
@@ -176,7 +175,6 @@ jobs:
         xmake build lunet-static
         xmake build sdk-api-test
         xmake build lunet-sqlite3
-        xmake build lunet-paxe
         xmake build lunet-httpc
         xmake build lunet-postgres
         xmake build lunet-mysql
@@ -283,37 +281,6 @@ jobs:
         $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
         if (-not $lunet) { throw "lunet-run.exe not found" }
         & $lunet.FullName examples/03_db_sqlite3.lua
-
-    - name: PAXE example smoke (Unix)
-      if: runner.os != 'Windows'
-      run: |
-        set -euo pipefail
-        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
-        # AES-256-GCM requires hardware crypto extensions (AES-NI on x86,
-        # ARMv8 CE on arm64). Check availability before running the example.
-        cat > /tmp/check_aes.lua <<'LUA'
-        local ok, err = pcall(function()
-          local paxe = require("lunet.paxe")
-          local init_ok = paxe.init()
-          print(init_ok and "AES_SUPPORTED" or "AES_UNSUPPORTED")
-        end)
-        if not ok then print("AES_UNSUPPORTED") end
-        LUA
-        RESULT=$("$LUNET_BIN" /tmp/check_aes.lua)
-        echo "AES check: $RESULT"
-        if echo "$RESULT" | grep -q "AES_SUPPORTED"; then
-          "$LUNET_BIN" examples/06_paxe_encryption.lua
-        else
-          echo "SKIP: AES-256-GCM not available on this hardware"
-        fi
-
-    - name: PAXE example smoke (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
-        if (-not $lunet) { throw "lunet-run.exe not found" }
-        & $lunet.FullName examples/06_paxe_encryption.lua
 
     - name: Package release archive (Linux)
       if: matrix.platform == 'linux'

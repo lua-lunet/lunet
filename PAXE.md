@@ -213,6 +213,7 @@ Each divergence below is documented with its reasoning in the section linked fro
 3. **Authentication failure**: always a drop under the failure policy — never an error that explains the failure to a caller or sender (no decryption oracle).
 4. **Header exposure**: the header and flags are authenticated, not encrypted. `fromId`, `toId`, `channel`, `length` and the epoch are visible to a passive observer.
 5. **Wrapped DEK**: unauthenticated by construction; corruption surfaces at the payload tag check.
+6. **Core dumps (platform-split)** — verified by aborting a live process and inspecting what the crash leaves behind: installed keys live in guarded, `mlock`ed libsodium allocations. `mlock` keeps the pages out of swap on every platform, but core-dump exclusion differs: on Linux libsodium's `mlock` sets `MADV_DONTDUMP`, and a 32-byte guarded key appeared 0 times in a real post-abort kernel core. On macOS there is NO such exclusion — Darwin has no `MADV_DONTDUMP`, `mlock` excludes nothing, and the full key was recovered from dumpable post-abort memory. `paxe.init()` therefore disables core dumps for the whole process by default (`setrlimit(RLIMIT_CORE, 0)`, soft limit only; the inherited hard limit is preserved), so the kernel writes no core at all, on any platform. The rlimit is process-wide, which is sound because loading PAXE is itself the opt-in: a host reaches `init` only through an explicit `require("lunet.paxe")` — exactly when it starts holding cluster keys — and a host that never loads PAXE is untouched. **Re-enabling for debugging**: set `LUNET_PAXE_ALLOW_CORE_DUMPS=1` in the environment before launch and the inherited limit is kept (`ulimit -c unlimited`, `lldb -c /cores/...` work as usual); never set it on a production node — on macOS a crash then writes live key material into the core file. Defence in depth is also available at the OS level (`ulimit -c 0` in the service's launch environment).
 
 ## Lua API (`lunet.paxe`)
 
@@ -223,7 +224,7 @@ The module is a Rust cdylib (`ext/paxe`) loaded through the LuaJIT FFI by the lo
 | Function | Returns | Meaning |
 |----------|---------|---------|
 | `paxe.version()` | string | Crate version. |
-| `paxe.init()` | `true` \| `nil, message` | Initialise libsodium and require the AES-256-GCM hardware path. Idempotent. Reports `nil, message` when the host cannot provide it — PAXE refuses to operate rather than substitute another cipher. |
+| `paxe.init()` | `true` \| `nil, message` | Initialise libsodium and require the AES-256-GCM hardware path. Idempotent. Reports `nil, message` when the host cannot provide it — PAXE refuses to operate rather than substitute another cipher. As its first act `init` also disables process core dumps (`RLIMIT_CORE` soft limit 0; keep the inherited limit for debugging with `LUNET_PAXE_ALLOW_CORE_DUMPS=1`) — see [Security Considerations](#security-considerations). |
 | `paxe.set_local_id(node_id)` | `true` | Configure this node's identity (0–65535) — ONCE. A second call without an intervening `shutdown()` raises: silently re-creating the keystore would erase installed keys. |
 | `paxe.keystore_set(peer, epoch, key)` | `true` \| `nil, message` | Install the 32-byte key shared with `peer` (0–65535) under `epoch` (0–31). Overwriting an occupied slot erases the old key. |
 | `paxe.keystore_retire(peer, epoch)` | `true` \| `false` \| `nil, message` | Erase one `(peer, epoch)` slot. `false` when the slot was already empty (informational, not an error). |
@@ -275,7 +276,7 @@ On send, `udp.send(sock, host, port, data [, peer [, channel]])` seals `data` be
 
 Drop visibility: datagram arrival is traced by udp.c's `UDP_TRACE_RX` in trace builds; every drop is counted in Rust and reported through the failure policy (`[PAXE] drop: <reason>` lines under `log_once`/`verbose`) — the same mechanism a synchronous `open` uses, not a parallel one.
 
-**Key erasure at process exit is owned by the runtime**: `paxe.init` registers an `atexit` hook that zeroes and frees the keystore at normal termination even when a script never calls `shutdown()`. No hook can run on `abort()`/`SIGKILL`; the guarded, mlocked storage is the mitigation there.
+**Key erasure at process exit is owned by the runtime**: `paxe.init` registers an `atexit` hook that zeroes and frees the keystore at normal termination even when a script never calls `shutdown()`. No hook can run on `abort()`/`SIGKILL`; the mitigation THERE is platform-split ([Security Considerations](#security-considerations) item 6): on Linux the guarded pages' `MADV_DONTDUMP` keeps them out of the kernel core; on macOS, where no such exclusion exists, the mitigation is `init`'s default core-dump suppression — no core is written at all.
 
 ### Constants
 

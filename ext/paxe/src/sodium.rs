@@ -188,8 +188,11 @@ mod ffi {
         /// CONTRACT (libsodium docs, "Secure memory / Guarded heap"):
         /// Returns a guarded heap allocation of `size` bytes: the region
         /// sits between inaccessible guard pages, carries a canary that
-        /// `sodium_free` verifies, and its pages are `mlock`ed (kept out
-        /// of swap and core dumps) where the OS allows.
+        /// `sodium_free` verifies, and its pages are `mlock`ed where the
+        /// OS allows. mlock keeps pages out of SWAP on every supported
+        /// platform; exclusion from CORE DUMPS is Linux-only
+        /// (`MADV_DONTDUMP` — Darwin has no equivalent and excludes
+        /// nothing; item15/item15b, see `disable_core_dumps`).
         ///
         /// - Returns NULL on failure — including RLIMIT_MEMLOCK exhaustion
         ///   from the implicit mlock, so failure is an OS-limit condition
@@ -207,7 +210,11 @@ mod ffi {
 
         /// CONTRACT (libsodium docs, "Secure memory / Locking"):
         /// Pins `addr[0..len)` in RAM (rounded to whole pages): the pages
-        /// cannot be swapped out and are excluded from core dumps.
+        /// cannot be swapped out. On Linux libsodium additionally sets
+        /// `MADV_DONTDUMP`, excluding the pages from core dumps; on
+        /// Darwin it CANNOT — no such mechanism exists, and item15
+        /// recovered a full mlocked key from dumpable macOS memory after
+        /// an abort (the gap item15b's `disable_core_dumps` closes).
         /// Returns 0, or -1 on failure — typically ENOMEM when
         /// RLIMIT_MEMLOCK is exhausted. Failure is an OS-limit condition,
         /// not corruption; the caller decides policy.
@@ -250,7 +257,54 @@ mod ffi {
         /// panicking accessors — they may already be destroyed (see
         /// lib.rs `shutdown_state`, which uses `try_with`).
         pub fn atexit(cb: extern "C" fn()) -> c_int;
+
+        /// CONTRACT (POSIX.1-2008, `<sys/resource.h>`): fetch the soft
+        /// (`rlim_cur`) and hard (`rlim_max`) limits for `resource` into
+        /// `*rlim`. Returns 0 on success, -1 with errno set on failure —
+        /// practically unreachable for a valid resource constant and a
+        /// valid out-pointer.
+        ///
+        /// This is libc, not libsodium: declared here because this module
+        /// is the crate's sole `extern "C"` containment boundary (item02),
+        /// and item15b's startup core-dump suppression needs it. The
+        /// declarations are Unix-only; the wrappers below are cfg-gated
+        /// the same way and carry a no-op stub elsewhere.
+        #[cfg(all(unix, target_pointer_width = "64"))]
+        pub fn getrlimit(resource: c_int, rlim: *mut super::RLimit) -> c_int;
+
+        /// CONTRACT (POSIX.1-2008, `<sys/resource.h>`): install the limits
+        /// for `resource` from `*rlim`. Returns 0 on success, -1 with
+        /// errno set on failure. EPERM happens only when RAISING the hard
+        /// limit as an unprivileged process — this crate never does that:
+        /// the hard limit is read back with `getrlimit` and passed through
+        /// unchanged, and only the soft limit moves, strictly downward.
+        #[cfg(all(unix, target_pointer_width = "64"))]
+        pub fn setrlimit(resource: c_int, rlim: *const super::RLimit) -> c_int;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Process core-dump suppression (item15b). Unix-only: RLIMIT_CORE is POSIX;
+// Windows crash dumps (WER) are a different mechanism outside this crate's
+// scope, where `disable_core_dumps` below is a no-op stub.
+// ---------------------------------------------------------------------------
+
+/// `RLIMIT_CORE` — the maximum core-file-size resource. The value is 4 on
+/// BOTH Linux and Darwin (and the BSDs): stable across every Unix this
+/// crate targets.
+#[cfg(all(unix, target_pointer_width = "64"))]
+const RLIMIT_CORE: c_int = 4;
+
+/// POSIX `struct rlimit`. `rlim_t` is `unsigned long` on Linux and
+/// `uint64_t` on Darwin — 64 bits on every supported target either way,
+/// hence the fixed `u64` fields and the 64-bit cfg gate.
+#[cfg(all(unix, target_pointer_width = "64"))]
+#[repr(C)]
+struct RLimit {
+    /// The soft limit: the value the kernel actually enforces.
+    rlim_cur: u64,
+    /// The hard limit: the ceiling to which the soft limit may be raised.
+    rlim_max: u64,
 }
 
 /// Register `cb` to run at normal process termination (item09: the
@@ -274,6 +328,68 @@ pub fn register_exit_hook(cb: extern "C" fn()) {
     unsafe {
         ffi::atexit(cb);
     }
+}
+
+/// Disable core dumps for the ENTIRE process: set the `RLIMIT_CORE` soft
+/// limit to 0 so the kernel writes no core file on any fatal signal —
+/// SIGABRT included, which is the `panic = "abort"` crash shape. This is
+/// the strongest available guarantee that keystore material can never
+/// reach disk through a crash, and the only mechanism that works on
+/// Darwin: item15 verified that `sodium_mlock` excludes the guarded pages
+/// from a Linux core (via `MADV_DONTDUMP`) but that on macOS — which has
+/// no `MADV_DONTDUMP` and where `mlock` does not exclude pages — the full
+/// guarded key was readable in dumpable memory after an abort. After
+/// `RLIMIT_CORE` 0 there is no core at all, on any platform, so no page
+/// (guarded or not) can disclose material through one.
+///
+/// The hard limit is read back with `getrlimit` and passed through
+/// unchanged: lowering it would be irreversible for an unprivileged
+/// process and is deliberately not done, so the documented debugging
+/// opt-out (`LUNET_PAXE_ALLOW_CORE_DUMPS=1`, checked by the caller in
+/// lib.rs) keeps the inherited limit intact instead of having to raise
+/// anything back.
+///
+/// Scope honesty: rlimits are process-wide and this crate is a cdylib in
+/// the lunet-run host. That is sound because loading PAXE is itself the
+/// opt-in — a process only ever calls `lunet_paxe_init` by an explicit
+/// `require("lunet.paxe")`, i.e. exactly when it starts holding cluster
+/// key material, and a process holding cluster keys must not dump cores
+/// by default. A host that never loads PAXE is untouched.
+///
+/// Failure is reported, never panicked on (practically unreachable:
+/// lowering the soft limit cannot EPERM). The caller warns loudly rather
+/// than failing init — the same best-effort philosophy as the `atexit`
+/// registration above.
+#[cfg(all(unix, target_pointer_width = "64"))]
+pub fn disable_core_dumps() -> Result<(), std::io::Error> {
+    let mut current = RLimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `current` is valid, aligned space for one struct rlimit and
+    // RLIMIT_CORE is a valid resource constant.
+    if unsafe { ffi::getrlimit(RLIMIT_CORE, &mut current) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let requested = RLimit {
+        rlim_cur: 0,
+        rlim_max: current.rlim_max,
+    };
+    // SAFETY: `requested` is a valid struct rlimit; only the soft limit
+    // changes, and strictly downward, so an unprivileged caller cannot
+    // hit EPERM.
+    if unsafe { ffi::setrlimit(RLIMIT_CORE, &requested) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// The non-Unix / non-64-bit stub: no `RLIMIT_CORE` mechanism exists to
+/// suppress there (Windows crash dumps are WER, outside this crate's
+/// scope), so suppression is trivially "done".
+#[cfg(not(all(unix, target_pointer_width = "64")))]
+pub fn disable_core_dumps() -> Result<(), std::io::Error> {
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -687,9 +803,11 @@ impl Drop for GuardedAllocation {
     }
 }
 
-/// Pin the pages backing `buf` in RAM: not swappable, excluded from core
-/// dumps. Failure (typically RLIMIT_MEMLOCK) is reported, never panicked
-/// on; the caller decides policy.
+/// Pin the pages backing `buf` in RAM: not swappable on any platform;
+/// excluded from core dumps on LINUX only (`MADV_DONTDUMP` — Darwin has
+/// no equivalent; core-dump suppression there is `disable_core_dumps`,
+/// item15b). Failure (typically RLIMIT_MEMLOCK) is reported, never
+/// panicked on; the caller decides policy.
 pub fn mlock(buf: &mut [u8]) -> Result<(), SodiumError> {
     if buf.is_empty() {
         return Ok(());
@@ -992,5 +1110,36 @@ mod tests {
         assert!(!ct_eq(b"same", b"diff"));
         assert!(!ct_eq(b"short", b"longer"));
         assert!(ct_eq(&[], &[]));
+    }
+
+    /// item15b: the wrapper must move ONLY the soft limit, to exactly 0,
+    /// and pass the inherited hard limit through untouched (raising or
+    /// lowering the hard limit would both be defects: EPERM / irreversible
+    /// lock-in). Runs once per process; the effect is process-wide, which
+    /// is the behaviour under test.
+    #[test]
+    #[cfg(all(unix, target_pointer_width = "64"))]
+    fn disable_core_dumps_zeroes_soft_limit_and_preserves_hard() {
+        let mut before = RLimit {
+            rlim_cur: u64::MAX,
+            rlim_max: u64::MAX,
+        };
+        assert_eq!(unsafe { ffi::getrlimit(RLIMIT_CORE, &mut before) }, 0);
+
+        disable_core_dumps().expect("lowering the soft limit cannot fail");
+
+        let mut after = RLimit {
+            rlim_cur: u64::MAX,
+            rlim_max: 0,
+        };
+        assert_eq!(unsafe { ffi::getrlimit(RLIMIT_CORE, &mut after) }, 0);
+        assert_eq!(after.rlim_cur, 0, "soft limit must be exactly 0");
+        assert_eq!(
+            after.rlim_max, before.rlim_max,
+            "hard limit must pass through unchanged"
+        );
+        // Idempotent: a second call (every lunet_paxe_init calls this) is
+        // a successful no-op.
+        disable_core_dumps().expect("re-disable is a no-op");
     }
 }

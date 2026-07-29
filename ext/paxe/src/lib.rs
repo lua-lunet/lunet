@@ -18,7 +18,11 @@
 //! item09 protected-socket boundary: [`lunet_paxe_frame_for_us`] (the
 //! explicit plaintext gate consumed by the Lua-side UDP wrapper) and
 //! runtime-owned key erasure at process exit (an `atexit` hook
-//! registered by [`lunet_paxe_init`]).
+//! registered by [`lunet_paxe_init`]), and item15b's startup core-dump
+//! suppression ([`lunet_paxe_init`] sets the `RLIMIT_CORE` soft limit to
+//! 0 — the only mechanism that keeps key material out of crash dumps on
+//! macOS — with `LUNET_PAXE_ALLOW_CORE_DUMPS=1` as the documented
+//! debugging opt-out).
 //!
 //! ## The item07 C ABI
 //!
@@ -295,13 +299,36 @@ pub extern "C" fn lunet_paxe_max_payload_dek() -> u32 {
 // Lifecycle.
 // ---------------------------------------------------------------------------
 
-/// Initialise the module: libsodium init, the startup ABI size check, and
-/// the AES-256-GCM hardware-availability requirement. Idempotent.
-/// Unavailability is an OPERATIONAL failure (environment property) —
-/// never a panic, never a silent fallback to another cipher.
+/// Initialise the module: core-dump suppression, libsodium init, the
+/// startup ABI size check, and the AES-256-GCM hardware-availability
+/// requirement. Idempotent. Unavailability is an OPERATIONAL failure
+/// (environment property) — never a panic, never a silent fallback to
+/// another cipher.
+///
+/// item15b: the FIRST act disables core dumps for the process
+/// (`RLIMIT_CORE` soft limit 0), before any key material can exist. On
+/// Linux the keystore's mlocked pages were already excluded from cores
+/// via `MADV_DONTDUMP` (item15 verified against a real post-abort core);
+/// on macOS they were NOT — Darwin has no `MADV_DONTDUMP`, `mlock`
+/// excludes nothing, and item15 recovered a full key from dumpable
+/// post-abort memory. `RLIMIT_CORE` 0 is the only mechanism that covers
+/// Darwin and it is uniform across platforms: after it, the kernel
+/// writes no core at all. The suppression is process-wide, which is
+/// sound here because loading PAXE IS the opt-in: a process reaches this
+/// function only through an explicit `require("lunet.paxe")` — exactly
+/// when it starts holding cluster key material — and a host that never
+/// loads PAXE is untouched. DEBUGGING OPT-OUT:
+/// `LUNET_PAXE_ALLOW_CORE_DUMPS=1` in the environment keeps the inherited
+/// limit (see below). Best-effort like the `atexit` registration: a
+/// failure warns loudly once on stderr instead of failing init.
 #[allow(unsafe_code)]
 #[no_mangle]
 pub extern "C" fn lunet_paxe_init() -> c_int {
+    if !core_dumps_allowed_by_env() {
+        if let Err(e) = sodium::disable_core_dumps() {
+            warn_core_disable_failed(&e);
+        }
+    }
     if let Err(e) = sodium::init() {
         return fail(&format!("libsodium initialisation failed: {e}"));
     }
@@ -326,6 +353,39 @@ pub extern "C" fn lunet_paxe_init() -> c_int {
 /// Guards the one-time `atexit` registration. An atomic, not a lock: no
 /// poisoning, no panic path.
 static EXIT_HOOK_REGISTERED: AtomicBool = AtomicBool::new(false);
+
+/// The documented debugging opt-out (item15b): when
+/// `LUNET_PAXE_ALLOW_CORE_DUMPS` is exactly `"1"`, `lunet_paxe_init`
+/// leaves the process's inherited `RLIMIT_CORE` alone so core-dump
+/// debugging sessions (AGENTS.md: `ulimit -c unlimited`, `lldb -c
+/// /cores/core.*`) keep working for a PAXE-loaded host. Any other value —
+/// including `0`, empty or a misspelling — is treated as UNSET, so a
+/// misconfiguration fails safe (cores stay off). Never set this on a
+/// production node: on macOS a crash then writes live key material into
+/// the core file (item15 finding F2).
+fn core_dumps_allowed_by_env() -> bool {
+    std::env::var_os("LUNET_PAXE_ALLOW_CORE_DUMPS").is_some_and(|v| v == "1")
+}
+
+/// Guards the one-time stderr warning when core-dump suppression fails.
+static CORE_WARN_EMITTED: AtomicBool = AtomicBool::new(false);
+
+/// Loud, one-time, panic-free warning for a `disable_core_dumps` failure.
+/// `eprintln!` is NOT used: it panics on a broken stderr, and under
+/// `panic = "abort"` that would kill the LuaJIT host — the error from
+/// `write_all` is deliberately discarded instead.
+fn warn_core_disable_failed(err: &std::io::Error) {
+    if CORE_WARN_EMITTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    use std::io::Write as _;
+    let msg = format!(
+        "[PAXE] WARNING: setrlimit(RLIMIT_CORE, 0) failed ({err}); core dumps are NOT \
+         disabled and on macOS a crash can write key material into a core file \
+         (see PAXE.md \"Security Considerations\")\n"
+    );
+    let _ = std::io::stderr().write_all(msg.as_bytes());
+}
 
 /// The `atexit` callback: normal process termination erases the keystore
 /// even when the script never called shutdown(). Must be panic-free after

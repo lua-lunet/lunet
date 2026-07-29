@@ -213,6 +213,7 @@ AES-GCM 的附加认证数据为 **9 字节：头部后跟标志字节**（帧�
 3. **认证失败**：一律按失败策略丢弃——绝不出错并向调用方或发送方解释失败原因（不产生解密预言机）。
 4. **头部暴露**：头部与标志字节经过认证但不被加密。`fromId`、`toId`、`channel`、`length` 与纪元对被动观察者可见。
 5. **封装 DEK**：构造上不带认证；损坏会在负载标签校验处显现。
+6. **核心转储（按平台分野）**——通过对存活进程执行 abort 并检查崩溃遗留物来验证：已安装的密钥保存在有保护的、`mlock` 的 libsodium 分配中。`mlock` 在所有平台上都使页面免于换出（swap），但核心转储排除则因平台而异：在 Linux 上，libsodium 的 `mlock` 会设置 `MADV_DONTDUMP`，32 字节的受保护密钥在真实的 abort 后内核核心中出现 0 次。在 macOS 上则**没有**这种排除——Darwin 没有 `MADV_DONTDUMP`，`mlock` 不排除任何内容，完整的密钥曾在 abort 后的可转储内存中被恢复出来。因此 `paxe.init()` 默认禁用整个进程的核心转储（`setrlimit(RLIMIT_CORE, 0)`，仅软限制；继承的硬限制保持不变），使内核在任何平台上都不写出核心文件。该 rlimit 是进程级的，但这是合理的，因为加载 PAXE 本身就是选入：宿主只有通过显式 `require("lunet.paxe")` 才会到达 `init`——恰是它开始持有集群密钥的时刻——而从不加载 PAXE 的宿主不受影响。**调试时重新启用**：在启动前于环境中设置 `LUNET_PAXE_ALLOW_CORE_DUMPS=1`，即保留继承的限制（`ulimit -c unlimited`、`lldb -c /cores/...` 照常可用）；绝不要在生产节点上设置它——在 macOS 上，一旦设置，崩溃就会把存活密钥材料写入核心文件。操作系统层面亦可获得同样的抑制作为纵深防御（在服务启动环境中 `ulimit -c 0`）。
 
 ## Lua API（`lunet.paxe`）
 
@@ -223,7 +224,7 @@ AES-GCM 的附加认证数据为 **9 字节：头部后跟标志字节**（帧�
 | 函数 | 返回值 | 含义 |
 |----------|---------|---------|
 | `paxe.version()` | string | crate 版本号。 |
-| `paxe.init()` | `true` \| `nil, message` | 初始化 libsodium 并要求 AES-256-GCM 硬件路径可用。幂等。当宿主无法提供该路径时返回 `nil, message`——PAXE 拒绝运行，绝不替换为其他密码算法。 |
+| `paxe.init()` | `true` \| `nil, message` | 初始化 libsodium 并要求 AES-256-GCM 硬件路径可用。幂等。当宿主无法提供该路径时返回 `nil, message`——PAXE 拒绝运行，绝不替换为其他密码算法。作为其第一个动作，`init` 还会禁用进程的核心转储（`RLIMIT_CORE` 软限制置 0；调试时设置 `LUNET_PAXE_ALLOW_CORE_DUMPS=1` 可保留继承的限制）——见[安全注意事项](#安全注意事项)。 |
 | `paxe.set_local_id(node_id)` | `true` | 配置本节点身份（0–65535）——仅一次。未经 `shutdown()` 再次调用将抛出错误：静默重建密钥库会抹除已安装的密钥。 |
 | `paxe.keystore_set(peer, epoch, key)` | `true` \| `nil, message` | 安装与 `peer`（0–65535）共享的 32 字节密钥，置于 `epoch`（0–31）之下。覆盖已占用的槽位会抹除旧密钥。 |
 | `paxe.keystore_retire(peer, epoch)` | `true` \| `false` \| `nil, message` | 抹除一个 `(peer, epoch)` 槽位。槽位本已为空时返回 `false`（仅作信息，并非错误）。 |
@@ -275,7 +276,7 @@ AES-GCM 的附加认证数据为 **9 字节：头部后跟标志字节**（帧�
 
 丢弃可见性：数据报到达在 trace 构建中由 udp.c 的 `UDP_TRACE_RX` 跟踪；每次丢弃都在 Rust 中计数并经失败策略上报（`log_once`/`verbose` 下的 `[PAXE] drop: <原因>` 行）——与同步 `open` 使用的是同一机制，而非另起一套。
 
-**进程退出时的密钥抹除由运行时负责**：`paxe.init` 注册一个 `atexit` 钩子，在正常终止时将密钥库清零并释放，即使脚本从未调用 `shutdown()`。`abort()`/`SIGKILL` 下没有任何钩子能够运行；有保护的、mlock 的存储正是针对那种情形的缓解。
+**进程退出时的密钥抹除由运行时负责**：`paxe.init` 注册一个 `atexit` 钩子，在正常终止时将密钥库清零并释放，即使脚本从未调用 `shutdown()`。`abort()`/`SIGKILL` 下没有任何钩子能够运行；针对那种情形的缓解是**按平台分野**的（[安全注意事项](#安全注意事项)第 6 条）：在 Linux 上，受保护页面的 `MADV_DONTDUMP` 使其不进内核核心；在 macOS 上不存在这种排除，缓解就是 `init` 默认的核心转储抑制——根本不写出任何核心文件。
 
 ### 常量
 

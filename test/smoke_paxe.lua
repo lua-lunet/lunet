@@ -1,4 +1,5 @@
--- Smoke test for the lunet.paxe extension (item07 Lua-facing API).
+-- Smoke test for the lunet.paxe extension (item07 Lua-facing API,
+-- extended in item08 with statistics counters and the failure policy).
 --
 -- Before running, build the Rust extension:
 --   (cd ext/paxe && cargo build --release)
@@ -11,6 +12,11 @@
 -- node ids, the 63/64-byte mode boundary, malformed arguments RAISING
 -- (never crashing), and the opaque open() failure: a corrupted frame
 -- returns nil plus ONE generic message — never a reason-revealing one.
+-- item08: paxe.stats() table shape, counter DELTAS on a rejection, the
+-- rx invariant, the tx mode split, and set_fail_policy spellings. The
+-- verbose/log_once checks emit "[PAXE] drop:" lines on stderr — exactly
+-- two across the run (one verbose, one log-once): assert on that prefix,
+-- never on stderr being empty (trace builds also write there).
 
 local script_dir = debug.getinfo(1, "S").source:match("^@(.+)/[^/]+$") or "."
 local ext_dir = script_dir .. "/../ext/paxe"
@@ -169,11 +175,61 @@ local function main()
   check(not e1:find("key", 1, true) and not e1:find("auth", 1, true) and not e1:find("length", 1, true),
     "the opaque message reveals no reason")
 
+  -- ── item08: statistics counters are the diagnostic channel ────────────
+  local s = paxe.stats()
+  check(type(s) == "table", "paxe.stats() returns a table")
+  local stat_fields = { "rx_total", "rx_ok", "rx_short", "rx_bad_flags", "rx_len_mismatch",
+    "rx_no_peer", "rx_no_epoch", "rx_dek_len_mismatch", "rx_auth_fail",
+    "tx_total", "tx_standard", "tx_dek", "tx_oversize" }
+  local all_numbers = true
+  for _, k in ipairs(stat_fields) do
+    if type(s[k]) ~= "number" then all_numbers = false end
+  end
+  check(all_numbers, "stats table carries all 13 counters as numbers")
+
+  -- Counters are cumulative: measure DELTAS, never absolute values.
+  local before = paxe.stats()
+  local p7, e7 = paxe.open(corrupted)   -- flipped ciphertext byte -> auth failure
+  check(p7 == nil and e7 == "lunet.paxe: frame rejected", "stats delta run: still the opaque drop")
+  local after = paxe.stats()
+  check(after.rx_total == before.rx_total + 1, "a rejection increments rx_total by 1")
+  check(after.rx_auth_fail == before.rx_auth_fail + 1, "corrupted ciphertext increments rx_auth_fail by 1")
+  check(after.rx_ok == before.rx_ok, "a rejection does not touch rx_ok")
+  local reject_sum = after.rx_short + after.rx_bad_flags + after.rx_len_mismatch
+    + after.rx_no_peer + after.rx_no_epoch + after.rx_dek_len_mismatch + after.rx_auth_fail
+  check(after.rx_total == after.rx_ok + reject_sum,
+    "invariant: rx_total == rx_ok + sum(all reject reasons)")
+
+  -- Transmit counters: the automatic mode split, as node B sealing for A.
+  local btx = paxe.stats()
+  assert(paxe.seal("small", NODE_A, CHAN))              -- 5 bytes -> standard
+  assert(paxe.seal(string.rep("x", 64), NODE_A, CHAN))  -- 64 bytes -> DEK
+  local atx = paxe.stats()
+  check(atx.tx_total == btx.tx_total + 2, "two seals increment tx_total by 2")
+  check(atx.tx_standard == btx.tx_standard + 1, "sub-threshold seal counts tx_standard")
+  check(atx.tx_dek == btx.tx_dek + 1, "64-byte seal counts tx_dek")
+
+  -- ── item08: failure policy (silent / log_once / verbose) ─────────────
+  check(paxe.set_fail_policy("verbose") == true, "set_fail_policy('verbose') returns true")
+  local pv, ev = paxe.open(corrupted)   -- emits ONE "[PAXE] drop:" line to stderr
+  check(pv == nil and ev == "lunet.paxe: frame rejected", "verbose policy: the drop is still opaque to the caller")
+  check(paxe.set_fail_policy("log_once") == true, "set_fail_policy('log_once') returns true")
+  paxe.open(corrupted)                  -- emits ONE line (first of this window)
+  paxe.open(corrupted)                  -- memoised: no line
+  check(paxe.set_fail_policy("SILENT") == true, "set_fail_policy accepts uppercase spellings")
+  check(paxe.set_fail_policy("loud") == false, "unknown policy spelling returns false")
+  check(paxe.set_fail_policy(42) == false, "non-string policy returns false")
+  check(paxe.set_fail_policy("silent") == true, "policy set back to silent")
+
   -- ── clear + shutdown ────────────────────────────────────────────────────
   check(paxe.keystore_clear() == true, "keystore_clear()")
+  local bclr = paxe.stats()
   local gone, gerr = paxe.open(frame63)
+  local aclr = paxe.stats()
   check(gone == nil and gerr == "lunet.paxe: frame rejected",
     "after keystore_clear, open is the same opaque drop")
+  check(aclr.rx_no_peer == bclr.rx_no_peer + 1,
+    "cleared store: the rejection counts as unknown peer (topology), not unknown epoch")
   paxe.shutdown()
   local p6, e6 = paxe.seal("x", NODE_A, CHAN)
   check(p6 == nil and type(e6) == "string", "after shutdown, seal is an operational failure")

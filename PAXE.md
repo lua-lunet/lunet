@@ -8,7 +8,7 @@ This document is the authoritative specification of the PAXE wire protocol. Impl
 
 The wire format, key model, limits and failure semantics below ARE the implemented contract: the cryptographic core (header/flags codec, secure keystore, standard and DEK seal/open, automatic mode selection) and the Lua-facing API (`lunet.paxe`, see [Lua API](#lua-api-lunetpaxe)) are implemented and tested.
 
-**PAXE does not yet protect socket traffic**: nothing is wired between the module and lunet's UDP sockets. That integration lands separately, and with it `set_enabled`/`is_enabled` — which deliberately do not exist until they genuinely control behaviour. (An earlier implementation exposed `set_enabled` as a no-op while an example printed "PAXE enabled"; that defect is not being repeated.) Statistics counters and the failure policies of [Failure Handling](#failure-handling) likewise arrive with the receive-path work.
+**PAXE does not yet protect socket traffic**: nothing is wired between the module and lunet's UDP sockets. That integration lands separately, and with it `set_enabled`/`is_enabled` — which deliberately do not exist until they genuinely control behaviour. (An earlier implementation exposed `set_enabled` as a no-op while an example printed "PAXE enabled"; that defect is not being repeated.) The statistics counters and the failure policies of [Failure Handling](#failure-handling) are implemented (`paxe.stats()`, `paxe.set_fail_policy()`).
 
 ## Overview
 
@@ -153,15 +153,40 @@ A sender MUST reject an oversized payload with an error. It must never truncate 
 
 A receiver that cannot parse, authenticate or decrypt a frame **drops it**. The rejection reason is deliberately not returned to the caller and never signalled to the sender: a receiver that explains *why* a forgery failed is a decryption oracle.
 
-Drops are governed by a global failure policy:
+Drops are governed by a global failure policy, selected with `paxe.set_fail_policy`:
 
 | Policy | Behaviour |
 |--------|-----------|
-| `DROP` (silent) | Discard; count only |
-| `LOG_ONCE` | Log the first drop of each kind, then count silently |
-| `VERBOSE` | Log every drop |
+| `silent` (default) | Discard; count only |
+| `log_once` | Log the first drop of each kind per window to stderr (one `[PAXE]` line), then count silently |
+| `verbose` | Log every drop |
 
-The statistics counters are the intended diagnostic channel. They count total frames received and each rejection cause — too short, flags constraint violation, length disagreement, unknown key or epoch, authentication failure — so an operator can distinguish attack traffic from misconfiguration without opening an oracle.
+Because the rejection reason never reaches the caller, the **statistics counters are the only diagnostic channel**. They are process-global, cumulative `u64` values that never reset while the process lives — measure deltas between two snapshots (`paxe.stats()`), never absolute values:
+
+| Counter | Meaning |
+|---------|---------|
+| `rx_total` | Frames presented to a configured receiver (opened + dropped) |
+| `rx_ok` | Frames successfully opened |
+| `rx_short` | Dropped: too short to parse (under the 9-byte prefix, or under the 83-byte DEK minimum with the DEK bit set) |
+| `rx_bad_flags` | Dropped: flags constant-bit violation (bit 1 set or bit 2 clear) — the cheap garbage filter |
+| `rx_len_mismatch` | Dropped: declared plaintext length inconsistent with the actual frame size |
+| `rx_no_peer` | Dropped: no key for the frame's `fromId` under ANY epoch — a **topology** problem (the link was never provisioned) |
+| `rx_no_epoch` | Dropped: the `fromId` IS provisioned but not under the frame's epoch — a **rotation** problem (the two ends disagree about which epoch is live) |
+| `rx_dek_len_mismatch` | Dropped: the DEK frame's redundant inner Length field disagrees with the header length |
+| `rx_auth_fail` | Dropped: the AES-GCM tag did not verify (wrong key, tampered ciphertext or AAD, or a wrong DEK from a corrupted wrapped DEK) |
+| `tx_total` | Frames successfully sealed |
+| `tx_standard` | Of `tx_total`, sealed standard (below the 64-byte threshold) |
+| `tx_dek` | Of `tx_total`, sealed DEK (at and above the threshold) — with automatic selection, this split is how an operator sees where the bandwidth/overhead balance falls |
+| `tx_oversize` | Seals rejected for an oversized payload |
+
+**The invariant:** `rx_total == rx_ok + sum(all reject reasons)`. Every frame presented to a configured receiver lands in exactly one of those buckets; a future reject reason added without a counter breaks this equation and is caught by it. (Two paths are deliberately outside the accounting: a frame presented to an *unconfigured* receiver — the module is not running PAXE at all — and impossible internal results, which are not wire conditions.) Unknown peer and unknown epoch are separate counters by design: the first means a configuration or topology problem, the second means a rotation went wrong, and collapsing them would throw away the distinction that makes the epoch mechanism debuggable.
+
+There is deliberately **no counter for the ChaCha20 wrap**: a stream XOR does not authenticate and cannot fail — a corrupted wrapped DEK surfaces at the payload tag check and is counted in `rx_auth_fail`. (An earlier implementation error-checked the wrap and counted its "failure" as an authentication failure, tallying a condition that cannot occur.)
+
+Two recorded policy decisions:
+
+- **Log-once reset scope.** The log-once memory resets on `shutdown()` (a re-initialised module starts a fresh window) and whenever the policy is set to `log_once` — re-entering the policy is the operator's "tell me again, once" knob. An attacker cannot reset the memo (only the local operator can, through the API), so within a window each kind logs at most once regardless of volume; that memoisation is the rate limiting. The counters themselves never reset.
+- **No `fromId` or epoch in rejection log lines.** Every field available at rejection time is attacker-controlled and *unverified* — that is why the frame is being dropped. Logging those fields would let an unauthenticated sender write arbitrary-looking peer identities into operator logs at the policy's rate: a deception channel, and under `verbose` a high-volume one. The counters carry the diagnostic signal without that exposure — a moved counter cannot lie about which counter moved. Log lines therefore carry the reason only, with a fixed `[PAXE] ` prefix so policy output is distinguishable from trace-build output on stderr (tests assert the prefix, never stderr emptiness, so they cannot invert between build modes).
 
 **Intentional divergence from the reference**, which throws `SecurityException` on authentication failure: there is no caller to throw to for a datagram you are dropping anyway. Drop-with-policy is the correct semantics for UDP.
 
@@ -204,9 +229,11 @@ The module is a Rust cdylib (`ext/paxe`) loaded through the LuaJIT FFI by the lo
 | `paxe.keystore_clear()` | `true` | Erase every installed key. |
 | `paxe.seal(payload, to_id, channel)` | `frame` \| `nil, message` | Seal `payload` (string) for `to_id` on `channel`. `fromId` is the configured local id — never a parameter, so no caller can spoof a source. The mode is selected by payload size (standard below 64 bytes, DEK at and above). The send epoch is the newest epoch installed for `to_id` (see below). `channel` must fit 16 bits and must not be in the reserved system range 1–99 (application channels start at 100; channel 0 is permitted). |
 | `paxe.open(frame)` | `payload, from_id, channel, mode` \| `nil, message` | Open one received frame. On success: the payload, the authenticated `fromId`, the channel, and the mode (`"standard"` or `"dek"`). On ANY failure: `nil` plus ONE opaque message — see [Opaque open failure](#opaque-open-failure). |
-| `paxe.shutdown()` | — | Zero and free every key and forget the local identity. Idempotent; `set_local_id` may configure afresh afterwards. |
+| `paxe.stats()` | table | Snapshot of the process-global cumulative counters (see [Failure Handling](#failure-handling)): `rx_total`, `rx_ok`, `rx_short`, `rx_bad_flags`, `rx_len_mismatch`, `rx_no_peer`, `rx_no_epoch`, `rx_dek_len_mismatch`, `rx_auth_fail`, `tx_total`, `tx_standard`, `tx_dek`, `tx_oversize`. Never reset; measure deltas between snapshots. |
+| `paxe.set_fail_policy(name)` | `true` \| `false` | Select the drop logging policy: `"silent"` (the default), `"log_once"`, `"verbose"` — case-insensitive. `false` for any other spelling or a non-string argument. |
+| `paxe.shutdown()` | — | Zero and free every key and forget the local identity. Idempotent; `set_local_id` may configure afresh afterwards. The statistics counters are NOT reset (they are cumulative for the process lifetime); the log-once memo is. |
 
-There is no `key_id` anywhere: keys are addressed by `(peer node id, epoch)`. There is deliberately no `set_enabled`/`is_enabled` yet: they arrive with the socket integration, when they genuinely control transport protection. Statistics counters and the `DROP`/`LOG_ONCE`/`VERBOSE` failure policies arrive with the receive-path work; they govern the UDP receive path, not this synchronous API.
+There is no `key_id` anywhere: keys are addressed by `(peer node id, epoch)`. There is deliberately no `set_enabled`/`is_enabled` yet: they arrive with the socket integration, when they genuinely control transport protection. The statistics counters and the failure policy exist now and govern what the synchronous `open` reports; the UDP receive path will consult the same counters when the socket integration lands.
 
 ### Error conventions
 
@@ -223,7 +250,7 @@ No input can crash the process: the library is built `panic = "abort"`, so a Rus
 
 ### Opaque open failure
 
-`open` collapses EVERY frame-level failure — too short, flags constraint violation, length disagreement, unknown key or epoch, authentication failure, even an unconfigured keystore — to one result: `nil, "lunet.paxe: frame rejected"`. The rejection reason is never returned to the caller and never signalled to the sender: a receiver that explains why a forgery failed is a decryption oracle (see [Failure Handling](#failure-handling)). The typed reasons exist inside the Rust core, where the statistics counters will consume them; they never cross the FFI.
+`open` collapses EVERY frame-level failure — too short, flags constraint violation, length disagreement, unknown key or epoch, authentication failure, even an unconfigured keystore — to one result: `nil, "lunet.paxe: frame rejected"`. The rejection reason is never returned to the caller and never signalled to the sender: a receiver that explains why a forgery failed is a decryption oracle (see [Failure Handling](#failure-handling)). The typed reasons are recorded into the statistics counters at the reject points, before the collapse; they never cross the FFI.
 
 ### Constants
 

@@ -8,11 +8,12 @@
 //!
 //! This crate so far: build plumbing, the libsodium FFI boundary
 //! ([`sodium`], item02), the secure keystore ([`keystore`], item03), the
-//! cryptography-free header/flags codec ([`codec`], item04), and one
-//! exported symbol ([`lunet_paxe_version`]) proving the end-to-end
-//! path — cargo builds the cdylib, the Lua loader finds it, `require`
-//! succeeds, and a call returns. There is no seal/open and no
-//! Lua-facing API yet (items 05–07).
+//! cryptography-free header/flags codec ([`codec`], item04), standard-mode
+//! seal/open with the single AAD construction point ([`standard`],
+//! item05), and one exported symbol ([`lunet_paxe_version`]) proving the
+//! end-to-end path — cargo builds the cdylib, the Lua loader finds it,
+//! `require` succeeds, and a call returns. DEK mode and mode selection
+//! (item06) and the Lua-facing API (item07) have not landed yet.
 //!
 //! ## Dependency policy: zero crates
 //!
@@ -64,6 +65,7 @@
 mod codec;
 mod keystore;
 mod sodium;
+mod standard;
 
 use std::os::raw::c_char;
 

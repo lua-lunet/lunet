@@ -232,6 +232,16 @@ jobs:
       working-directory: ext/paxe
       run: cargo build --release
 
+    # The crate's test suite (including the known-answer vectors, the primary
+    # defence against a wrong wire format) runs here — after the toolchain and
+    # dependencies are in place, before the artefact is verified — so a test
+    # failure stops the job before a bad cdylib is packaged. Same
+    # working-directory requirement as the build step above (rustup resolves
+    # rust-toolchain.toml from the cwd).
+    - name: Test PAXE Rust crate
+      working-directory: ext/paxe
+      run: cargo test
+
     # Windows cdylib naming differs from Unix (.dll, no "lib" prefix), so
     # confirm the artefact under the expected per-platform name rather than
     # assuming it.

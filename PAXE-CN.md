@@ -237,6 +237,8 @@ AES-GCM 的附加认证数据为 **9 字节：头部后跟标志字节**（帧�
 | `paxe.is_protected(udpsock)` | `false` \| `true, peer, channel` | 查询 socket 的保护状态及其配置的对端/通道。 |
 | `paxe.shutdown()` | — | 将全部密钥清零并释放，遗忘本地身份。幂等；之后可再次调用 `set_local_id` 重新配置。统计计数器**不**被重置（它们在进程生命周期内累计）；log-once 记忆会被重置。进程正常退出时的密钥抹除**不**依赖此调用：`init` 注册了一个 `atexit` 钩子，即使脚本从未调用 `shutdown()` 也会将密钥库清零。 |
 
+**平台说明 —— Debian trixie arm64。** Debian trixie arm64 发行版的 `libsodium` 软件包在构建时未启用 ARM 加密扩展（crypto-extension）的 AES-256-GCM 路径，因此即使在实现了这些扩展的硬件上，`paxe.init()` 也会报告 AES-256-GCM 不可用。这是 Debian 的打包方式所致，而非 CPU 或 lunet 的缺陷：修复方法是换用一个构建了 ARM CE 路径的 libsodium（从源码构建，或经 Homebrew 安装），而不是改动 lunet。
+
 任何地方都不存在 `key_id`：密钥按 `(对端节点 id, 纪元)` 寻址。也刻意不提供 `set_enabled`/`is_enabled`：保护是按 socket 的，经 `paxe.protect`（见下文），它真正控制行为。
 
 ### 错误约定

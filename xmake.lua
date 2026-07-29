@@ -1250,3 +1250,21 @@ task("build-paxe")
         print("[paxe] built: " .. path.join(crate_dir, "target", "release"))
     end)
 task_end()
+
+task("test-paxe")
+    set_menu {
+        usage = "xmake test-paxe",
+        description = "Run the paxe Rust test suite (ext/paxe), debug and release profiles"
+    }
+    on_run(function ()
+        local crate_dir = path.join(os.scriptdir(), "ext", "paxe")
+        -- Both profiles run: panic = "abort" changes the release profile, so
+        -- debug-passing tests are not proof the release profile passes.
+        -- os.execv raises on non-zero exit, failing the task on any test failure.
+        print("[paxe] cargo test ...")
+        os.execv("cargo", {"test"}, {curdir = crate_dir})
+        print("[paxe] cargo test --release ...")
+        os.execv("cargo", {"test", "--release"}, {curdir = crate_dir})
+        print("[paxe] tests passed (debug + release)")
+    end)
+task_end()

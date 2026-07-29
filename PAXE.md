@@ -237,6 +237,8 @@ The module is a Rust cdylib (`ext/paxe`) loaded through the LuaJIT FFI by the lo
 | `paxe.is_protected(udpsock)` | `false` \| `true, peer, channel` | Query a socket's protection and its configured peer/channel. |
 | `paxe.shutdown()` | — | Zero and free every key and forget the local identity. Idempotent; `set_local_id` may configure afresh afterwards. The statistics counters are NOT reset (they are cumulative for the process lifetime); the log-once memo is. Key erasure at normal process exit does NOT depend on this call: `init` registers an `atexit` hook that zeroes the keystore even when a script never calls `shutdown()`. |
 
+**Platform note — Debian trixie arm64.** The distro `libsodium` package on Debian trixie arm64 is built without the ARM crypto-extension AES-256-GCM path, so `paxe.init()` reports AES-256-GCM unavailable even on hardware that implements the extensions. This is Debian's packaging, not a CPU or lunet defect: the fix is a libsodium built with the ARM CE path (from source or Homebrew), not a lunet change.
+
 There is no `key_id` anywhere: keys are addressed by `(peer node id, epoch)`. And there is deliberately no `set_enabled`/`is_enabled` at all: protection is per-socket via `paxe.protect` (see below), which genuinely controls behaviour.
 
 ### Error conventions

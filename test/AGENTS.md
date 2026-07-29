@@ -26,7 +26,6 @@ kill $SERVER_PID
 | `test/udp_queue_trace.lua` | Verifies tracing of queued packets | `./build/lunet test/udp_queue_trace.lua` |
 | `test/udp_main_thread.lua` | Verifies coroutine enforcement | `./build/lunet test/udp_main_thread.lua` |
 | `test/udp_sink.lua` | Logs packets to `.tmp/udp_sink.log` | `./build/lunet test/udp_sink.lua` |
-| `test/paxe_smoke.lua` | PAXE protocol functional test | `./build/lunet test/paxe_smoke.lua` |
 | `test/stress_test.lua` | Concurrent async op stress test | `./build/lunet test/stress_test.lua` |
 | `test/sdk_api.c` | C SDK lifecycle test (one-runtime contract, negative matrix, exit-code plumbing) | `xmake build sdk-api-test && timeout 10 $(find build -name sdk-api-test -type f \| head -1)` — **run from the repo root** (uses the relative path below) |
 | `test/sdk_api_script.lua` | Helper for sdk_api.c; sets `__lunet_exit_code = 23` | invoked by the sdk-api-test binary |

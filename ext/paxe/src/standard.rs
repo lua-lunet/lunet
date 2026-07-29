@@ -262,6 +262,33 @@ pub fn seal(
     payload: &[u8],
     out: &mut [u8],
 ) -> Result<usize, SealError> {
+    // CSPRNG ONLY — see the module-docs nonce policy for why a counter or
+    // timestamp is never acceptable (GCM nonce reuse under one key is
+    // catastrophic, and per-link keys make it matter more, not less). This
+    // is the ONE randomness draw of the standard-mode send path; the rest
+    // of the work lives in [`seal_core`], parameterised on the nonce, so
+    // that the `#[cfg(test)]` seam below can reach the identical code path
+    // with a supplied nonce while non-test builds contain no such entry.
+    let nonce = sodium::random_nonce();
+    seal_core(store, to_id, channel, epoch, payload, &nonce, out)
+}
+
+/// The deterministic core of standard seal. Production reaches it only
+/// via [`seal`] (the CSPRNG draw above); the `#[cfg(test)]` seam below
+/// reaches it with a supplied nonce for item12's known-answer vectors.
+/// Randomness is a parameter precisely so the production path has exactly
+/// one randomness source and the test path is compiled out of every
+/// non-test build — the same discipline item06's `seal_dek_core`
+/// established for DEK mode.
+fn seal_core(
+    store: &KeyStore,
+    to_id: u16,
+    channel: u16,
+    epoch: Epoch,
+    payload: &[u8],
+    nonce: &Nonce,
+    out: &mut [u8],
+) -> Result<usize, SealError> {
     // Length gate FIRST (module docs, PAXE.md "Limits"): oversized is a
     // reportable error, never a truncated length field. Because of this
     // check the u16 cast below cannot truncate: MAX_PAYLOAD = 65470 < 65536.
@@ -308,10 +335,9 @@ pub fn seal(
     prefix.copy_from_slice(&codec::serialize_prefix(&header, &flags));
     let (nonce_slot, ct_slot) = rest.split_at_mut(NPUBBYTES);
 
-    // CSPRNG ONLY — see the module-docs nonce policy for why a counter or
-    // timestamp is never acceptable (GCM nonce reuse under one key is
-    // catastrophic, and per-link keys make it matter more, not less).
-    let nonce = sodium::random_nonce();
+    // The nonce arrives as a parameter: drawn by `seal` from the CSPRNG in
+    // production, supplied by the test seam otherwise — never derived from
+    // a counter, a timestamp, or the payload on any path.
     nonce_slot.copy_from_slice(nonce.as_bytes());
 
     // The AAD is borrowed from the prefix region of the frame being
@@ -429,6 +455,58 @@ pub fn open(
         Err(_) => return Err(OpenError::Rejected),
     };
     Ok((header, flags, payload_len))
+}
+
+// ---------------------------------------------------------------------------
+// Test-only seam: deterministic nonce injection. `#[cfg(test)]` — COMPILED
+// OUT of every non-test build, and `pub(crate)` so only this crate's own
+// tests can name it. Deterministic nonces must NEVER be reachable in
+// production: GCM nonce reuse under one key destroys both confidentiality
+// and authenticity (the keystream XOR of the two plaintexts leaks and the
+// GCM authentication key becomes recoverable), and per-link keys mean one
+// link carries many frames under one key, so a caller-controllable nonce
+// would be a live exploit primitive, not a convenience. This seam exists
+// for item12's known-answer vectors and nothing else; item06's
+// `seal_dek_deterministic` is the DEK-mode twin.
+// ---------------------------------------------------------------------------
+
+/// Standard seal with a supplied nonce, returning the complete frame.
+/// TEST-ONLY known-answer seam for item12: pins the header, flags, AAD
+/// span and frame geometry byte-for-byte against fixed inputs. Reaches
+/// the identical [`seal_core`] the production path uses — the only
+/// difference is where the nonce comes from.
+#[cfg(test)]
+pub(crate) fn seal_standard_deterministic(
+    store: &KeyStore,
+    to_id: u16,
+    channel: u16,
+    epoch: Epoch,
+    payload: &[u8],
+    nonce: [u8; NPUBBYTES],
+) -> Result<Vec<u8>, SealError> {
+    // Bound BEFORE allocating the frame buffer, exactly as the public
+    // dispatch shim in dek.rs does: oversize is reportable, never a
+    // truncated length field.
+    if payload.len() > MAX_PAYLOAD {
+        return Err(SealError::PayloadTooLarge(payload.len()));
+    }
+    // payload.len() <= 65470, so the addition cannot overflow.
+    let mut frame = vec![0u8; payload.len() + OVERHEAD];
+    match seal_core(
+        store,
+        to_id,
+        channel,
+        epoch,
+        payload,
+        &Nonce::from_bytes(nonce),
+        &mut frame,
+    ) {
+        Ok(n) => {
+            debug_assert_eq!(n, frame.len(), "frame is N + 37 by construction");
+            Ok(frame)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 // ---------------------------------------------------------------------------

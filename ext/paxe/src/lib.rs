@@ -105,6 +105,11 @@ mod keystore;
 mod sodium;
 mod standard;
 mod stats;
+// item12's known-answer vectors exist ONLY in test builds: the whole
+// module is test code pinned against the #[cfg(test)] deterministic
+// seams, so it is compiled out of every non-test build by construction.
+#[cfg(test)]
+mod vectors;
 
 use std::cell::RefCell;
 use std::os::raw::{c_char, c_int};

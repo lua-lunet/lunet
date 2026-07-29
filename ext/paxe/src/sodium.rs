@@ -311,6 +311,9 @@ impl Error for SodiumError {}
 macro_rules! fixed_bytes {
     ($(#[$meta:meta])* $name:ident, $n:expr) => {
         $(#[$meta])*
+        // repr(transparent): layout-identical to the wrapped array, which is
+        // what makes Key::from_borrowed (below) a sound reinterpretation.
+        #[repr(transparent)]
         #[derive(Clone)]
         pub struct $name([u8; $n]);
 
@@ -351,6 +354,28 @@ fixed_bytes! {
 fixed_bytes! {
     /// A 16-byte AEAD authentication tag.
     Tag, ABYTES
+}
+
+impl Key {
+    /// Borrow an exactly-sized byte array as a `Key` WITHOUT copying it.
+    ///
+    /// This exists for the keystore (item03): a `StoredKey` exposes its
+    /// guarded material only as a borrowed `&[u8]`, and the seal/open paths
+    /// (items 05/06) must feed that material to the AEAD wrappers directly
+    /// from the guarded allocation. The only other constructor,
+    /// [`Key::from_bytes`], takes an owned array — forcing a 32-byte
+    /// unguarded stack copy of the link key on every datagram, which is
+    /// precisely the leak the keystore's type discipline exists to prevent.
+    ///
+    /// The returned reference borrows `bytes`, so it can never outlive the
+    /// guarded allocation it points into.
+    ///
+    /// SAFETY: `Key` is `repr(transparent)` over `[u8; KEYBYTES]` — same
+    /// size, same alignment, and every bit pattern is valid — so
+    /// reinterpreting the reference is layout-exact and sound.
+    pub fn from_borrowed(bytes: &[u8; KEYBYTES]) -> &Key {
+        unsafe { &*(bytes as *const [u8; KEYBYTES] as *const Key) }
+    }
 }
 
 // ---------------------------------------------------------------------------

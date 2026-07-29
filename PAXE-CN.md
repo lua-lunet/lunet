@@ -8,7 +8,7 @@ PAXE（Packet Encryption，数据包加密）是 Lunet 的安全数据报加密�
 
 下文的线路格式、密钥模型、限制与失败语义即是已实现的契约：加密核心（头部/标志编解码器、安全密钥库、标准与 DEK 模式的密封/开启、自动模式选择）与面向 Lua 的 API（`lunet.paxe`，见 [Lua API](#lua-apilunetpaxe)）均已实现并通过测试。
 
-**PAXE 尚未保护 socket 流量**：模块与 lunet 的 UDP socket 之间尚无接线。该集成将单独落地，`set_enabled`/`is_enabled` 也随之一并提供——在它们能真正控制行为之前，刻意不提供这两个函数。（早先的实现曾将 `set_enabled` 暴露为空操作，而某个示例却打印了 "PAXE enabled"；这一缺陷不会重演。）统计计数器与[失败处理](#失败处理)中的失败策略已经实现（`paxe.stats()`、`paxe.set_fail_policy()`）。
+**PAXE 已保护 UDP socket 流量**：`paxe.protect()` 可将单个 `lunet.udp` socket 选入密封与开启，接线位于 Lua 层（`ext/paxe/paxe.lua`），通过拦截 `lunet.udp` 模块表实现——`src/udp.c` 未被改动（见 [UDP socket 保护](#udp-socket-保护)）。保护是按 socket 的；刻意不提供进程级全局的 `set_enabled`/`is_enabled`——早先实现的全局开关曾打印 "enabled" 却什么都没保护，而单一全局标志无法表达同时服务加密集群端口与未加密本地端口的进程。统计计数器与[失败处理](#失败处理)中的失败策略已经实现（`paxe.stats()`、`paxe.set_fail_policy()`），其中包括对受保护 socket 上被丢弃的未加密数据报计数的 `rx_plaintext`。
 
 ## 概述
 
@@ -167,6 +167,7 @@ AES-GCM 的附加认证数据为 **9 字节：头部后跟标志字节**（帧�
 |--------|------|
 | `rx_total` | 提交给已配置接收方的帧总数（成功开启 + 被丢弃） |
 | `rx_ok` | 成功开启的帧数 |
+| `rx_plaintext` | 丢弃：根本不是发给本节点的 PAXE 帧——不足 9 字节前缀，或头部 `toId` 不是本地 id（受保护 socket 上的明文、异构协议或误投流量）。由 socket 边界上的显式寻址检查捕获（见 [UDP socket 保护](#udp-socket-保护)），绝不依赖标志字节 |
 | `rx_short` | 丢弃：过短无法解析（不足 9 字节前缀，或携带 DEK 位却不足 83 字节 DEK 最小长度） |
 | `rx_bad_flags` | 丢弃：标志字节固定位违例（位 1 被置位或位 2 被清零）——廉价的垃圾过滤器 |
 | `rx_len_mismatch` | 丢弃：声明的明文长度与帧实际大小不一致 |
@@ -229,11 +230,14 @@ AES-GCM 的附加认证数据为 **9 字节：头部后跟标志字节**（帧�
 | `paxe.keystore_clear()` | `true` | 抹除所有已安装的密钥。 |
 | `paxe.seal(payload, to_id, channel)` | `frame` \| `nil, message` | 将 `payload`（字符串）密封给 `to_id` 的 `channel`。`fromId` 取自已配置的本地 id——永远不是参数，因此任何调用者都无法伪造来源。模式按负载大小选择（低于 64 字节为标准模式，64 字节及以上为 DEK 模式）。发送纪元取 `to_id` 下最新安装的纪元（见下文）。`channel` 必须满足 16 位范围，且不得落入保留的系统通道 1–99（应用通道自 100 起；允许通道 0）。 |
 | `paxe.open(frame)` | `payload, from_id, channel, mode` \| `nil, message` | 开启一个接收到的帧。成功时返回：负载、经认证的 `fromId`、通道，以及模式（`"standard"` 或 `"dek"`）。任何失败均返回 `nil` 加同一条不透明消息——见[不透明的 open 失败](#不透明的-open-失败)。 |
-| `paxe.stats()` | table | 进程级累计计数器的快照（见[失败处理](#失败处理)）：`rx_total`、`rx_ok`、`rx_short`、`rx_bad_flags`、`rx_len_mismatch`、`rx_no_peer`、`rx_no_epoch`、`rx_dek_len_mismatch`、`rx_auth_fail`、`tx_total`、`tx_standard`、`tx_dek`、`tx_oversize`。绝不重置；请测量两次快照之间的差值。 |
+| `paxe.stats()` | table | 进程级累计计数器的快照（见[失败处理](#失败处理)）：`rx_total`、`rx_ok`、`rx_plaintext`、`rx_short`、`rx_bad_flags`、`rx_len_mismatch`、`rx_no_peer`、`rx_no_epoch`、`rx_dek_len_mismatch`、`rx_auth_fail`、`tx_total`、`tx_standard`、`tx_dek`、`tx_oversize`。绝不重置；请测量两次快照之间的差值。 |
 | `paxe.set_fail_policy(name)` | `true` \| `false` | 选择丢弃日志策略：`"silent"`（默认）、`"log_once"`、`"verbose"`——大小写不敏感。其他拼写或非字符串参数返回 `false`。 |
-| `paxe.shutdown()` | — | 将全部密钥清零并释放，遗忘本地身份。幂等；之后可再次调用 `set_local_id` 重新配置。统计计数器**不**被重置（它们在进程生命周期内累计）；log-once 记忆会被重置。 |
+| `paxe.protect(udpsock, config)` | `true` | 将**一个** `lunet.udp` socket 选入保护：此后的 `udp.send` 在发送前密封，`udp.recv` 在交付前开启（见 [UDP socket 保护](#udp-socket-保护)）。`config.peer`（必选）是该 socket 密封目标的节点 id；`config.channel`（可选，默认 `0`）是密封通道。对非句柄 socket、畸形 config 或模块未配置抛出错误——为未配置的 socket 布防会静默丢弃每个数据报。 |
+| `paxe.unprotect(udpsock)` | `true` | 解除某 socket 的保护。幂等。 |
+| `paxe.is_protected(udpsock)` | `false` \| `true, peer, channel` | 查询 socket 的保护状态及其配置的对端/通道。 |
+| `paxe.shutdown()` | — | 将全部密钥清零并释放，遗忘本地身份。幂等；之后可再次调用 `set_local_id` 重新配置。统计计数器**不**被重置（它们在进程生命周期内累计）；log-once 记忆会被重置。进程正常退出时的密钥抹除**不**依赖此调用：`init` 注册了一个 `atexit` 钩子，即使脚本从未调用 `shutdown()` 也会将密钥库清零。 |
 
-任何地方都不存在 `key_id`：密钥按 `(对端节点 id, 纪元)` 寻址。刻意暂不提供 `set_enabled`/`is_enabled`：它们将随 socket 集成一同到来，届时才真正控制传输保护。统计计数器与失败策略现已存在，管辖同步 `open` 的上报；socket 集成落地时，UDP 接收路径将使用同一组计数器。
+任何地方都不存在 `key_id`：密钥按 `(对端节点 id, 纪元)` 寻址。也刻意不提供 `set_enabled`/`is_enabled`：保护是按 socket 的，经 `paxe.protect`（见下文），它真正控制行为。
 
 ### 错误约定
 
@@ -251,6 +255,25 @@ AES-GCM 的附加认证数据为 **9 字节：头部后跟标志字节**（帧�
 ### 不透明的 open 失败
 
 `open` 将一切帧级失败——过短、标志约束违例、长度不一致、未知密钥或纪元、认证失败，甚至密钥库未配置——收敛为同一种结果：`nil, "lunet.paxe: frame rejected"`。拒绝原因绝不返回给调用者，也绝不向发送方发出信号：一个解释伪造为何失败的接收方就是解密预言机（见[失败处理](#失败处理)）。带类型的原因在收敛之前、于拒绝点被记录进统计计数器；它们绝不跨越 FFI。
+
+### UDP socket 保护
+
+`paxe.protect(udpsock, config)` 将**一个** socket 选入 PAXE。这是已记录的按 socket 决策：没有进程级的启用标志，也没有 `set_enabled`/`is_enabled`，因为单一全局无法表达同时服务加密集群端口与未加密本地端口的进程——而已删除模块的全局开关曾是一个打印 "enabled" 的空操作。既然按 socket 保护是唯一的机制，便不存在需要交代的优先级问题。`paxe.unprotect` 解除布防，`paxe.is_protected` 查询状态，`udp.close` 也会移除该 socket 的保护项（已释放句柄的指针可能被后续的 bind 复用，绝不允许继承陈旧的保护状态）。
+
+**集成位于 Lua 侧，而非 `src/udp.c`**——这是已记录的集成层决策。Rust 核心已经可以通过 Lua 经 FFI 到达；`require("lunet.udp")` 返回一张由 C 函数组成的普通 Lua 表，因此 `protect` 拦截该共享表上的 `send`/`recv`/`close`，只把已登记的 socket 导入加密路径——未受保护的 socket 直接透传到原始 C 函数。若改在 C 中接线，则需要一条通往 Rust 的新 C ABI，并且要在 udp.c 的接收回调里做解密——该回调运行在 libuv 循环上而非 Lua 协程中，正是项目调试笔记（AGENTS.md）所记录的 use-after-free 崩溃高发上下文。C 回调与 `udp_ctx_t` 未被改动，也绝不接触密钥材料。
+
+**解密发生在交付时刻**，即 Lua 调用 `udp.recv` 时——而非 libuv 回调中的到达时刻（这是已记录的到达/交付决策）。因此 C 接收队列持有的是密文，绝不是明文：被开启的负载不会在到达与 `recv` 之间滞留于 C 内存，队列排空时也不需要密钥材料。`udp.close` 时的队列冲刷会丢弃从未认证的密文——不计数，因为它从未到达下述门径——对于反正也无法交付的帧而言，这与丢弃是同一终态。
+
+接收方向上，每个数据报的处理顺序为：
+
+1. **显式明文门径。** 仅当数据报至少携带 9 字节前缀、且其头部 `toId` 等于已配置的本地 id 时，才被视为 PAXE 帧。其余一切——明文、异构协议或误投流量——都被寻址检查丢弃并计入 `rx_plaintext`，**绝不**依赖标志字节固定位门径：构造的明文其第 8 字节完全可能通过该门径；当两者同时命中（普通垃圾流量）时，移动的计数器是 `rx_plaintext` 而非 `rx_bad_flags`。
+2. **开启。** 发往本节点的数据报进入 `open`。成功时 `udp.recv(sock)` 返回 `data, host, port, from_id, channel`——明文、传输层对端地址，以及经认证的 `fromId` 与通道。任何失败都按失败策略处理、移动相应原因计数器，并且**什么都不交付**——无数据、无错误指示（避免解密预言机）；`recv` 只是继续等待下一个数据报。等待期间的 close 或错误原样透传（`nil, nil, message`）。
+
+发送方向上，`udp.send(sock, host, port, data [, peer [, channel]])` 在传输前密封 `data`：对端取自调用处或 socket 配置的对端，通道同理（默认 `0`），帧模式按负载大小自动选择，发送纪元取该对端最新安装的纪元。密封失败——未配置、对端无密钥或负载超大——都会使发送以指明原因的清晰错误失败（超大型则指明所选模式的最大值）；什么都不传输，且超大会移动 `tx_oversize`。
+
+丢弃可见性：数据报到达在 trace 构建中由 udp.c 的 `UDP_TRACE_RX` 跟踪；每次丢弃都在 Rust 中计数并经失败策略上报（`log_once`/`verbose` 下的 `[PAXE] drop: <原因>` 行）——与同步 `open` 使用的是同一机制，而非另起一套。
+
+**进程退出时的密钥抹除由运行时负责**：`paxe.init` 注册一个 `atexit` 钩子，在正常终止时将密钥库清零并释放，即使脚本从未调用 `shutdown()`。`abort()`/`SIGKILL` 下没有任何钩子能够运行；有保护的、mlock 的存储正是针对那种情形的缓解。
 
 ### 常量
 

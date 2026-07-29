@@ -14,7 +14,11 @@
 //! ([`dek`], item06), the Lua-facing C ABI ([`lunet_paxe_init`] and
 //! friends, item07) consumed by `paxe.lua` through the LuaJIT FFI, and
 //! the statistics counters plus failure policy ([`stats`], item08) that
-//! are the operator's only diagnostic channel for dropped frames.
+//! are the operator's only diagnostic channel for dropped frames, and the
+//! item09 protected-socket boundary: [`lunet_paxe_frame_for_us`] (the
+//! explicit plaintext gate consumed by the Lua-side UDP wrapper) and
+//! runtime-owned key erasure at process exit (an `atexit` hook
+//! registered by [`lunet_paxe_init`]).
 //!
 //! ## The item07 C ABI
 //!
@@ -104,6 +108,7 @@ mod stats;
 
 use std::cell::RefCell;
 use std::os::raw::{c_char, c_int};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // ---------------------------------------------------------------------------
 // Module state. ALL crypto state (the keystore = all key material) lives
@@ -303,7 +308,26 @@ pub extern "C" fn lunet_paxe_init() -> c_int {
             "AES-256-GCM hardware path unavailable; PAXE cannot operate on this host: {e}"
         ));
     }
+    // item09: key erasure at process exit is owned by the RUNTIME, not by
+    // a script remembering to call shutdown(). Register the exit hook
+    // exactly once; the hook runs shutdown_state() at normal termination
+    // (see its contract in sodium.rs — best-effort, never fatal).
+    if !EXIT_HOOK_REGISTERED.swap(true, Ordering::SeqCst) {
+        sodium::register_exit_hook(shutdown_at_exit);
+    }
     RC_OK
+}
+
+/// Guards the one-time `atexit` registration. An atomic, not a lock: no
+/// poisoning, no panic path.
+static EXIT_HOOK_REGISTERED: AtomicBool = AtomicBool::new(false);
+
+/// The `atexit` callback: normal process termination erases the keystore
+/// even when the script never called shutdown(). Must be panic-free after
+/// arbitrary thread-local destruction — everything it touches goes
+/// through `try_with` (see shutdown_state).
+extern "C" fn shutdown_at_exit() {
+    shutdown_state();
 }
 
 /// Configure this node's identity — ONCE. Creates the keystore. Calling
@@ -342,16 +366,34 @@ pub extern "C" fn lunet_paxe_set_local_id(node_id: u32) -> c_int {
 /// `sodium_memzero`'d and `sodium_free`d on the drop (item03) — and clear
 /// the last-error buffer. Afterwards `set_local_id` may configure afresh.
 /// Safe to call when unconfigured (a no-op).
+///
+/// Normal process exit needs no script-side call: `lunet_paxe_init`
+/// registers this same state drop as an `atexit` hook (item09), so the
+/// runtime erases keys at exit even when a script forgets.
 #[allow(unsafe_code)]
 #[no_mangle]
 pub extern "C" fn lunet_paxe_shutdown() {
-    STORE.with(|s| {
+    shutdown_state();
+}
+
+/// The shared shutdown body, used by the exported shutdown AND by the
+/// item09 `atexit` exit hook. Every thread-local access is `try_with`:
+/// at process exit the hook can run AFTER a thread-local's destructor
+/// (destructors run in reverse registration order, and a thread-local
+/// first touched after `init` registered the hook is destroyed before
+/// it). A destroyed thread-local means its contents — including the key
+/// material, whose own destructor IS the zeroisation — are already gone,
+/// so skipping is correct; `with` would panic, and under
+/// `panic = "abort"` a panic in an exit hook turns a clean exit into an
+/// abort.
+fn shutdown_state() {
+    let _ = STORE.try_with(|s| {
         if let Ok(mut s) = s.try_borrow_mut() {
             // The drop of the KeyStore IS the zeroisation.
             *s = None;
         }
     });
-    LAST_ERROR.with(|e| {
+    let _ = LAST_ERROR.try_with(|e| {
         if let Ok(mut e) = e.try_borrow_mut() {
             e.clear();
         }
@@ -359,7 +401,7 @@ pub extern "C" fn lunet_paxe_shutdown() {
     // A re-initialised module starts a fresh log-once window (the
     // recorded reset scope). The counters themselves are NOT reset —
     // they are cumulative for the process lifetime so monitoring deltas
-    // never go negative across a restart.
+    // never go negative across a restart. (try_with inside, same reason.)
     stats::reset_log_once_memo();
 }
 
@@ -667,6 +709,73 @@ pub extern "C" fn lunet_paxe_open(
                 RC_DROP
             }
         }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// item09: the protected-socket plaintext gate. Consumed by the Lua-side
+// UDP wrapper (ext/paxe/paxe.lua `protect`) BEFORE `lunet_paxe_open`.
+// ---------------------------------------------------------------------------
+
+/// The explicit "is this a PAXE frame addressed to this node" check for a
+/// protected UDP socket. Returns 1 when `frame` is at least the 9-byte
+/// prefix AND its header `toId` (bytes 2-3, big-endian) equals the
+/// configured local id — the caller then proceeds to `lunet_paxe_open`.
+/// Returns 0 otherwise: plaintext, foreign-protocol or misaddressed
+/// traffic, to be dropped without delivery.
+///
+/// This gate exists so the plaintext drop is EXPLICIT, with its own
+/// counter ([`stats::RejectReason::Plaintext`]): it must not rest on the
+/// flags constant-bit check, because crafted plaintext could have a byte
+/// 8 that passes it (item09). The addressing check is the honest
+/// transport-level discriminator — a datagram that is not even addressed
+/// to this node in PAXE framing is not a frame for this node, whatever
+/// its flags byte says — and it runs BEFORE the codec, so when the
+/// plaintext case and the flags case coincide (ordinary garbage), the
+/// plaintext counter, not `rx_bad_flags`, is the one that moves. Only a
+/// datagram presenting a PAXE prefix addressed to this node reaches
+/// `open`, where failure is attributed to the precise reason counter.
+///
+/// Counting (a configured receiver only, mirroring open's rule that an
+/// unconfigured receiver drops untallied): a 0-verdict records rx_total
+/// AND rx_plaintext HERE; a 1-verdict records nothing — `open` counts
+/// the frame exactly once. The rx invariant is preserved on both arms.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_frame_for_us(frame: *const u8, frame_len: usize) -> c_int {
+    let frame = match buf_in(frame, frame_len, "frame") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    STORE.with(|s| {
+        let s = match s.try_borrow() {
+            Ok(s) => s,
+            // Unreachable by construction (no export holds the borrow
+            // across calls into this one); treated as an impossible
+            // internal result and deliberately NOT counted — no honest
+            // reason counter fits (same rule as OpenError::Sodium).
+            Err(_) => return 0,
+        };
+        let store = match s.as_ref() {
+            Some(st) => st,
+            // Unconfigured receiver: drop, uncounted — the module is not
+            // running PAXE at all (the same rule open() applies).
+            None => return 0,
+        };
+        // bytes 2-3 are the header toId, big-endian (codec.rs wire
+        // layout). `get` + fixed-size conversion: no indexing, no panic.
+        let to_id = match frame.get(2..4).and_then(|t| <[u8; 2]>::try_from(t).ok()) {
+            Some(t) => u16::from_be_bytes(t),
+            None => 0,
+        };
+        if frame.len() >= codec::PREFIX_LEN && to_id == store.local_id() {
+            return 1;
+        }
+        // The explicit plaintext drop: counted HERE, at the gate, never
+        // by coincidence of a later parse failure.
+        stats::record_rx_drop();
+        stats::record_reject(stats::RejectReason::Plaintext);
+        0
     })
 }
 
@@ -1297,7 +1406,7 @@ mod ffi_tests {
         // order, identical to the in-crate snapshot.
         let n = lunet_paxe_stats(std::ptr::null_mut(), 0);
         assert_eq!(n as usize, stats::SNAPSHOT_FIELD_COUNT);
-        assert_eq!(n, 13);
+        assert_eq!(n, 14);
 
         stats::record_rx_ok();
         stats::record_rx_drop();
@@ -1313,9 +1422,9 @@ mod ffi_tests {
         let s = stats::snapshot();
         assert_eq!(buf[0], s.rx_total);
         assert_eq!(buf[1], s.rx_ok);
-        assert_eq!(buf[5], s.reject(stats::RejectReason::NoPeer));
-        assert_eq!(buf[9], s.tx_total);
-        assert_eq!(buf[11], s.tx_dek);
+        assert_eq!(buf[6], s.reject(stats::RejectReason::NoPeer));
+        assert_eq!(buf[10], s.tx_total);
+        assert_eq!(buf[12], s.tx_dek);
         assert_invariant(&s, "over direct recordings");
     }
 
@@ -1344,5 +1453,98 @@ mod ffi_tests {
             lunet_paxe_fail_policy_set(silent.as_ptr(), silent.len()),
             RC_OK
         );
+    }
+
+    // -------------------------------------------------------------------
+    // item09: the protected-socket plaintext gate. A datagram is "for us"
+    // iff it carries at least the 9-byte prefix AND a header toId equal
+    // to the configured local id — the explicit check, never the flags
+    // byte. Counting: a rejection moves rx_total AND rx_plaintext, each
+    // by one, nothing else; an unconfigured receiver drops untallied.
+    // -------------------------------------------------------------------
+
+    /// Build a raw datagram with the given toId at header bytes 2-3.
+    fn datagram_to(to_id: u16, len: usize, flags: u8) -> Vec<u8> {
+        let mut d = vec![0u8; len];
+        d[2..4].copy_from_slice(&to_id.to_be_bytes());
+        if len > 8 {
+            d[8] = flags;
+        }
+        d
+    }
+
+    #[test]
+    fn frame_for_us_is_an_explicit_addressing_check_with_its_own_counter() {
+        // Unconfigured: every verdict is 0 and NOTHING is counted (the
+        // same rule open applies — the module is not running PAXE).
+        let before = stats::snapshot();
+        let d = datagram_to(NODE_A as u16, 40, 0x04);
+        assert_eq!(lunet_paxe_frame_for_us(d.as_ptr(), d.len()), 0);
+        let after = stats::snapshot();
+        assert_eq!(after.rx_total - before.rx_total, 0, "unconfigured: uncounted");
+        assert_eq!(
+            after.reject(stats::RejectReason::Plaintext) - before.reject(stats::RejectReason::Plaintext),
+            0,
+            "unconfigured: uncounted"
+        );
+
+        // Configure WITHOUT lunet_paxe_init: the gate does no crypto, so
+        // this test must also run on hosts without the AES-GCM hardware
+        // path (set_local_id needs only the keystore, which self-inits).
+        assert_eq!(lunet_paxe_set_local_id(NODE_A), RC_OK);
+
+        // Addressed to us (toId == local id), flags byte PASSING the
+        // constant-bit gate: classified as a frame, counted nowhere —
+        // open() will count it exactly once.
+        let d = datagram_to(NODE_A as u16, 40, 0x04);
+        let before = stats::snapshot();
+        assert_eq!(lunet_paxe_frame_for_us(d.as_ptr(), d.len()), 1);
+        let after = stats::snapshot();
+        assert_eq!(after.rx_total - before.rx_total, 0, "a frame is open's to count");
+
+        // THE item09 attack case: plaintext crafted so byte 8 PASSES the
+        // flags constant-bit gate (0x04: pattern bits set), with a toId
+        // that is not this node. The explicit addressing check rejects it
+        // and the PLAINTEXT counter moves — rx_bad_flags must not.
+        let crafted = datagram_to(0x270F, 40, 0x04);
+        let before = stats::snapshot();
+        assert_eq!(lunet_paxe_frame_for_us(crafted.as_ptr(), crafted.len()), 0);
+        let after = stats::snapshot();
+        assert_eq!(after.rx_total - before.rx_total, 1, "rx_total +1");
+        assert_eq!(
+            after.reject(stats::RejectReason::Plaintext) - before.reject(stats::RejectReason::Plaintext),
+            1,
+            "rx_plaintext +1"
+        );
+        assert_eq!(
+            after.reject(stats::RejectReason::BadFlags) - before.reject(stats::RejectReason::BadFlags),
+            0,
+            "rx_bad_flags must not move: the flags byte was never consulted"
+        );
+        assert_invariant(&after, "after a crafted-plaintext drop");
+
+        // Under the 9-byte prefix: cannot even present as a frame —
+        // plaintext, not TooShort (the gate precedes the codec).
+        let short = datagram_to(NODE_A as u16, 8, 0x04);
+        let before = stats::snapshot();
+        assert_eq!(lunet_paxe_frame_for_us(short.as_ptr(), short.len()), 0);
+        let after = stats::snapshot();
+        assert_eq!(
+            after.reject(stats::RejectReason::Plaintext) - before.reject(stats::RejectReason::Plaintext),
+            1,
+            "sub-prefix datagram counts as plaintext"
+        );
+        assert_eq!(
+            after.reject(stats::RejectReason::TooShort) - before.reject(stats::RejectReason::TooShort),
+            0,
+            "rx_short must not move"
+        );
+
+        // Malformed C-level argument: null with non-zero length raises
+        // (RC_INVAL), counts nothing, and cannot panic.
+        let before = stats::snapshot();
+        assert_eq!(lunet_paxe_frame_for_us(std::ptr::null(), 9), RC_INVAL);
+        let after = stats::snapshot();
+        assert_eq!(after.rx_total - before.rx_total, 0);
     }
 }

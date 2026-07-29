@@ -27,12 +27,18 @@
 -- out-of-range values reach the Rust checks untruncated; this module
 -- guarantees the conversion is exact (integer within uint32).
 --
--- NOT HERE YET: set_enabled/is_enabled arrive with item09, when they
--- genuinely control transport protection. The old module exposed the
--- switch as a no-op and an example printed that it worked; that defect
--- is not being repeated. UDP socket integration also arrives with
--- item09. Statistics counters (paxe.stats) and the failure policy
--- (paxe.set_fail_policy) landed with item08 below.
+-- ITEM09: protected UDP sockets are HERE — paxe.protect / unprotect /
+-- is_protected below, wired in THIS Lua layer by intercepting the
+-- lunet.udp module table (the recorded integration decision is in the
+-- comment block above the protect section). set_enabled/is_enabled
+-- deliberately do NOT exist: the old module's process-global switch
+-- printed "enabled" while protecting nothing, and one global flag cannot
+-- express a process serving both an encrypted cluster port and an
+-- unencrypted local port. Per-socket protect is the only enable
+-- mechanism, so there is no precedence question to document. Statistics
+-- counters (paxe.stats) and the failure policy (paxe.set_fail_policy)
+-- landed with item08 below; the plaintext drop has its own counter
+-- (rx_plaintext) from item09.
 --
 -- KEY MATERIAL: all keys live in the Rust keystore (guarded, mlocked,
 -- zeroed-on-drop libsodium allocations). The 32-byte string passed to
@@ -57,6 +63,7 @@ ffi.cdef[[
   int lunet_paxe_open(const uint8_t* frame, size_t frame_len,
                       uint8_t* out, size_t out_cap, size_t* out_len,
                       uint32_t* from_id, uint32_t* channel, uint32_t* mode);
+  int lunet_paxe_frame_for_us(const uint8_t* frame, size_t frame_len);
   uint32_t lunet_paxe_stats(uint64_t* out, size_t out_cap);
   int lunet_paxe_fail_policy_set(const uint8_t* name, size_t name_len);
   void lunet_paxe_shutdown(void);
@@ -171,6 +178,12 @@ function M.init()
   return true
 end
 
+-- Whether set_local_id has configured the module through THIS loader
+-- (the FFI store is per-process and this module is its only client, so
+-- the mirror is exact). protect() refuses to arm a socket while the
+-- module is unconfigured — otherwise every datagram would drop silently.
+local configured = false
+
 --- Configure this node's identity — ONCE. node_id must fit u16
 --- (0-65535). A second call without an intervening shutdown() raises:
 --- silently re-creating the keystore would erase installed keys.
@@ -179,6 +192,7 @@ function M.set_local_id(node_id)
   node_id = check_uint32(node_id, "node_id")
   local rc = C.lunet_paxe_set_local_id(node_id)
   if rc ~= RC_OK then return check_rc(rc) end
+  configured = true
   return true
 end
 
@@ -259,6 +273,7 @@ end
 --- cumulative for the process lifetime); the log-once memo is.
 function M.shutdown()
   C.lunet_paxe_shutdown()
+  configured = false
 end
 
 -- ── item08: statistics counters and the failure policy ─────────────────
@@ -268,7 +283,7 @@ end
 -- the count matches, so a drift fails loudly here, never silently.
 local STAT_FIELDS = {
   "rx_total", "rx_ok",
-  "rx_short", "rx_bad_flags", "rx_len_mismatch", "rx_no_peer",
+  "rx_plaintext", "rx_short", "rx_bad_flags", "rx_len_mismatch", "rx_no_peer",
   "rx_no_epoch", "rx_dek_len_mismatch", "rx_auth_fail",
   "tx_total", "tx_standard", "tx_dek", "tx_oversize",
 }
@@ -308,6 +323,191 @@ function M.set_fail_policy(name)
   local canonical = POLICIES[name:lower()]
   if not canonical then return false end
   return C.lunet_paxe_fail_policy_set(canonical, #canonical) == RC_OK
+end
+
+-- ── item09: protected UDP sockets ──────────────────────────────────────
+--
+-- INTEGRATION LAYER (recorded decision): protection is wired HERE, in
+-- Lua, by intercepting the lunet.udp module table — NOT in src/udp.c.
+--  * The Rust core is already reachable from Lua through this FFI loader;
+--    wiring udp.c would need a new C ABI into Rust AND would link the
+--    cdylib into lunet-run, which is deliberately NOT linked (PAXE is a
+--    pure opt-in extension).
+--  * udp.c's recv callback runs on the libuv loop, not a Lua coroutine —
+--    exactly the context the project notes (AGENTS.md) document for
+--    use-after-free crashes (dangling lua_State* in long-lived handles,
+--    registry ops on ctx->co). No crypto or key material goes near it.
+--  * require("lunet.udp") returns a plain Lua table of C functions
+--    (luaL_newlib), so interception needs NO C change: src/udp.c is
+--    untouched, and unprotected sockets pay only one table lookup.
+--
+-- DECRYPTION TIME (recorded decision): DELIVERY-time, when Lua calls
+-- udp.recv — not arrival-time in the libuv callback. Consequences,
+-- accepted deliberately:
+--  * The C receive queue holds CIPHERTEXT, never plaintext: no opened
+--    payload lingers in C memory between arrival and recv, and no key
+--    material is needed at queue-drain time.
+--  * A close-flush (udp.close draining its queue) discards ciphertext
+--    that was never authenticated — uncounted, because it never reached
+--    the gate below. That is the same end state as a drop, for frames
+--    that were undeliverable anyway (the socket is closing).
+--  * The trade-off accepted: crypto work happens per recv call in
+--    coroutine context rather than per arrival in the event loop — which
+--    is also where Lua errors can be raised safely.
+--
+-- TRACING: no parallel mechanism is invented here. Datagram arrival is
+-- already visible through udp.c's UDP_TRACE_RX in trace builds; every
+-- drop below (plaintext gate or open rejection) is counted in Rust and
+-- flows through the item08 failure policy — silent / log_once / verbose
+-- "[PAXE] drop: <reason>" lines — exactly like a synchronous paxe.open.
+
+local udp_mod -- the shared lunet.udp module table, captured on first protect
+local raw_send, raw_recv, raw_close
+-- sock (lightuserdata udp handle) -> { peer = ..., channel = ... }.
+-- Weak KEYS so a forgotten handle cannot pin its config; close (wrapped
+-- below) also clears the entry, because a freed ctx pointer can be
+-- reused by a later bind and must never inherit stale protection.
+local protected = setmetatable({}, { __mode = "k" })
+
+local function protected_send(sock, host, port, data, peer, channel)
+  local cfg = protected[sock]
+  if cfg == nil then return raw_send(sock, host, port, data) end
+  -- Destination peer and channel: the send call overrides the socket's
+  -- configured values; both resolutions are explicit (item09). seal()
+  -- raises on malformed overrides (a bug in the calling script).
+  if peer == nil then peer = cfg.peer end
+  if channel == nil then channel = cfg.channel end
+  local frame, err = M.seal(data, peer, channel)
+  if frame == nil then
+    -- Operational failure (unconfigured, no key for the peer, or an
+    -- oversized payload — the message names the selected mode's maximum
+    -- and tx_oversize was counted in Rust): the send FAILS with a clear
+    -- error and NOTHING is transmitted. Never truncated, never raw.
+    return nil, err
+  end
+  return raw_send(sock, host, port, frame)
+end
+
+local function protected_recv(sock)
+  if protected[sock] == nil then return raw_recv(sock) end
+  while true do
+    local data, host, port = raw_recv(sock)
+    if data == nil then
+      -- Closed or errored while waiting: pass the failure through
+      -- unchanged (nil, nil, message) so scripts see a dead socket, not
+      -- a silent hang.
+      return data, host, port
+    end
+    -- The explicit plaintext gate FIRST: a datagram that is not a PAXE
+    -- frame addressed to this node (under the 9-byte prefix, or a toId
+    -- that is not us) is dropped and counted as rx_plaintext in Rust —
+    -- by the addressing check, NEVER by the flags byte, which crafted
+    -- plaintext could pass.
+    if C.lunet_paxe_frame_for_us(data, #data) == 1 then
+      local plain, from_id, channel = M.open(data)
+      if plain ~= nil then
+        -- plaintext + the authenticated fromId and channel; host/port
+        -- stay transport-level metadata, exactly as raw recv reports
+        -- them.
+        return plain, host, port, from_id, channel
+      end
+      -- Rejected: the reason counter already moved inside Rust. Deliver
+      -- NOTHING — no data, no error indicator (decryption-oracle
+      -- avoidance) — and wait for the next datagram.
+    end
+  end
+end
+
+local function protected_close(sock)
+  protected[sock] = nil -- see the weak-table note above
+  return raw_close(sock)
+end
+
+-- Intercept the shared lunet.udp module table exactly once. From then
+-- on every send/recv/close checks the protected registry first;
+-- unprotected sockets pass straight through to the raw C functions.
+local function wrap_udp()
+  if udp_mod then return end
+  udp_mod = require("lunet.udp")
+  raw_send, raw_recv, raw_close = udp_mod.send, udp_mod.recv, udp_mod.close
+  udp_mod.send = protected_send
+  udp_mod.recv = protected_recv
+  udp_mod.close = protected_close
+end
+
+local function check_u16(v, name)
+  if type(v) ~= "number" or v ~= v or v % 1 ~= 0 or v < 0 or v > 65535 then
+    error(("bad argument '%s' (expected an integer between 0 and 65535, got %s)")
+      :format(name, tostring(v)), 3)
+  end
+  return v
+end
+
+--- Opt ONE UDP socket into PAXE protection (per-socket decision — there
+--- is deliberately no process-global switch: a global cannot express
+--- mixed encrypted/unencrypted traffic, and with one mechanism there is
+--- no precedence question).
+---
+--- `sock` is a handle from udp.bind(). `config` is a table:
+---   peer    (required) the PAXE node id this socket seals for and
+---           expects frames from — the PAXE identity of the remote end,
+---           independent of the IP address sent to (the frame's
+---           authenticated toId is what protects against misdelivery).
+---   channel (optional, default 0) the channel outgoing datagrams are
+---           sealed on; 1-99 are reserved system channels.
+---
+--- After protect():
+---   udp.send(sock, host, port, data [, peer [, channel]])
+---       seals data for the peer on the channel (call-site values
+---       override the configured ones) and transmits the frame. A seal
+---       failure (unconfigured, no key, oversized payload) fails the
+---       send with a clear error; nothing is transmitted.
+---   udp.recv(sock) -> data, host, port, from_id, channel
+---       returns the opened plaintext plus the AUTHENTICATED fromId and
+---       channel. Datagrams that fail the plaintext gate or open() are
+---       dropped and counted in Rust; NOTHING reaches Lua for them.
+---   udp.close(sock)  also removes the protection entry.
+---
+--- Raises (a bug in the calling script) on a non-handle socket, a
+--- non-table config, an out-of-range peer/channel, or when the module
+--- is not configured (set_local_id first) — arming an unconfigured
+--- socket would silently drop every datagram. Returns true.
+function M.protect(sock, config)
+  if type(sock) ~= "userdata" then
+    error(("bad argument 'sock' (udp handle expected, got %s)"):format(type(sock)), 2)
+  end
+  if type(config) ~= "table" then
+    error(("bad argument 'config' (table expected, got %s)"):format(type(config)), 2)
+  end
+  if not configured then
+    error("lunet.paxe: local node id not configured: call set_local_id() before protect()", 2)
+  end
+  local peer = check_u16(config.peer, "config.peer")
+  local channel = config.channel
+  if channel == nil then channel = 0 end
+  channel = check_u16(channel, "config.channel")
+  if channel >= 1 and channel <= 99 then
+    error(("bad argument 'config.channel' (channel %d is reserved: 1-99 are system channels, "
+      .. "application channels start at 100)"):format(channel), 2)
+  end
+  wrap_udp()
+  protected[sock] = { peer = peer, channel = channel }
+  return true
+end
+
+--- Remove protection from a socket (idempotent). Subsequent send/recv on
+--- it pass through to raw lunet.udp behaviour. Returns true.
+function M.unprotect(sock)
+  protected[sock] = nil
+  return true
+end
+
+--- Is this socket protected? Returns false, or true plus the configured
+--- peer and channel.
+function M.is_protected(sock)
+  local cfg = protected[sock]
+  if cfg == nil then return false end
+  return true, cfg.peer, cfg.channel
 end
 
 return M

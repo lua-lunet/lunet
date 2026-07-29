@@ -178,14 +178,14 @@ local function main()
   -- ── item08: statistics counters are the diagnostic channel ────────────
   local s = paxe.stats()
   check(type(s) == "table", "paxe.stats() returns a table")
-  local stat_fields = { "rx_total", "rx_ok", "rx_short", "rx_bad_flags", "rx_len_mismatch",
-    "rx_no_peer", "rx_no_epoch", "rx_dek_len_mismatch", "rx_auth_fail",
+  local stat_fields = { "rx_total", "rx_ok", "rx_plaintext", "rx_short", "rx_bad_flags",
+    "rx_len_mismatch", "rx_no_peer", "rx_no_epoch", "rx_dek_len_mismatch", "rx_auth_fail",
     "tx_total", "tx_standard", "tx_dek", "tx_oversize" }
   local all_numbers = true
   for _, k in ipairs(stat_fields) do
     if type(s[k]) ~= "number" then all_numbers = false end
   end
-  check(all_numbers, "stats table carries all 13 counters as numbers")
+  check(all_numbers, "stats table carries all 14 counters as numbers")
 
   -- Counters are cumulative: measure DELTAS, never absolute values.
   local before = paxe.stats()
@@ -195,7 +195,7 @@ local function main()
   check(after.rx_total == before.rx_total + 1, "a rejection increments rx_total by 1")
   check(after.rx_auth_fail == before.rx_auth_fail + 1, "corrupted ciphertext increments rx_auth_fail by 1")
   check(after.rx_ok == before.rx_ok, "a rejection does not touch rx_ok")
-  local reject_sum = after.rx_short + after.rx_bad_flags + after.rx_len_mismatch
+  local reject_sum = after.rx_plaintext + after.rx_short + after.rx_bad_flags + after.rx_len_mismatch
     + after.rx_no_peer + after.rx_no_epoch + after.rx_dek_len_mismatch + after.rx_auth_fail
   check(after.rx_total == after.rx_ok + reject_sum,
     "invariant: rx_total == rx_ok + sum(all reject reasons)")

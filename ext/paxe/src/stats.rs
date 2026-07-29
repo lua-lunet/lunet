@@ -118,9 +118,18 @@ use std::cell::Cell;
 #[repr(usize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RejectReason {
+    /// Not a PAXE frame addressed to this node at all: under the 9-byte
+    /// prefix, or a header `toId` (bytes 2-3) that is not the configured
+    /// local id — plaintext, foreign-protocol or misaddressed traffic on
+    /// a protected socket. Recorded ONLY at the protected-socket boundary
+    /// (`lunet_paxe_frame_for_us`, item09), by an EXPLICIT addressing
+    /// check that runs before the codec — never by coincidence of the
+    /// flags constant-bit gate, which crafted plaintext could pass. This
+    /// is the first gate on the socket receive path, so it sorts first.
+    Plaintext = 0,
     /// Fewer bytes than the parse needs: under the 9-byte prefix, or
     /// under the 83-byte DEK minimum with the DEK bit set.
-    TooShort = 0,
+    TooShort,
     /// Flags constant-bit violation: bit 1 set or bit 2 clear. The
     /// protocol's cheap garbage filter, first check after the length gate.
     BadFlags,
@@ -157,6 +166,7 @@ impl RejectReason {
     // reads fields() instead.
     #[allow(dead_code)]
     pub const ALL: [RejectReason; RejectReason::COUNT] = [
+        RejectReason::Plaintext,
         RejectReason::TooShort,
         RejectReason::BadFlags,
         RejectReason::LenMismatch,
@@ -179,6 +189,7 @@ impl RejectReason {
     /// unverified at rejection time (recorded decision, module docs).
     pub const fn line(self) -> &'static str {
         match self {
+            RejectReason::Plaintext => "[PAXE] drop: plaintext on a protected socket",
             RejectReason::TooShort => "[PAXE] drop: frame too short",
             RejectReason::BadFlags => "[PAXE] drop: flags constant-bit violation",
             RejectReason::LenMismatch => {
@@ -256,7 +267,7 @@ impl FailPolicy {
 /// Number of u64 fields in the FFI snapshot ([`Stats::fields`]). paxe.lua
 /// probes with a null pointer to size its buffer, and asserts its name
 /// table has exactly this many entries so a drift fails loudly.
-pub const SNAPSHOT_FIELD_COUNT: usize = 13;
+pub const SNAPSHOT_FIELD_COUNT: usize = 14;
 
 /// The process-global cumulative counters. `Copy` so snapshots are plain
 /// values; deltas are measured between two snapshots (module docs: no
@@ -322,6 +333,7 @@ impl Stats {
         [
             self.rx_total,
             self.rx_ok,
+            self.reject(RejectReason::Plaintext),
             self.reject(RejectReason::TooShort),
             self.reject(RejectReason::BadFlags),
             self.reject(RejectReason::LenMismatch),
@@ -441,8 +453,15 @@ pub(crate) fn set_policy(p: FailPolicy) {
 /// Reset the log-once memo. Called by `lunet_paxe_shutdown` (a
 /// re-initialised module starts a fresh window) and by set_policy on
 /// entering log_once. The counters are NOT touched — they never reset.
+///
+/// `try_with`, not `with`: the item09 atexit exit hook can run after the
+/// thread-local has been destroyed (destructor order at process exit is
+/// reverse-registration, and the memo may have been initialised after the
+/// hook was registered). A destroyed memo means there is nothing left to
+/// reset — and `with` would panic, which under `panic = "abort"` would
+/// turn process exit into an abort.
 pub(crate) fn reset_log_once_memo() {
-    LOGGED.with(|c| c.set(0));
+    let _ = LOGGED.try_with(|c| c.set(0));
 }
 
 /// The policy decision for one rejection. Under log_once this test-and-
@@ -505,8 +524,12 @@ mod tests {
             );
         }
         assert!(seen.iter().all(|&s| s), "every counter slot is reachable");
-        assert_eq!(RejectReason::COUNT, 7, "the seven enumerated reasons");
+        assert_eq!(RejectReason::COUNT, 8, "the eight enumerated reasons");
         // The exact lines (the smoke run greps stderr for these).
+        assert_eq!(
+            RejectReason::Plaintext.line(),
+            "[PAXE] drop: plaintext on a protected socket"
+        );
         assert_eq!(RejectReason::TooShort.line(), "[PAXE] drop: frame too short");
         assert_eq!(
             RejectReason::BadFlags.line(),
@@ -560,15 +583,15 @@ mod tests {
         let f = s.fields();
         assert_eq!(f.len(), SNAPSHOT_FIELD_COUNT);
         let before = Stats::default();
-        assert_eq!(f[0] - before.rx_total, 8, "rx_total: 1 ok + 7 drops");
+        assert_eq!(f[0] - before.rx_total, 9, "rx_total: 1 ok + 8 drops");
         assert_eq!(f[1] - before.rx_ok, 1, "rx_ok");
         for (i, reason) in RejectReason::ALL.iter().enumerate() {
             assert_eq!(f[2 + i], 1, "reject counter for {reason:?}");
         }
-        assert_eq!(f[9] - before.tx_total, 3, "tx_total");
-        assert_eq!(f[10] - before.tx_standard, 1, "tx_standard");
-        assert_eq!(f[11] - before.tx_dek, 2, "tx_dek");
-        assert_eq!(f[12] - before.tx_oversize, 1, "tx_oversize");
+        assert_eq!(f[10] - before.tx_total, 3, "tx_total");
+        assert_eq!(f[11] - before.tx_standard, 1, "tx_standard");
+        assert_eq!(f[12] - before.tx_dek, 2, "tx_dek");
+        assert_eq!(f[13] - before.tx_oversize, 1, "tx_oversize");
         // THE invariant, over the recording API alone.
         assert_eq!(f[0], f[1] + s.reject_sum(), "rx_total == rx_ok + rejects");
     }
@@ -633,7 +656,7 @@ mod tests {
             }
         }
         let bits = LOGGED.with(|m| m.get());
-        assert_eq!(bits, (1u64 << RejectReason::COUNT) - 1, "all seven bits");
+        assert_eq!(bits, (1u64 << RejectReason::COUNT) - 1, "all eight bits");
 
         // Reset scope: entering log_once starts a fresh window...
         set_policy(FailPolicy::LogOnce);

@@ -30,6 +30,7 @@ kill $SERVER_PID
 | `test/sdk_api.c` | C SDK lifecycle test (one-runtime contract, negative matrix, exit-code plumbing) | `xmake build sdk-api-test && timeout 10 $(find build -name sdk-api-test -type f \| head -1)` — **run from the repo root** (uses the relative path below) |
 | `test/sdk_api_script.lua` | Helper for sdk_api.c; sets `__lunet_exit_code = 23` | invoked by the sdk-api-test binary |
 | `test/smoke_sqlite3_tx.lua` | `lunet.sqlite3_tx` transaction wrapper: commit, abort-by-nil, raise, statement error, guards (#119) | `xmake build lunet-sqlite3 && xmake build-release` then `$(find build -path '*/release/lunet-run' -type f \| head -1) test/smoke_sqlite3_tx.lua` |
+| `test/run_paxe_udp_e2e.sh` | item14 PAXE end-to-end over loopback UDP (two processes, nodes 200/100): negative-first (rx_plaintext vs rx_bad_flags), per-socket independence, positive byte-exact + authenticated fromId/channel, 63/64/65 mode boundary, max payload, 4x4 concurrency. Logs to `.tmp/logs/<timestamp>/`; exit non-zero on any failure | `xmake build-paxe && xmake build-release` then `bash test/run_paxe_udp_e2e.sh` (drives `test/paxe_udp_receiver.lua` + `test/paxe_udp_sender.lua`) |
 
 ## Tracing Verification
 

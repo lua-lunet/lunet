@@ -329,6 +329,28 @@ impl KeyStore {
         self.entries.get(&(from_id, epoch))
     }
 
+    /// SEND-side current-epoch lookup: the highest-numbered epoch
+    /// installed for `to_id`, with its key. This is the epoch a sender
+    /// uses, and it makes the PAXE.md rotation procedure automatic:
+    /// "install the new key under a new epoch ... switch senders over"
+    /// happens AT INSTALL, because the newest epoch is always the current
+    /// send epoch; "retire the old epoch" then removes the superseded
+    /// key. Numeric epochs are the rotation ordering, so highest ==
+    /// newest by convention (documented in PAXE.md "Lua API"). The
+    /// Lua-facing seal (item07) takes no epoch parameter precisely so
+    /// this rule is the only selection on the send path.
+    ///
+    /// Entries for one peer are contiguous under the `(peer, epoch)`
+    /// BTreeMap ordering, so `next_back` of the peer's range is the
+    /// highest epoch. Returns `None` when no epoch is installed for the
+    /// peer at all.
+    pub fn key_for_send_current(&self, to_id: u16) -> Option<(Epoch, &StoredKey)> {
+        self.entries
+            .range((to_id, Epoch(0))..=(to_id, Epoch(MAX_EPOCH)))
+            .next_back()
+            .map(|(&(_, epoch), key)| (epoch, key))
+    }
+
     /// Retire one epoch for one peer: remove ONLY that slot's key,
     /// erasing its material. Returns `true` if a key was retired. All
     /// other epochs for the same peer — and all other peers — are
@@ -534,6 +556,41 @@ mod tests {
         assert!(ct_eq(loop_send.expose(), &loopback_key));
         let loop_recv = ks.key_for_receive(LOCAL, ep(7)).expect("receive from self");
         assert!(ct_eq(loop_recv.expose(), &loopback_key));
+    }
+
+    #[test]
+    fn send_current_is_the_highest_installed_epoch_and_follows_retirement() {
+        let mut ks = KeyStore::new(LOCAL).expect("new");
+        // Nothing installed: no current send epoch.
+        assert!(ks.key_for_send_current(PEER).is_none());
+
+        ks.install(PEER, ep(1), &material(0x01)).expect("epoch 1");
+        ks.install(PEER, ep(5), &material(0x05)).expect("epoch 5");
+        ks.install(PEER, ep(3), &material(0x03)).expect("epoch 3");
+
+        // Highest wins regardless of installation order, with ITS key.
+        let (epoch, key) = ks.key_for_send_current(PEER).expect("current");
+        assert_eq!(epoch, ep(5));
+        assert!(ct_eq(key.expose(), &material(0x05)));
+
+        // Rotation: install a newer epoch and the sender switches at once.
+        ks.install(PEER, ep(6), &material(0x06)).expect("epoch 6");
+        let (epoch, _) = ks.key_for_send_current(PEER).expect("current");
+        assert_eq!(epoch, ep(6));
+
+        // Retire the newest: the sender falls back to the next-highest.
+        assert!(ks.retire(PEER, ep(6)));
+        let (epoch, key) = ks.key_for_send_current(PEER).expect("current");
+        assert_eq!(epoch, ep(5));
+        assert!(ct_eq(key.expose(), &material(0x05)));
+
+        // The lookup is scoped to the peer: another peer's epochs are
+        // invisible, and retiring the last epoch returns to None.
+        assert!(ks.key_for_send_current(PEER + 1).is_none());
+        ks.retire(PEER, ep(1));
+        ks.retire(PEER, ep(3));
+        ks.retire(PEER, ep(5));
+        assert!(ks.key_for_send_current(PEER).is_none());
     }
 
     #[test]

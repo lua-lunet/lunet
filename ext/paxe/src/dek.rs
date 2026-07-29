@@ -171,25 +171,27 @@
 //! "Failure Handling"). There is deliberately no wrap-failure variant: the
 //! condition cannot occur (see above), and item08 gets no counter for it.
 //!
-//! ## item05 integration point
+//! ## item05 integration point (WIRED in item07)
 //!
 //! Standard-mode seal/open are owned by item05 (`standard.rs`), built in
 //! parallel. The dispatch below routes sub-threshold payloads and
 //! non-DEK-flag frames to `standard_seal` / `standard_open` at the bottom
-//! of this file. Until `standard.rs` lands and those two functions are
-//! wired to it, they return a typed unavailability — never a panic, never a
-//! silent mode substitution. Standard mode is deliberately NOT implemented
-//! here: duplicating item05's seal is out of bounds for item06.
+//! of this file — thin shims over `crate::standard::seal/open` (wired in
+//! item07; before that they returned a typed unavailability). Standard
+//! mode is deliberately NOT implemented here: duplicating item05's seal
+//! is out of bounds for item06, and the shims keep it that way.
 
-// Callers land in item07 (Lua API) and item09 (receive path). Until then
-// the public surface of this module is exercised only by its unit tests, so
-// dead_code is allowed here on the same terms as keystore.rs and codec.rs:
-// remove the allowance as those items land.
+// Callers landed in item07 (Lua API); item09 (receive path) and item13
+// (the select_mode assertion surface) have not. Parts of the public
+// surface are still exercised only by unit tests, so dead_code is allowed
+// here on the same terms as keystore.rs and codec.rs: remove the
+// allowance as those items land.
 #![allow(dead_code)]
 
 use crate::codec::{self, CodecError, Flags, Header, Mode, PREFIX_LEN};
 use crate::keystore::{Epoch, KeyStore, StoredKey};
 use crate::sodium::{self, Key, Nonce, SodiumError, ABYTES, KEYBYTES, NPUBBYTES};
+use crate::standard;
 use std::error::Error;
 use std::fmt;
 
@@ -353,10 +355,6 @@ pub enum SealError {
     /// Wrapped from the sodium boundary (allocation or an impossible
     /// internal result).
     Sodium(SodiumError),
-    /// item05 integration point not yet wired: the dispatch selected
-    /// standard mode but `standard.rs` has not landed. Typed and
-    /// reportable — never a panic, never a silent mode substitution.
-    StandardUnavailable,
 }
 
 impl fmt::Display for SealError {
@@ -368,10 +366,6 @@ impl fmt::Display for SealError {
             ),
             SealError::NoKey => write!(f, "no key installed for (peer, epoch)"),
             SealError::Sodium(e) => write!(f, "crypto failure: {e}"),
-            SealError::StandardUnavailable => write!(
-                f,
-                "standard mode unavailable: item05 integration point not yet wired"
-            ),
         }
     }
 }
@@ -412,11 +406,16 @@ pub enum OpenError {
     /// wrapped DEK. This is where wrap corruption surfaces — there is no
     /// wrap-failure variant, by design.
     AuthFailed,
+    /// A standard-mode frame was rejected by `standard::open`. item05's
+    /// open is deliberately single-variant (opaque `Rejected`: oracle
+    /// avoidance at its own layer), so the cause is already erased before
+    /// it reaches this dispatch — mapping it onto any of the typed
+    /// variants above would INVENT a reason. One honest variant, one
+    /// item08 counter: that is the most the counters can know about a
+    /// standard-mode rejection.
+    StandardRejected,
     /// Wrapped from the sodium boundary (an impossible internal result).
     Sodium(SodiumError),
-    /// item05 integration point not yet wired: the flags byte selected
-    /// standard geometry but `standard.rs` has not landed.
-    StandardUnavailable,
 }
 
 impl fmt::Display for OpenError {
@@ -435,11 +434,8 @@ impl fmt::Display for OpenError {
             }
             OpenError::NoKey => write!(f, "no key installed for (fromId, epoch)"),
             OpenError::AuthFailed => write!(f, "authentication failed"),
+            OpenError::StandardRejected => write!(f, "standard-mode frame rejected"),
             OpenError::Sodium(e) => write!(f, "crypto failure: {e}"),
-            OpenError::StandardUnavailable => write!(
-                f,
-                "standard mode unavailable: item05 integration point not yet wired"
-            ),
         }
     }
 }
@@ -794,43 +790,72 @@ pub(crate) fn seal_dek_deterministic(
 }
 
 // ===========================================================================
-// item05 INTEGRATION POINT — standard mode.
+// item05 INTEGRATION POINT — standard mode (WIRED in item07).
 //
-// Standard-mode seal/open are owned by item05 (`standard.rs`), built in
-// parallel. The dispatch above routes sub-threshold payloads (seal) and
-// non-DEK-flag frames (open) to these two functions. Until standard.rs
-// lands and they are wired to it (call `crate::standard::seal/open`,
-// mapping its error type into SealError/OpenError), they return a typed,
-// reportable unavailability — never a panic, never a silent mode
-// substitution. Do NOT implement standard mode in this file: duplicating
-// item05's seal is explicitly out of bounds for item06.
+// Standard-mode seal/open are owned by item05 (`standard.rs`). The
+// dispatch above routes sub-threshold payloads (seal) and non-DEK-flag
+// frames (open) to these two shims, which adapt item05's caller-buffer
+// seal and its deliberately single-variant open error to this module's
+// Vec-returning, typed-error shapes. Standard mode is NOT implemented
+// here: the shims call `crate::standard::seal/open` and nothing else.
 //
-// Note for whoever wires this: item05's `standard::OpenError` is
-// deliberately single-variant (opaque `Rejected`), while this module's
-// `OpenError` is typed in-crate so tests and the item08 counters can pin
-// each cause. Both surfaces collapse to one opaque drop at the item07 FFI
-// boundary; unifying the two in-crate error types (or mapping between
-// them) is an item07/item08 integration decision, not something to settle
-// inside this dispatch.
+// Error mapping (settled in item07, recorded for item08): item05's
+// `standard::OpenError` is a single opaque variant by design, so a
+// standard-mode rejection maps to the ONE honest variant
+// `OpenError::StandardRejected` — never to a typed cause this layer
+// cannot know. Both surfaces collapse to one opaque drop at the item07
+// FFI boundary.
 // ===========================================================================
 
 fn standard_seal(
-    _store: &KeyStore,
-    _to_id: u16,
-    _channel: u16,
-    _epoch: Epoch,
-    _payload: &[u8],
+    store: &KeyStore,
+    to_id: u16,
+    channel: u16,
+    epoch: Epoch,
+    payload: &[u8],
 ) -> Result<Vec<u8>, SealError> {
-    Err(SealError::StandardUnavailable)
+    // Bound BEFORE allocating the frame buffer (standard::seal enforces
+    // the same bound against the caller buffer, but by then the Vec
+    // would already exist). Oversize is reportable, never a truncated
+    // length field. Reachable here only via the cfg(test) forcing seam —
+    // the dispatch routes sub-threshold payloads, which are always in
+    // range — but totality does not depend on the caller.
+    if payload.len() > standard::MAX_PAYLOAD {
+        return Err(SealError::Oversize(payload.len()));
+    }
+    // payload.len() <= 65470, so the addition cannot overflow.
+    let mut frame = vec![0u8; payload.len() + standard::OVERHEAD];
+    match standard::seal(store, to_id, channel, epoch, payload, &mut frame) {
+        Ok(_) => Ok(frame),
+        Err(standard::SealError::PayloadTooLarge(n)) => Err(SealError::Oversize(n)),
+        Err(standard::SealError::OutputTooSmall { .. }) => {
+            // Unreachable: the buffer was sized to exactly the frame.
+            Err(SealError::Sodium(SodiumError::Internal))
+        }
+        Err(standard::SealError::NoKey) => Err(SealError::NoKey),
+        Err(standard::SealError::Sodium(e)) => Err(SealError::Sodium(e)),
+    }
 }
 
 fn standard_open(
-    _store: &KeyStore,
-    _datagram: &[u8],
-    _header: Header,
+    store: &KeyStore,
+    datagram: &[u8],
+    header: Header,
     _flags: Flags,
 ) -> Result<(Header, Flags, Vec<u8>), OpenError> {
-    Err(OpenError::StandardUnavailable)
+    // Output sized by the DECLARED length (a u16, so at most 65535) —
+    // never by the datagram size, which is attacker-controlled and
+    // unbounded. If the declaration disagrees with the frame size,
+    // standard::open rejects before any decryption runs.
+    let mut plain = vec![0u8; header.length as usize];
+    match standard::open(store, datagram, &mut plain) {
+        Ok((h, f, n)) => {
+            plain.truncate(n);
+            Ok((h, f, plain))
+        }
+        // item05 erased the cause by design; do not invent one.
+        Err(_) => Err(OpenError::StandardRejected),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -942,19 +967,12 @@ mod tests {
             assert_eq!(f.mode(), Mode::Dek, "n={n} must select DEK on the wire");
             assert_eq!(frame.len(), n + DEK_OVERHEAD);
         }
-        // 63 routes to standard. Until item05's standard.rs is wired at
-        // the integration point below, that is a typed unavailability;
-        // after wiring it is a real 37-byte-overhead standard frame.
-        // Either way this test asserts the ROUTING and the mode.
-        match seal(&l.a, NODE_B, CHAN, ep(EPOCH), &payload(63)) {
-            Err(SealError::StandardUnavailable) => {}
-            Ok(frame) => {
-                let (_, f) = codec::parse_prefix(&frame).expect("prefix");
-                assert_eq!(f.mode(), Mode::Standard, "n=63 must select standard on the wire");
-                assert_eq!(frame.len(), 63 + 37, "standard overhead is 37 bytes");
-            }
-            Err(e) => panic!("unexpected seal error at n=63: {e}"),
-        }
+        // 63 routes to standard (the wired item05 path): a real
+        // 37-byte-overhead standard frame carrying the standard-mode bit.
+        let frame = seal(&l.a, NODE_B, CHAN, ep(EPOCH), &payload(63)).expect("seal 63");
+        let (_, f) = codec::parse_prefix(&frame).expect("prefix");
+        assert_eq!(f.mode(), Mode::Standard, "n=63 must select standard on the wire");
+        assert_eq!(frame.len(), 63 + 37, "standard overhead is 37 bytes");
     }
 
     #[test]
@@ -1076,19 +1094,15 @@ mod tests {
             assert_eq!(f.mode(), Mode::Dek);
             assert_eq!(plain, pt);
         }
-        // Sub-threshold payloads route standard (integration point until
-        // item05 lands; real standard frames afterwards — see the boundary
-        // test for the full assertion).
+        // Sub-threshold payloads route standard through the wired item05
+        // path: real standard frames that round-trip byte-exactly through
+        // the same public dispatch (open parses by the flags bit).
         for n in [0usize, 1, 63] {
-            match seal(&l.a, NODE_B, CHAN, ep(EPOCH), &payload(n)) {
-                Err(SealError::StandardUnavailable) => {}
-                Ok(frame) => {
-                    let (_, f, plain) = open(&l.b, &frame).expect("open standard");
-                    assert_eq!(f.mode(), Mode::Standard);
-                    assert_eq!(plain, payload(n));
-                }
-                Err(e) => panic!("unexpected seal error at n={n}: {e}"),
-            }
+            let frame = seal(&l.a, NODE_B, CHAN, ep(EPOCH), &payload(n)).expect("seal standard");
+            assert_eq!(frame.len(), n + 37, "standard overhead is 37 bytes (n={n})");
+            let (_, f, plain) = open(&l.b, &frame).expect("open standard");
+            assert_eq!(f.mode(), Mode::Standard);
+            assert_eq!(plain, payload(n));
         }
         // FORCED DEK below the threshold: the receiver parses by the flags
         // bit, never by size — the 64-byte threshold binds senders only.
@@ -1106,6 +1120,35 @@ mod tests {
         assert_eq!(frame.len(), DEK_OVERHEAD);
         let (_, _, plain) = open(&l.b, &frame).expect("open empty DEK frame");
         assert!(plain.is_empty());
+    }
+
+    #[test]
+    fn wired_standard_dispatch_rejects_tampered_frames_as_standard_rejected() {
+        if !gcm() {
+            eprintln!("skipping: AES-GCM hardware path unavailable");
+            return;
+        }
+        let l = link();
+        let pt = payload(40); // sub-threshold: standard mode via the shim
+        let frame = seal(&l.a, NODE_B, CHAN, ep(EPOCH), &pt).expect("seal");
+
+        // A tampered standard frame rejected inside standard::open maps
+        // to the ONE honest variant — the cause was erased by item05's
+        // opaque open and must not be invented here.
+        let mut forged = frame.clone();
+        forged[30] ^= 0x01; // inside the ciphertext region
+        assert_eq!(open(&l.b, &forged), Err(OpenError::StandardRejected));
+        // Unknown key on a standard frame: same single variant (item05
+        // collapses unknown-key and tag failure; so does this mapping).
+        let c = KeyStore::new(300).expect("store C");
+        assert_eq!(open(&c, &frame), Err(OpenError::StandardRejected));
+        // Declared-vs-actual size disagreement: same.
+        let truncated = &frame[..frame.len() - 1];
+        assert_eq!(open(&l.b, truncated), Err(OpenError::StandardRejected));
+        // Control: the untampered frame still opens through the dispatch.
+        let (_, f, plain) = open(&l.b, &frame).expect("open");
+        assert_eq!(f.mode(), Mode::Standard);
+        assert_eq!(plain, pt);
     }
 
     #[test]

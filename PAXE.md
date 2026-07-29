@@ -6,7 +6,9 @@ This document is the authoritative specification of the PAXE wire protocol. Impl
 
 ## Status
 
-As at the time of writing, **PAXE does not yet protect socket traffic**. The implementation is being written against this specification; the wire format, key model, limits and failure semantics below are the contract it will implement. The Lua-facing API, the build wiring and the examples land with that implementation, not before.
+The wire format, key model, limits and failure semantics below ARE the implemented contract: the cryptographic core (header/flags codec, secure keystore, standard and DEK seal/open, automatic mode selection) and the Lua-facing API (`lunet.paxe`, see [Lua API](#lua-api-lunetpaxe)) are implemented and tested.
+
+**PAXE does not yet protect socket traffic**: nothing is wired between the module and lunet's UDP sockets. That integration lands separately, and with it `set_enabled`/`is_enabled` — which deliberately do not exist until they genuinely control behaviour. (An earlier implementation exposed `set_enabled` as a no-op while an example printed "PAXE enabled"; that defect is not being repeated.) Statistics counters and the failure policies of [Failure Handling](#failure-handling) likewise arrive with the receive-path work.
 
 ## Overview
 
@@ -185,6 +187,53 @@ Each divergence below is documented with its reasoning in the section linked fro
 3. **Authentication failure**: always a drop under the failure policy — never an error that explains the failure to a caller or sender (no decryption oracle).
 4. **Header exposure**: the header and flags are authenticated, not encrypted. `fromId`, `toId`, `channel`, `length` and the epoch are visible to a passive observer.
 5. **Wrapped DEK**: unauthenticated by construction; corruption surfaces at the payload tag check.
+
+## Lua API (`lunet.paxe`)
+
+The module is a Rust cdylib (`ext/paxe`) loaded through the LuaJIT FFI by the loader `ext/paxe/paxe.lua` — the same loading model as `lunet.jsonic`; the `LUNET_PAXE_LIB` environment variable overrides the library path. All cryptographic state — the keystore, i.e. all key material — lives inside the Rust library behind the FFI; Lua never holds keys except transiently when passing one in (see [Key material and the Lua VM](#key-material-and-the-lua-vm-known-limitation)).
+
+### Functions
+
+| Function | Returns | Meaning |
+|----------|---------|---------|
+| `paxe.version()` | string | Crate version. |
+| `paxe.init()` | `true` \| `nil, message` | Initialise libsodium and require the AES-256-GCM hardware path. Idempotent. Reports `nil, message` when the host cannot provide it — PAXE refuses to operate rather than substitute another cipher. |
+| `paxe.set_local_id(node_id)` | `true` | Configure this node's identity (0–65535) — ONCE. A second call without an intervening `shutdown()` raises: silently re-creating the keystore would erase installed keys. |
+| `paxe.keystore_set(peer, epoch, key)` | `true` \| `nil, message` | Install the 32-byte key shared with `peer` (0–65535) under `epoch` (0–31). Overwriting an occupied slot erases the old key. |
+| `paxe.keystore_retire(peer, epoch)` | `true` \| `false` \| `nil, message` | Erase one `(peer, epoch)` slot. `false` when the slot was already empty (informational, not an error). |
+| `paxe.keystore_clear()` | `true` | Erase every installed key. |
+| `paxe.seal(payload, to_id, channel)` | `frame` \| `nil, message` | Seal `payload` (string) for `to_id` on `channel`. `fromId` is the configured local id — never a parameter, so no caller can spoof a source. The mode is selected by payload size (standard below 64 bytes, DEK at and above). The send epoch is the newest epoch installed for `to_id` (see below). `channel` must fit 16 bits and must not be in the reserved system range 1–99 (application channels start at 100; channel 0 is permitted). |
+| `paxe.open(frame)` | `payload, from_id, channel, mode` \| `nil, message` | Open one received frame. On success: the payload, the authenticated `fromId`, the channel, and the mode (`"standard"` or `"dek"`). On ANY failure: `nil` plus ONE opaque message — see [Opaque open failure](#opaque-open-failure). |
+| `paxe.shutdown()` | — | Zero and free every key and forget the local identity. Idempotent; `set_local_id` may configure afresh afterwards. |
+
+There is no `key_id` anywhere: keys are addressed by `(peer node id, epoch)`. There is deliberately no `set_enabled`/`is_enabled` yet: they arrive with the socket integration, when they genuinely control transport protection. Statistics counters and the `DROP`/`LOG_ONCE`/`VERBOSE` failure policies arrive with the receive-path work; they govern the UDP receive path, not this synchronous API.
+
+### Error conventions
+
+One convention, applied uniformly:
+
+- **Malformed arguments raise** a Lua error — they are bugs in the calling script. Wrong Lua types are checked by the loader; out-of-range and constraint-violating values are checked in Rust, each with a message naming the constraint: node ids fit 16 bits (0–65535), epochs fit 5 bits (0–31), channels fit 16 bits and respect the reserved 1–99 range, keys are exactly 32 bytes.
+- **Operational failures return `nil, message`** — conditions a script handles: not initialised or configured, AES-256-GCM unavailable, no key installed for the peer, payload over the selected mode's maximum, keystore at capacity, secure-memory failure.
+
+No input can crash the process: the library is built `panic = "abort"`, so a Rust panic would kill the LuaJIT host. Every value crossing the FFI boundary is therefore validated (types in the loader, ranges and lengths in Rust), and every check returns instead of panicking.
+
+### The send epoch is the newest installed epoch
+
+`seal` takes no epoch parameter. This makes [Rotation](#rotation) fully procedural: installing a key under a new epoch switches senders to it AT ONCE, because the newest (highest-numbered) epoch installed for a peer is always the send epoch. Frames carry it in flags bits 3–7; receivers locate keys by `(fromId, wire epoch)` and can open old- and new-epoch traffic throughout the rollover; retiring the old epoch then removes only it.
+
+### Opaque open failure
+
+`open` collapses EVERY frame-level failure — too short, flags constraint violation, length disagreement, unknown key or epoch, authentication failure, even an unconfigured keystore — to one result: `nil, "lunet.paxe: frame rejected"`. The rejection reason is never returned to the caller and never signalled to the sender: a receiver that explains why a forgery failed is a decryption oracle (see [Failure Handling](#failure-handling)). The typed reasons exist inside the Rust core, where the statistics counters will consume them; they never cross the FFI.
+
+### Constants
+
+`paxe.OVERHEAD_STANDARD` (37), `paxe.OVERHEAD_DEK` (83), `paxe.MAX_PAYLOAD_STANDARD` (65470) and `paxe.MAX_PAYLOAD_DEK` (65424) are read from the Rust library at load time — computed by the same layers that build the frames, never restated as literals in Lua. (The deleted C hard-coded 36 and 82 in a `#define` and in the docs, and both were wrong in the same way. One source of truth, exported.)
+
+### Key material and the Lua VM (known limitation)
+
+Keys reach the module as Lua strings, and a Lua string lives inside the Lua VM: interned, garbage-collected, immutable and freely copied by the VM, in unguarded, swappable memory that the module cannot erase. Passing a 32-byte key to `keystore_set` therefore exposes that copy for as long as the VM happens to retain it. The module's guarded, mlocked, zeroed-on-drop storage protects only the copy Rust keeps — it cannot protect the copy Lua holds. This is a real limitation, stated honestly rather than glossed.
+
+**Recorded decision:** the Lua string is the only key-loading path in this commit. A Rust-side file loader — reading a provisioned key file straight into guarded memory so the bytes never transit the VM — is a candidate follow-up and is deliberately not included here. Operators who cannot accept VM transit must treat the process image and swap as key-material-bearing until it lands, exactly as they already must for any secret configured through Lua.
 
 ## References
 

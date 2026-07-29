@@ -11,8 +11,10 @@
 //! cryptography-free header/flags codec ([`codec`], item04), standard-mode
 //! seal/open with the single AAD construction point ([`standard`],
 //! item05), DEK-mode seal/open plus the automatic mode-selection layer
-//! ([`dek`], item06), and the Lua-facing C ABI ([`lunet_paxe_init`] and
-//! friends, item07) consumed by `paxe.lua` through the LuaJIT FFI.
+//! ([`dek`], item06), the Lua-facing C ABI ([`lunet_paxe_init`] and
+//! friends, item07) consumed by `paxe.lua` through the LuaJIT FFI, and
+//! the statistics counters plus failure policy ([`stats`], item08) that
+//! are the operator's only diagnostic channel for dropped frames.
 //!
 //! ## The item07 C ABI
 //!
@@ -37,8 +39,9 @@
 //!   keystore — collapses to this ONE opaque outcome, and the typed
 //!   in-crate reason is never written to the last-error buffer: a
 //!   receiver that explains why a forgery failed is a decryption oracle
-//!   (PAXE.md "Failure Handling"). The typed [`dek::OpenError`] variants
-//!   stay in-crate for item08's counters.
+//!   (PAXE.md "Failure Handling"). The typed reason is recorded into the
+//!   item08 counters at the reject point, BEFORE the collapse (see
+//!   [`stats`]); it never crosses the FFI.
 //!
 //! ## Dependency policy: zero crates
 //!
@@ -97,6 +100,7 @@ mod dek;
 mod keystore;
 mod sodium;
 mod standard;
+mod stats;
 
 use std::cell::RefCell;
 use std::os::raw::{c_char, c_int};
@@ -137,8 +141,9 @@ const RC_INVAL: c_int = -2;
 /// keystore): the typed in-crate [`dek::OpenError`] reason is dropped
 /// right here and NEVER written to the last-error buffer, because a
 /// receiver that explains why a forgery failed is a decryption oracle
-/// (PAXE.md "Failure Handling"). The reasons survive only in-crate, for
-/// item08's counters.
+/// (PAXE.md "Failure Handling"). The reason is recorded into the item08
+/// counters at the reject point inside dek/standard, BEFORE this collapse
+/// — the counters are the one place reasons survive.
 const RC_DROP: c_int = -3;
 
 /// Record an OPERATIONAL failure message and return its code.
@@ -351,6 +356,11 @@ pub extern "C" fn lunet_paxe_shutdown() {
             e.clear();
         }
     });
+    // A re-initialised module starts a fresh log-once window (the
+    // recorded reset scope). The counters themselves are NOT reset —
+    // they are cumulative for the process lifetime so monitoring deltas
+    // never go negative across a restart.
+    stats::reset_log_once_memo();
 }
 
 // ---------------------------------------------------------------------------
@@ -510,11 +520,15 @@ pub extern "C" fn lunet_paxe_seal(
     // 64-byte threshold the standard maximum applies; at and above it,
     // the DEK maximum — so a 65425..65470-byte offer fails against DEK's
     // 65424, naming the mode and the number.
-    let (mode_name, max) = match dek::select_mode(payload.len()) {
+    let mode = dek::select_mode(payload.len());
+    let (mode_name, max) = match mode {
         codec::Mode::Standard => ("standard", standard::MAX_PAYLOAD),
         codec::Mode::Dek => ("DEK", dek::DEK_MAX_PAYLOAD),
     };
     if payload.len() > max {
+        // The one transmit-side rejection the counters track (item08):
+        // oversized offers. Reported, counted, never truncated.
+        stats::record_tx_oversize();
         return fail(&format!(
             "payload too large: {} bytes exceeds the {mode_name}-mode maximum of {max}",
             payload.len()
@@ -555,6 +569,9 @@ pub extern "C" fn lunet_paxe_seal(
                 out[..frame.len()].copy_from_slice(&frame);
                 // SAFETY: non-null checked at entry; single u32 write.
                 unsafe { *out_len = frame.len() };
+                // Transmit counters: frames sealed, split by the mode the
+                // ONE selection point chose (item08).
+                stats::record_tx_sealed(mode);
                 RC_OK
             }
             Err(e) => fail(&format!("seal failed: {e}")),
@@ -605,14 +622,18 @@ pub extern "C" fn lunet_paxe_open(
             Some(st) => st,
             // An unconfigured receiver drops like any other failure:
             // "not configured" reveals nothing about the frame, and one
-            // outcome keeps the surface uniform.
+            // outcome keeps the surface uniform. NOT counted in the
+            // item08 counters: the module is not running PAXE at all, and
+            // the rx invariant is defined over frames presented to a
+            // configured receiver (stats.rs module docs).
             None => return RC_DROP,
         };
         match dek::open(store, frame) {
             Ok((h, f, plain)) => {
                 if plain.len() > out.len() {
                     // paxe.lua supplies frame_len bytes, always enough —
-                    // a short buffer here is a loader bug.
+                    // a short buffer here is a loader bug. Uncounted: a
+                    // loader bug is not wire accounting.
                     return invalid(format!(
                         "payload output buffer too small: need {}, have {}",
                         plain.len(),
@@ -630,12 +651,78 @@ pub extern "C" fn lunet_paxe_open(
                         codec::Mode::Dek => 1,
                     };
                 }
+                stats::record_rx_ok();
                 RC_OK
             }
-            // The typed reason dies here: no last-error write, one code.
-            Err(_) => RC_DROP,
+            // Impossible internal result (a libsodium contract violation,
+            // not a wire condition): dropped like any other failure but
+            // deliberately NOT counted — no honest reason counter fits,
+            // and inventing one would falsify the invariant.
+            Err(dek::OpenError::Sodium(_)) => RC_DROP,
+            // The typed reason was recorded into the counters at the
+            // reject point inside dek/standard; here the frame joins
+            // rx_total and the reason dies: no last-error write, one code.
+            Err(_) => {
+                stats::record_rx_drop();
+                RC_DROP
+            }
         }
     })
+}
+
+// ---------------------------------------------------------------------------
+// item08: statistics snapshot and failure policy. The counters are the
+// operator's ONLY diagnostic channel for dropped frames (open collapses
+// every reason to RC_DROP); they are process-global, cumulative, and
+// never reset by any API — consumers measure deltas between snapshots.
+// ---------------------------------------------------------------------------
+
+/// Copy the counter snapshot into `out` in the PINNED field order
+/// ([`stats::Stats::fields`]; paxe.lua maps the indices to names and
+/// asserts the count, so a drift fails loudly). Always returns the total
+/// field count, so a caller can probe with `(NULL, 0)` to size a buffer;
+/// with a buffer it fills `min(out_cap, count)` entries. Cannot fail and
+/// cannot panic.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_stats(out: *mut u64, out_cap: usize) -> u32 {
+    let fields = stats::snapshot().fields();
+    let n = fields.len();
+    if !out.is_null() && out_cap > 0 {
+        let count = n.min(out_cap);
+        // SAFETY: out is non-null; the caller contract (same as buf_out)
+        // guarantees out_cap writable u64s, and count <= out_cap.
+        unsafe { std::ptr::copy_nonoverlapping(fields.as_ptr(), out, count) };
+    }
+    n as u32
+}
+
+/// Select the failure policy: "silent" (drop and count only; the
+/// default), "log_once" (first drop of each reason per window logs one
+/// `[PAXE]` stderr line), "verbose" (every drop logs). Entering log_once
+/// starts a fresh window (the memo resets — recorded decision,
+/// stats.rs). Unknown spellings are RC_INVAL; paxe.lua pre-validates and
+/// returns `false` instead, so that arm is defence in depth.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_paxe_fail_policy_set(name: *const u8, name_len: usize) -> c_int {
+    let name = match buf_in(name, name_len, "policy name") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    let name = match std::str::from_utf8(name) {
+        Ok(s) => s,
+        Err(_) => return invalid("policy name must be UTF-8".to_string()),
+    };
+    match stats::FailPolicy::from_name(name) {
+        Some(p) => {
+            stats::set_policy(p);
+            RC_OK
+        }
+        None => invalid(format!(
+            "unknown failure policy '{name}': must be silent, log_once or verbose"
+        )),
+    }
 }
 
 /// The last RC_ERR / RC_INVAL message for this thread: a borrowed
@@ -1053,5 +1140,209 @@ mod ffi_tests {
         assert!(last_error_string().contains("no key installed"));
         // Shutdown is idempotent.
         lunet_paxe_shutdown();
+    }
+
+    // -------------------------------------------------------------------
+    // item08: counters at the FFI boundary. Delta-measured throughout —
+    // no absolute values (the counters are cumulative process state).
+    // -------------------------------------------------------------------
+
+    fn assert_invariant(s: &stats::Stats, what: &str) {
+        assert_eq!(
+            s.rx_total,
+            s.rx_ok + s.reject_sum(),
+            "invariant rx_total == rx_ok + sum(reject reasons) violated {what}"
+        );
+    }
+
+    /// One drop through the exported open: rx_total advances by one,
+    /// EXACTLY the expected reason counter advances by one, every other
+    /// counter is untouched, and the invariant holds afterwards.
+    fn assert_one_drop(frame: &[u8], reason: stats::RejectReason) {
+        let before = stats::snapshot();
+        let (rc, _, _, _, _) = open(frame);
+        assert_eq!(rc, RC_DROP, "{reason:?}: the opaque drop");
+        let after = stats::snapshot();
+        assert_eq!(after.rx_total - before.rx_total, 1, "{reason:?}: rx_total +1");
+        assert_eq!(after.rx_ok - before.rx_ok, 0, "{reason:?}: rx_ok untouched");
+        for r in stats::RejectReason::ALL {
+            let moved = after.reject(r) - before.reject(r);
+            if r == reason {
+                assert_eq!(moved, 1, "{reason:?}: its counter +1");
+            } else {
+                assert_eq!(moved, 0, "{reason:?}: {r:?} must not move");
+            }
+        }
+        assert_invariant(&after, "after a drop");
+    }
+
+    #[test]
+    fn every_reject_reason_counts_exactly_once_and_the_invariant_holds() {
+        if !gcm() {
+            eprintln!("skipping: AES-GCM hardware path unavailable");
+            return;
+        }
+        use stats::RejectReason as R;
+
+        // An UNCONFIGURED receiver drops but does NOT count: the module
+        // is not running PAXE at all (recorded decision, stats.rs).
+        let before = stats::snapshot();
+        let (rc, _, _, _, _) = open(b"whatever");
+        assert_eq!(rc, RC_DROP);
+        let after = stats::snapshot();
+        assert_eq!(after.rx_total - before.rx_total, 0, "unconfigured: uncounted");
+        assert_eq!(after.reject_sum() - before.reject_sum(), 0, "unconfigured: uncounted");
+
+        setup_node_a(3);
+        let payload40 = [0x55u8; 40]; // sub-threshold: standard frame
+        let (rc, frame63) = seal(&payload40, NODE_B, CHAN);
+        assert_eq!(rc, RC_OK);
+        let payload64 = [0x66u8; 64];
+        let (rc, frame64) = seal(&payload64, NODE_B, CHAN);
+        assert_eq!(rc, RC_OK);
+        // A also installs epoch 4, so a frame can carry an epoch B lacks.
+        assert_eq!(
+            lunet_paxe_keystore_set(NODE_B, 4, KEY.as_ptr(), KEY.len()),
+            RC_OK
+        );
+        let (rc, frame63_e4) = seal(&payload40, NODE_B, CHAN);
+        assert_eq!(rc, RC_OK);
+        assert_eq!(frame63_e4[8] >> 3, 4, "newest epoch seals");
+
+        // B holds the A-key under epoch 3 ONLY.
+        become_node_b(3);
+
+        // rx_short: fewer bytes than the 9-byte prefix.
+        assert_one_drop(b"1234", R::TooShort);
+        // rx_short via the DEK minimum: a 37-byte frame carrying the DEK
+        // bit (flags 0x1D = DEK | pattern | epoch 3).
+        let mut short_dek = vec![0u8; 37];
+        short_dek[8] = 0x1D;
+        assert_one_drop(&short_dek, R::TooShort);
+        // rx_bad_flags: the constant-bit gate (bit 2 clear here).
+        let mut bad_flags = vec![0u8; 37];
+        bad_flags[8] = 0x00;
+        assert_one_drop(&bad_flags, R::BadFlags);
+        // rx_len_mismatch: a real standard frame truncated by one byte.
+        assert_one_drop(&frame63[..frame63.len() - 1], R::LenMismatch);
+        // rx_dek_len_mismatch: patch the inner Length (bytes 65-66), which
+        // sits outside the AAD — only the equality check catches it.
+        let mut forged_inner = frame64.clone();
+        forged_inner[65] ^= 0xFF;
+        assert_one_drop(&forged_inner, R::DekLenMismatch);
+        // rx_no_epoch: B knows peer A but not epoch 4 — a ROTATION
+        // problem, counted separately from an unknown peer.
+        assert_one_drop(&frame63_e4, R::NoEpoch);
+        // rx_auth_fail: one flipped ciphertext byte.
+        let mut forged_ct = frame63.clone();
+        forged_ct[30] ^= 0x01;
+        assert_one_drop(&forged_ct, R::AuthFailed);
+
+        // rx_no_peer: a node with NO key for A under any epoch — a
+        // TOPOLOGY problem. (Reconfigure as node C, then restore B.)
+        lunet_paxe_shutdown();
+        assert_eq!(lunet_paxe_set_local_id(300), RC_OK);
+        assert_one_drop(&frame63, R::NoPeer);
+        become_node_b(3);
+
+        // Success: rx_total AND rx_ok advance; the invariant holds.
+        let before = stats::snapshot();
+        let (rc, plain, _, _, _) = open(&frame63);
+        assert_eq!(rc, RC_OK);
+        assert_eq!(plain, payload40);
+        let after = stats::snapshot();
+        assert_eq!(after.rx_total - before.rx_total, 1);
+        assert_eq!(after.rx_ok - before.rx_ok, 1);
+        assert_invariant(&after, "after a success");
+    }
+
+    #[test]
+    fn tx_counters_split_by_mode_and_count_oversize() {
+        if !gcm() {
+            eprintln!("skipping: AES-GCM hardware path unavailable");
+            return;
+        }
+        setup_node_a(3);
+        let before = stats::snapshot();
+        // 63 bytes selects standard; 64 selects DEK (the automatic split
+        // is the operationally interesting signal).
+        let (rc, _) = seal(&[0u8; 63], NODE_B, CHAN);
+        assert_eq!(rc, RC_OK);
+        let (rc, _) = seal(&[0u8; 64], NODE_B, CHAN);
+        assert_eq!(rc, RC_OK);
+        // Oversize: RC_ERR, counted, and NOT a sealed frame.
+        let big = vec![0u8; dek::DEK_MAX_PAYLOAD + 1];
+        let (rc, _) = seal(&big, NODE_B, CHAN);
+        assert_eq!(rc, RC_ERR);
+        let after = stats::snapshot();
+        assert_eq!(after.tx_total - before.tx_total, 2, "two seals");
+        assert_eq!(after.tx_standard - before.tx_standard, 1, "63-byte seal");
+        assert_eq!(after.tx_dek - before.tx_dek, 1, "64-byte seal");
+        assert_eq!(after.tx_oversize - before.tx_oversize, 1, "oversize offer");
+        assert_eq!(after.rx_total - before.rx_total, 0, "sealing is not receiving");
+        // Failed seals for OTHER reasons (no key for the peer) are
+        // operational errors reported to the caller, not drop accounting.
+        let before = stats::snapshot();
+        let (rc, _) = seal(b"x", 300, CHAN);
+        assert_eq!(rc, RC_ERR);
+        let after = stats::snapshot();
+        assert_eq!(after.tx_total - before.tx_total, 0);
+        assert_eq!(after.tx_oversize - before.tx_oversize, 0);
+    }
+
+    #[test]
+    fn stats_ffi_probe_sizes_and_writes_the_pinned_order() {
+        // Probing with (NULL, 0) returns the field count and writes
+        // nothing; a real buffer receives the snapshot in the pinned
+        // order, identical to the in-crate snapshot.
+        let n = lunet_paxe_stats(std::ptr::null_mut(), 0);
+        assert_eq!(n as usize, stats::SNAPSHOT_FIELD_COUNT);
+        assert_eq!(n, 13);
+
+        stats::record_rx_ok();
+        stats::record_rx_drop();
+        stats::record_reject(stats::RejectReason::NoPeer);
+        stats::record_tx_sealed(codec::Mode::Dek);
+
+        let mut buf = [0u64; 16];
+        let n2 = lunet_paxe_stats(buf.as_mut_ptr(), buf.len());
+        assert_eq!(n2, n);
+        let expect = stats::snapshot().fields();
+        assert_eq!(&buf[..expect.len()], &expect[..]);
+        // The pinned positions, spot-checked against the struct.
+        let s = stats::snapshot();
+        assert_eq!(buf[0], s.rx_total);
+        assert_eq!(buf[1], s.rx_ok);
+        assert_eq!(buf[5], s.reject(stats::RejectReason::NoPeer));
+        assert_eq!(buf[9], s.tx_total);
+        assert_eq!(buf[11], s.tx_dek);
+        assert_invariant(&s, "over direct recordings");
+    }
+
+    #[test]
+    fn fail_policy_set_validates_spellings_and_leaves_state_on_error() {
+        for good in ["silent", "log_once", "verbose"] {
+            assert_eq!(lunet_paxe_fail_policy_set(good.as_ptr(), good.len()), RC_OK);
+            assert_eq!(
+                stats::policy(),
+                stats::FailPolicy::from_name(good).expect("spelling parses")
+            );
+        }
+        let bad = "loud";
+        assert_eq!(lunet_paxe_fail_policy_set(bad.as_ptr(), bad.len()), RC_INVAL);
+        assert!(last_error_string().contains("silent"));
+        // A failed set changes nothing.
+        assert_eq!(stats::policy(), stats::FailPolicy::Verbose);
+        let bad_utf8 = [0xFFu8, 0xFE];
+        assert_eq!(
+            lunet_paxe_fail_policy_set(bad_utf8.as_ptr(), bad_utf8.len()),
+            RC_INVAL
+        );
+        // Leave the policy silent for other tests on this thread.
+        let silent = "silent";
+        assert_eq!(
+            lunet_paxe_fail_policy_set(silent.as_ptr(), silent.len()),
+            RC_OK
+        );
     }
 }

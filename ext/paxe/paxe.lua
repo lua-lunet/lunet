@@ -30,8 +30,9 @@
 -- NOT HERE YET: set_enabled/is_enabled arrive with item09, when they
 -- genuinely control transport protection. The old module exposed the
 -- switch as a no-op and an example printed that it worked; that defect
--- is not being repeated. Counters/stats arrive with item08; UDP socket
--- integration with item09.
+-- is not being repeated. UDP socket integration also arrives with
+-- item09. Statistics counters (paxe.stats) and the failure policy
+-- (paxe.set_fail_policy) landed with item08 below.
 --
 -- KEY MATERIAL: all keys live in the Rust keystore (guarded, mlocked,
 -- zeroed-on-drop libsodium allocations). The 32-byte string passed to
@@ -56,6 +57,8 @@ ffi.cdef[[
   int lunet_paxe_open(const uint8_t* frame, size_t frame_len,
                       uint8_t* out, size_t out_cap, size_t* out_len,
                       uint32_t* from_id, uint32_t* channel, uint32_t* mode);
+  uint32_t lunet_paxe_stats(uint64_t* out, size_t out_cap);
+  int lunet_paxe_fail_policy_set(const uint8_t* name, size_t name_len);
   void lunet_paxe_shutdown(void);
   const uint8_t* lunet_paxe_last_error(size_t* len);
 ]]
@@ -252,9 +255,59 @@ end
 
 --- Shut the module down: every key is zeroed and freed and the local
 --- identity is forgotten. Afterwards set_local_id() may configure
---- afresh. Idempotent.
+--- afresh. Idempotent. The statistics counters are NOT reset (they are
+--- cumulative for the process lifetime); the log-once memo is.
 function M.shutdown()
   C.lunet_paxe_shutdown()
+end
+
+-- ── item08: statistics counters and the failure policy ─────────────────
+
+-- Counter names in the EXACT order the Rust snapshot writes them
+-- (stats::Stats::fields, pinned by a Rust unit test). stats() asserts
+-- the count matches, so a drift fails loudly here, never silently.
+local STAT_FIELDS = {
+  "rx_total", "rx_ok",
+  "rx_short", "rx_bad_flags", "rx_len_mismatch", "rx_no_peer",
+  "rx_no_epoch", "rx_dek_len_mismatch", "rx_auth_fail",
+  "tx_total", "tx_standard", "tx_dek", "tx_oversize",
+}
+
+--- Snapshot of the process-global cumulative counters, as a plain table
+--- of numbers. Because open() never reveals WHY a frame was rejected
+--- (decryption-oracle avoidance), these counters are the only diagnostic
+--- channel: rx_total must always equal rx_ok plus the sum of the seven
+--- rx_ reject reasons. The counters NEVER reset while the process lives —
+--- measure DELTAS: snapshot before and after the window of interest;
+--- never assert an absolute value.
+function M.stats()
+  local n = tonumber(C.lunet_paxe_stats(nil, 0))
+  assert(n == #STAT_FIELDS, "lunet.paxe: stats field count drift between Rust and Lua")
+  local buf = ffi.new("uint64_t[?]", n)
+  C.lunet_paxe_stats(buf, n)
+  local t = {}
+  for i = 1, n do
+    t[STAT_FIELDS[i]] = tonumber(buf[i - 1])
+  end
+  return t
+end
+
+-- Policy spellings accepted by set_fail_policy (case-insensitive on
+-- input; the canonical forms are passed to Rust).
+local POLICIES = { silent = "silent", log_once = "log_once", verbose = "verbose" }
+
+--- Select the drop logging policy (PAXE.md "Failure Handling"):
+---   "silent"   drop and count only (the default);
+---   "log_once" the first drop of each kind writes one "[PAXE]" stderr
+---              line per window, repeats are counted silently;
+---   "verbose"  every drop writes a line.
+--- Returns true when the policy was set, false for anything else
+--- (unknown spelling or a non-string argument).
+function M.set_fail_policy(name)
+  if type(name) ~= "string" then return false end
+  local canonical = POLICIES[name:lower()]
+  if not canonical then return false end
+  return C.lunet_paxe_fail_policy_set(canonical, #canonical) == RC_OK
 end
 
 return M

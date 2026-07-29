@@ -351,6 +351,20 @@ impl KeyStore {
             .map(|(&(_, epoch), key)| (epoch, key))
     }
 
+    /// Whether ANY epoch is installed for `peer`. Receive-side reason
+    /// classification for the item08 counters: a key miss against a peer
+    /// with no entries at all is "unknown peer" (a TOPOLOGY problem — the
+    /// link was never provisioned), while a miss against a peer holding
+    /// other epochs is "unknown epoch" (a ROTATION problem — the two ends
+    /// disagree about which epoch is live). The two are counted
+    /// separately precisely because the operator action differs.
+    pub fn peer_known(&self, peer: u16) -> bool {
+        self.entries
+            .range((peer, Epoch(0))..=(peer, Epoch(MAX_EPOCH)))
+            .next()
+            .is_some()
+    }
+
     /// Retire one epoch for one peer: remove ONLY that slot's key,
     /// erasing its material. Returns `true` if a key was retired. All
     /// other epochs for the same peer — and all other peers — are
@@ -591,6 +605,20 @@ mod tests {
         ks.retire(PEER, ep(3));
         ks.retire(PEER, ep(5));
         assert!(ks.key_for_send_current(PEER).is_none());
+    }
+
+    #[test]
+    fn peer_known_distinguishes_topology_from_rotation() {
+        // The item08 split: no entries at all for the peer -> unknown
+        // peer; entries under other epochs -> unknown epoch.
+        let mut ks = KeyStore::new(LOCAL).expect("new");
+        assert!(!ks.peer_known(PEER));
+        ks.install(PEER, ep(3), &material(0x01)).expect("install");
+        assert!(ks.peer_known(PEER));
+        assert!(!ks.peer_known(PEER + 1));
+        // Retiring the peer's last epoch makes the peer unknown again.
+        assert!(ks.retire(PEER, ep(3)));
+        assert!(!ks.peer_known(PEER));
     }
 
     #[test]

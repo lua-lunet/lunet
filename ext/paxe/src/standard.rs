@@ -141,6 +141,7 @@
 use crate::codec::{self, Flags, Header, Mode, PREFIX_LEN};
 use crate::keystore::{Epoch, KeyStore};
 use crate::sodium::{self, Key, Nonce, SodiumError, ABYTES, KEYBYTES, NPUBBYTES};
+use crate::stats::{self, RejectReason};
 use std::error::Error;
 use std::fmt;
 
@@ -219,8 +220,11 @@ impl From<SodiumError> for SealError {
 
 /// The ONLY outcome a rejected frame can produce (module docs: oracle
 /// avoidance). Deliberately a single variant — bad flags, length mismatch,
-/// unknown key and tag failure are indistinguishable to the caller; the
-/// reasons will exist only in the item08 statistics counters.
+/// unknown key and tag failure are indistinguishable to the caller. The
+/// typed reasons are not lost, though: each is recorded into the item08
+/// statistics counters AT the reject point below, before this opaque
+/// variant is returned — exactly the consumption the single-variant
+/// design anticipated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenError {
     /// The frame was rejected. Why is deliberately not represented.
@@ -343,11 +347,21 @@ pub fn open(
 ) -> Result<(Header, Flags, usize), OpenError> {
     // Prefix parse: TooShort and the flags constant-bit garbage filter
     // (before any keystore access — the Epoch only exists after this).
-    let (header, flags) = codec::parse_prefix(frame).map_err(|_| OpenError::Rejected)?;
+    // The typed cause is recorded into the item08 counters HERE, at the
+    // reject point; the caller still gets the one opaque variant.
+    let (header, flags) = match codec::parse_prefix(frame) {
+        Ok(hf) => hf,
+        Err(e) => {
+            stats::record_reject(RejectReason::from_codec(e));
+            return Err(OpenError::Rejected);
+        }
+    };
 
     // Standard mode only: a DEK frame (bit 0 set) is not malformed, but it
     // is not for THIS function — item06's dispatch routes it to the DEK
-    // open. Here it is a rejection like any other.
+    // open, so in production this arm never fires. It is mode ROUTING, not
+    // a wire rejection: the frame is valid for the other parser, and the
+    // item08 enum deliberately has no variant for it. Uncounted.
     if flags.mode() != Mode::Standard {
         return Err(OpenError::Rejected);
     }
@@ -359,16 +373,28 @@ pub fn open(
     // own size is rejected. u16 + 37 <= 65572, so no overflow is possible.
     let declared = header.length as usize;
     if frame.len() != declared + OVERHEAD {
+        stats::record_reject(RejectReason::LenMismatch);
         return Err(OpenError::Rejected);
     }
 
     // RECEIVE key selection is by fromId and the wire epoch (module
     // docs): we open with the key we share with the claimed source. The
     // AAD binds fromId into the tag, so a forged fromId fails
-    // authentication against that key.
-    let stored = store
-        .key_for_receive(header.from_id, flags.epoch())
-        .ok_or(OpenError::Rejected)?;
+    // authentication against that key. A miss is classified for item08
+    // HERE, where the store is in scope: a peer with no entries at all is
+    // a topology problem (NoPeer), a peer holding other epochs is a
+    // rotation problem (NoEpoch) — counted separately by design.
+    let stored = match store.key_for_receive(header.from_id, flags.epoch()) {
+        Some(k) => k,
+        None => {
+            stats::record_reject(if store.peer_known(header.from_id) {
+                RejectReason::NoEpoch
+            } else {
+                RejectReason::NoPeer
+            });
+            return Err(OpenError::Rejected);
+        }
+    };
     let key_bytes: &[u8; KEYBYTES] = stored
         .expose()
         .try_into()
@@ -389,8 +415,19 @@ pub fn open(
         .get(PREFIX_LEN + NPUBBYTES..)
         .ok_or(OpenError::Rejected)?;
 
-    let payload_len =
-        sodium::aead_decrypt(key, &nonce, aad, ciphertext, out).map_err(|_| OpenError::Rejected)?;
+    let payload_len = match sodium::aead_decrypt(key, &nonce, aad, ciphertext, out) {
+        Ok(n) => n,
+        Err(SodiumError::AuthFailed) => {
+            stats::record_reject(RejectReason::AuthFailed);
+            return Err(OpenError::Rejected);
+        }
+        // A too-small caller output buffer (InvalidLength) is a CALLER
+        // bug, not a wire condition — the FFI always supplies a
+        // frame-sized buffer — and Internal is impossible: neither is a
+        // reject reason, so neither is counted. The opaque collapse is
+        // unchanged.
+        Err(_) => return Err(OpenError::Rejected),
+    };
     Ok((header, flags, payload_len))
 }
 

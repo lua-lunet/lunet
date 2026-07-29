@@ -192,6 +192,7 @@ use crate::codec::{self, CodecError, Flags, Header, Mode, PREFIX_LEN};
 use crate::keystore::{Epoch, KeyStore, StoredKey};
 use crate::sodium::{self, Key, Nonce, SodiumError, ABYTES, KEYBYTES, NPUBBYTES};
 use crate::standard;
+use crate::stats::{self, RejectReason};
 use std::error::Error;
 use std::fmt;
 
@@ -596,10 +597,15 @@ pub fn open(
 ) -> Result<(Header, Flags, Vec<u8>), OpenError> {
     // Codec gates first: at least 9 bytes, flags constant-bit garbage
     // filter — both before any mode-specific work and before any keystore
-    // access (the Epoch type enforces the latter, item04).
+    // access (the Epoch type enforces the latter, item04). The item08
+    // reason is recorded HERE, at the reject point — the only place the
+    // typed cause still exists.
     let (header, flags) = match codec::parse_prefix(datagram) {
         Ok(hf) => hf,
-        Err(e) => return Err(OpenError::Prefix(e)),
+        Err(e) => {
+            stats::record_reject(RejectReason::from_codec(e));
+            return Err(OpenError::Prefix(e));
+        }
     };
     // The flags byte selects the parse geometry. The threshold plays no
     // part here: the receiver parses by the bit, not by size.
@@ -633,6 +639,7 @@ fn open_dek(
     // out-of-bounds read of the KEK nonce, wrapped DEK, DEK nonce or inner
     // length. Memory-safety ordering, tested at every truncation < 83.
     if datagram.len() < DEK_OVERHEAD {
+        stats::record_reject(RejectReason::TooShort);
         return Err(OpenError::TooShort(datagram.len()));
     }
     // GATE 2 — declared length vs actual frame size, exactly:
@@ -641,9 +648,13 @@ fn open_dek(
     // checked anyway so no path can panic if that ever changes).
     let expected = match (header.length as usize).checked_add(DEK_OVERHEAD) {
         Some(e) => e,
-        None => return Err(OpenError::LengthMismatch),
+        None => {
+            stats::record_reject(RejectReason::LenMismatch);
+            return Err(OpenError::LengthMismatch);
+        }
     };
     if datagram.len() != expected {
+        stats::record_reject(RejectReason::LenMismatch);
         return Err(OpenError::LengthMismatch);
     }
 
@@ -674,14 +685,27 @@ fn open_dek(
     // the AAD and redundant with gate 2 (reference compatibility, PAXE.md),
     // so this explicit equality check is its only enforcement.
     if u16::from_be_bytes(inner_len_bytes) != header.length {
+        stats::record_reject(RejectReason::DekLenMismatch);
         return Err(OpenError::InnerLengthMismatch);
     }
 
     // GATE 4 — receive-side key lookup: the peer is the frame's fromId —
     // we open with the key we share with the source (item03 asymmetry).
+    // A miss is classified for item08 AT THIS POINT, where the store is
+    // in scope: a peer with no entries at all is a topology problem
+    // (NoPeer), a peer holding other epochs is a rotation problem
+    // (NoEpoch). The typed error stays the single honest NoKey — the
+    // split lives only in the counters.
     let stored = match store.key_for_receive(header.from_id, flags.epoch()) {
         Some(k) => k,
-        None => return Err(OpenError::NoKey),
+        None => {
+            stats::record_reject(if store.peer_known(header.from_id) {
+                RejectReason::NoEpoch
+            } else {
+                RejectReason::NoPeer
+            });
+            return Err(OpenError::NoKey);
+        }
     };
     let kek = match borrow_link_key(stored) {
         Ok(k) => k,
@@ -729,7 +753,12 @@ fn open_dek(
         &mut plain,
     ) {
         Ok(_) => Ok((header, flags, plain)),
-        Err(SodiumError::AuthFailed) => Err(OpenError::AuthFailed),
+        Err(SodiumError::AuthFailed) => {
+            stats::record_reject(RejectReason::AuthFailed);
+            Err(OpenError::AuthFailed)
+        }
+        // Impossible internal result: not a wire condition, so no reason
+        // counter fits — deliberately uncounted (stats.rs module docs).
         Err(e) => Err(OpenError::Sodium(e)),
     }
 }

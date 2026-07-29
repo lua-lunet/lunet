@@ -21,6 +21,10 @@
 local script_dir = debug.getinfo(1, "S").source:match("^@(.+)/[^/]+$") or "."
 local ext_dir = script_dir .. "/../ext/paxe"
 
+-- bit.bxor, NOT Lua 5.3's `~`: LuaJIT's parser is 5.1-based and some
+-- builds (Debian trixie's) reject `~` at parse time (item15 finding F1).
+local bit = require("bit")
+
 local function load_paxe()
   local chunk, err = loadfile(ext_dir .. "/paxe.lua")
   if not chunk then error("cannot load paxe.lua: " .. tostring(err)) end
@@ -163,7 +167,7 @@ local function main()
     "DEK frame round-trips, mode 'dek'")
 
   -- ── Opaque open failure: ONE generic message for EVERY cause ────────────
-  local corrupted = frame63:sub(1, 30) .. string.char(frame63:byte(31) ~ 1) .. frame63:sub(32)
+  local corrupted = frame63:sub(1, 30) .. string.char(bit.bxor(frame63:byte(31), 1)) .. frame63:sub(32)
   local p1, e1 = paxe.open(corrupted)
   local p2, e2 = paxe.open(frame63:sub(1, #frame63 - 1))         -- truncated
   local p3, e3 = paxe.open(string.rep("\0", 64))                 -- garbage flags

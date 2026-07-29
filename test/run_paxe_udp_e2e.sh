@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# item09 end-to-end driver: protected UDP over loopback between TWO
-# processes (the Rust keystore holds one node identity per process).
+# item14 PERMANENT end-to-end driver: protected UDP over loopback
+# between TWO processes (the Rust keystore holds one node identity per
+# process). Evolves item09's ad-hoc verification into a runnable
+# smoke/CI check.
 #   receiver = node 200 (test/paxe_udp_receiver.lua), backgrounded
 #   sender   = node 100 (test/paxe_udp_sender.lua), started after ready
 #
 # Everything is timeout-bound and logged to .tmp/logs/<timestamp>/ per
-# the repository rules. Exit 0 only if BOTH sides pass.
+# the repository rules. A TIMEOUT in either process means a datagram was
+# dropped that should not have been, or a receive stalled — diagnose it
+# from these logs; do not retry. Exit 0 only if BOTH sides pass.
 
 set -u
 cd "$(dirname "$0")/.."
@@ -15,7 +19,7 @@ STAMP=$(date +%Y%m%d_%H%M%S)
 LOGDIR="$ROOT/.tmp/logs/$STAMP"
 E2E="$ROOT/.tmp/paxe-e2e"
 mkdir -p "$LOGDIR" "$E2E"
-rm -f "$E2E/ready" "$E2E/done" "$E2E/result"
+rm -f "$E2E/ready" "$E2E/ready2" "$E2E/done" "$E2E/result"
 
 LUNET_RUN=$(find "$ROOT/build" -path '*/release/lunet-run' -type f | head -1)
 if [ -z "$LUNET_RUN" ]; then
@@ -41,7 +45,7 @@ if [ ! -f "$E2E/ready" ]; then
   exit 1
 fi
 
-timeout 20 "$LUNET_RUN" test/paxe_udp_sender.lua > "$LOGDIR/paxe_udp_sender.log" 2>&1
+timeout 30 "$LUNET_RUN" test/paxe_udp_sender.lua > "$LOGDIR/paxe_udp_sender.log" 2>&1
 SRC=$?
 
 # Bounded wait (~10s) for the receiver's verdict file.

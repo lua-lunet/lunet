@@ -846,6 +846,105 @@ jobs:
     - name: xmake check-types
       run: xmake check-types
 
+  # MySQL driver integration test — Linux-only, release builds only.
+  #
+  # This job validates the MySQL driver against a live database server. It runs
+  # only for release builds (version tags or manual dispatch with a version tag
+  # ref), not on every push or pull request. The reason is cost: pulling a MySQL
+  # image and waiting for it to become healthy adds meaningful wall-clock time
+  # to the most frequently executed job in the repository, on every single run,
+  # for a driver that most changes do not touch. Branch protection already
+  # requires `build` across all three platforms with `strict` set, so slowing it
+  # slows every merge.
+  #
+  # The consequence to accept deliberately: driver defects will be caught at tag
+  # time rather than at pull-request time. A green pull request must not be read
+  # as driver validation — that happens only at release time.
+  #
+  # This job is deliberately NOT added to the required status checks on main,
+  # for the same reason `publish-release` is excluded: a check that is skipped
+  # on non-tag pushes, if required, deadlocks every merge (documented in
+  # AGENTS.md).
+  #
+  # Server image: MySQL 8.4 (LTS). MariaDB presents the same client API but has
+  # differed in client header details (see item19 is_null fix); testing against
+  # MySQL does not validate MariaDB, and vice versa. MySQL 8.4 is chosen as the
+  # primary target.
+  mysql-integration:
+    name: MySQL integration (release builds only)
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -P 3306 -u root -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      LUNET_MYSQL_HOST: 127.0.0.1
+      LUNET_MYSQL_PORT: 3306
+      LUNET_MYSQL_USER: root
+      LUNET_MYSQL_PASSWORD: root
+      LUNET_MYSQL_DATABASE: test
+      LUNET_DB_REQUIRED: "1"
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
+
+    - name: Install xmake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: "3.0.8"
+
+    - name: Install Dependencies
+      run: bash contributing/deps/debian.sh --ci
+
+    - name: Configure
+      run: xmake f -m release -y
+
+    - name: Build MySQL driver
+      run: |
+        xmake build lunet-bin
+        xmake build lunet-mysql
+        if [ ! -f "$(find build -type f -name 'mysql.so' | head -n 1)" ]; then
+          echo "ERROR: lunet-mysql driver module not found after build" >&2
+          exit 1
+        fi
+
+    - name: Wait for MySQL readiness
+      run: |
+        set -euo pipefail
+        echo "Waiting for MySQL to accept connections..."
+        for i in $(seq 1 30); do
+          if mysqladmin ping -h 127.0.0.1 -P 3306 -u root -proot --silent 2>/dev/null; then
+            echo "MySQL is ready"
+            exit 0
+          fi
+          echo "Attempt $i/30: MySQL not ready yet, waiting 2s..."
+          sleep 2
+        done
+        echo "ERROR: MySQL did not become ready within 60s" >&2
+        exit 1
+
+    - name: Run MySQL smoke tests
+      run: |
+        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
+        if [ -z "$LUNET_BIN" ]; then
+          echo "ERROR: lunet-run not found" >&2
+          exit 1
+        fi
+        echo "Running test/smoke_mysql.lua (item17 parameterised, item18 mismatch, item19 NULL, item19a metadata, item19e boolean)..."
+        "$LUNET_BIN" test/smoke_mysql.lua
+
   publish-release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))

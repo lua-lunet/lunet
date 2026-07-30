@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "lunet.h"
+#include "lunet_lua.h"
 
 #ifdef LUNET_EMBED_SCRIPTS
 #include "embed_scripts_blob.h"
@@ -49,6 +50,17 @@ int main(int argc, char **argv) {
   if (lunet_runtime_init(&runtime, &options, error, sizeof(error)) != 0) {
     fprintf(stderr, "Error: %s\n", error);
     return 1;
+  }
+
+  /* Set up the arg global for the Lua script */
+  lua_State *L = (lua_State *)lunet_runtime_get_lua_state(runtime);
+  if (L) {
+    lua_newtable(L);
+    for (int i = script_index; i < argc; i++) {
+      lua_pushstring(L, argv[i]);
+      lua_rawseti(L, -2, i - script_index);
+    }
+    lua_setglobal(L, "arg");
   }
 
 #ifdef LUNET_EMBED_SCRIPTS

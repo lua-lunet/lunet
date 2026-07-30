@@ -70,6 +70,10 @@ LUNET_API int lunet_runtime_run_embedded(lunet_runtime_t *runtime,
  * successful init, even when the run failed. */
 LUNET_API void lunet_runtime_shutdown(lunet_runtime_t *runtime);
 
+/* Get the Lua state from the runtime. Returns NULL if runtime is NULL.
+ * Used by main.c to set up globals like 'arg' before running scripts. */
+LUNET_API void *lunet_runtime_get_lua_state(lunet_runtime_t *runtime);
+
 #ifdef __cplusplus
 }
 #endif

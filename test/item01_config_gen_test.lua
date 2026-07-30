@@ -1,0 +1,122 @@
+#!/usr/bin/env lua
+-- Test for Item 01: Config Generator
+-- Tests that config_gen.lua discovers ports and writes valid Lua config
+
+local lunet = require("lunet")
+local udp = require("lunet.udp")
+
+local function test_config_gen()
+    local output_path = ".tmp/test_advisory_lock_config.lua"
+    local script_path = "examples/advisory_lock_cas/config_gen.lua"
+
+    -- Clean up any existing output
+    os.remove(output_path)
+
+    -- Run config_gen.lua
+    local cmd = string.format("./build/macosx/arm64/release/lunet-run %s --output %s", script_path, output_path)
+    local exit_code = os.execute(cmd)
+
+    -- Check exit code
+    if exit_code ~= 0 then
+        io.stderr:write("FAIL: config_gen.lua exited with code " .. tostring(exit_code) .. "\n")
+        os.exit(1)
+    end
+
+    -- Check output file exists
+    local f = io.open(output_path, "r")
+    if not f then
+        io.stderr:write("FAIL: output file does not exist at " .. output_path .. "\n")
+        os.exit(1)
+    end
+    f:close()
+
+    -- Load the config via dofile
+    local config = dofile(output_path)
+    if type(config) ~= "table" then
+        io.stderr:write("FAIL: config is not a table\n")
+        os.exit(1)
+    end
+
+    -- Check structure
+    if type(config.hi) ~= "table" then
+        io.stderr:write("FAIL: config.hi is not a table\n")
+        os.exit(1)
+    end
+    if type(config.lo) ~= "table" then
+        io.stderr:write("FAIL: config.lo is not a table\n")
+        os.exit(1)
+    end
+
+    -- Check required fields exist
+    local required_fields = {"client_port", "peer_listen_port", "host"}
+    for _, field in ipairs(required_fields) do
+        if config.hi[field] == nil then
+            io.stderr:write("FAIL: config.hi." .. field .. " is nil\n")
+            os.exit(1)
+        end
+        if config.lo[field] == nil then
+            io.stderr:write("FAIL: config.lo." .. field .. " is nil\n")
+            os.exit(1)
+        end
+    end
+
+    -- Check ports are integers > 1024
+    local ports = {
+        config.hi.client_port,
+        config.hi.peer_listen_port,
+        config.lo.client_port,
+        config.lo.peer_listen_port
+    }
+
+    for i, port in ipairs(ports) do
+        if type(port) ~= "number" then
+            io.stderr:write("FAIL: port " .. i .. " is not a number\n")
+            os.exit(1)
+        end
+        if math.floor(port) ~= port then
+            io.stderr:write("FAIL: port " .. i .. " is not an integer\n")
+            os.exit(1)
+        end
+        if port <= 1024 then
+            io.stderr:write("FAIL: port " .. i .. " is <= 1024 (got " .. port .. ")\n")
+            os.exit(1)
+        end
+    end
+
+    -- Check all 4 ports are different
+    local seen = {}
+    for i, port in ipairs(ports) do
+        if seen[port] then
+            io.stderr:write("FAIL: duplicate port " .. port .. "\n")
+            os.exit(1)
+        end
+        seen[port] = true
+    end
+
+    -- Check host is "127.0.0.1"
+    if config.hi.host ~= "127.0.0.1" then
+        io.stderr:write("FAIL: config.hi.host is not '127.0.0.1' (got '" .. tostring(config.hi.host) .. "')\n")
+        os.exit(1)
+    end
+    if config.lo.host ~= "127.0.0.1" then
+        io.stderr:write("FAIL: config.lo.host is not '127.0.0.1' (got '" .. tostring(config.lo.host) .. "')\n")
+        os.exit(1)
+    end
+
+    -- Verify ports are actually free (can bind to them)
+    lunet.spawn(function()
+        for i, port in ipairs(ports) do
+            local h, err = udp.bind("127.0.0.1", port)
+            if not h then
+                io.stderr:write("FAIL: port " .. port .. " is not free: " .. tostring(err) .. "\n")
+                os.exit(1)
+            end
+            udp.close(h)
+        end
+    end)
+
+    print("PASS: all config_gen tests passed")
+    os.exit(0)
+end
+
+test_config_gen()

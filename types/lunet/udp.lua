@@ -33,4 +33,11 @@ function udp.recv(handle) end
 ---@return string|nil error
 function udp.close(handle) end
 
+---Get the local address and port of a bound UDP socket.
+---@param handle lightuserdata
+---@return string|nil host The local host address
+---@return integer|nil port The local port number
+---@return string|nil error Error message if failed
+function udp.getsockname(handle) end
+
 return udp

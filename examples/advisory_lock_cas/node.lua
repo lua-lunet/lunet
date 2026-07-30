@@ -51,7 +51,9 @@ lunet.spawn(function()
 
     local client_sock, cerr = udp.bind(host, client_port)
     if not client_sock then
-        io.stderr:write("Error: failed to bind client_sock on " .. host .. ":" .. client_port .. ": " .. tostring(cerr) .. "\n")
+        io.stderr:write("Error: failed to bind client_sock on "
+            .. host .. ":" .. client_port .. ": "
+            .. tostring(cerr) .. "\n")
         os.exit(1)
     end
 

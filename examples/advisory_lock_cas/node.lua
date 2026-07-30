@@ -64,7 +64,9 @@ lunet.spawn(function()
 
     local peer_listen_sock, plerr = udp.bind(host, peer_listen_port)
     if not peer_listen_sock then
-        io.stderr:write("Error: failed to bind peer_listen_sock on " .. host .. ":" .. peer_listen_port .. ": " .. tostring(plerr) .. "\n")
+        io.stderr:write("Error: failed to bind peer_listen_sock on "
+            .. host .. ":" .. peer_listen_port .. ": "
+            .. tostring(plerr) .. "\n")
         udp.close(client_sock)
         udp.close(peer_sock)
         os.exit(1)
@@ -127,11 +129,13 @@ lunet.spawn(function()
                         lock_table[msg.lock_id] = { holder = peer_reply.holder, token = peer_reply.token }
                         local reply = codec.format_reply(msg.msg_id, "CONFLICT", peer_reply.holder, peer_reply.token)
                         udp.send(client_sock, rhost, rport, reply)
-                        print("[" .. role .. "] client_handler SET lock=" .. msg.lock_id .. " result=conflict (peer disagreed)")
+                        print("[" .. role .. "] client_handler SET lock=" .. msg.lock_id
+                            .. " result=conflict (peer disagreed)")
                     else
                         local reply = codec.format_reply(msg.msg_id, "CONFLICT", 0, 0)
                         udp.send(client_sock, rhost, rport, reply)
-                        print("[" .. role .. "] client_handler SET lock=" .. msg.lock_id .. " result=conflict (peer no reply)")
+                        print("[" .. role .. "] client_handler SET lock=" .. msg.lock_id
+                            .. " result=conflict (peer no reply)")
                     end
                 end
             else

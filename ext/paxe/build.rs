@@ -87,33 +87,67 @@ fn locate() -> PathBuf {
     }
 }
 
-/// Parse `pkg-config --libs --static libsodium` by hand (no pkg-config
-/// crate allowed). Verify the static archive is actually present in one
-/// of the reported `-L` directories before linking.
+/// Locate the static libsodium archive on Unix.
+///
+/// Resolution order:
+///   1. `-L` dirs reported by `pkg-config --libs --static libsodium`
+///   2. `pkg-config --variable=libdir libsodium` (more reliable when the
+///      archive is in a default linker search path with no `-L` flag)
+///   3. Standard system lib dirs (Debian/Ubuntu multiarch, RHEL, generic)
+///
+/// On Debian/Ubuntu, `libsodium-dev` installs into `/usr/lib/<host-tuple>/`
+/// which is a default linker search path, so pkg-config emits no `-L` flag.
+/// The `-L`-only parse therefore produces an empty candidate list and the
+/// build fails. The `--variable=libdir` query and the system-dir fallback
+/// close that gap.
 fn locate_pkg_config(archive: &str) -> PathBuf {
-    let output = match Command::new("pkg-config")
+    let mut search_dirs: Vec<PathBuf> = Vec::new();
+
+    // 1. Parse -L flags from `pkg-config --libs --static libsodium`.
+    if let Ok(output) = Command::new("pkg-config")
         .args(["--libs", "--static", "libsodium"])
         .output()
     {
-        Ok(o) if o.status.success() => o,
-        _ => fatal(
-            "pkg-config could not report libsodium. Install libsodium-dev \
-             (Debian/Ubuntu) / libsodium (Homebrew), or set \
-             PAXE_SODIUM_LIB_DIR to a directory containing libsodium.a.",
-        ),
-    };
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut search_dirs: Vec<PathBuf> = Vec::new();
-    let mut tokens = text.split_whitespace();
-    while let Some(tok) = tokens.next() {
-        if tok == "-L" {
-            if let Some(dir) = tokens.next() {
-                search_dirs.push(PathBuf::from(dir));
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let mut tokens = text.split_whitespace();
+            while let Some(tok) = tokens.next() {
+                if tok == "-L" {
+                    if let Some(dir) = tokens.next() {
+                        search_dirs.push(PathBuf::from(dir));
+                    }
+                } else if let Some(dir) = tok.strip_prefix("-L") {
+                    search_dirs.push(PathBuf::from(dir));
+                }
             }
-        } else if let Some(dir) = tok.strip_prefix("-L") {
-            search_dirs.push(PathBuf::from(dir));
         }
     }
+
+    // 2. `pkg-config --variable=libdir libsodium` — more reliable when the
+    //    archive is in a default linker search path with no -L flag.
+    if let Ok(output) = Command::new("pkg-config")
+        .args(["--variable=libdir", "libsodium"])
+        .output()
+    {
+        if output.status.success() {
+            let dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !dir.is_empty() {
+                search_dirs.push(PathBuf::from(dir));
+            }
+        }
+    }
+
+    // 3. Standard system lib dirs (Debian/Ubuntu multiarch, RHEL, generic).
+    for dir in &[
+        "/usr/lib/x86_64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
+        "/usr/lib64",
+        "/usr/lib",
+        "/usr/local/lib",
+    ] {
+        search_dirs.push(PathBuf::from(dir));
+    }
+
     for dir in &search_dirs {
         if dir.join(archive).is_file() {
             return dir.clone();

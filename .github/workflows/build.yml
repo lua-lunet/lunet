@@ -945,6 +945,102 @@ jobs:
         echo "Running test/smoke_mysql.lua (item17 parameterised, item18 mismatch, item19 NULL, item19a metadata, item19e boolean)..."
         "$LUNET_BIN" test/smoke_mysql.lua
 
+  # Postgres driver integration test — Linux-only, release builds only.
+  #
+  # Same rationale as mysql-integration: cost of pulling a Postgres image and
+  # waiting for readiness on every push/PR is not justified for a driver most
+  # changes do not touch. Driver validation happens at tag time, not PR time.
+  #
+  # This job is deliberately NOT added to the required status checks on main,
+  # for the same reason publish-release and mysql-integration are excluded: a
+  # check that is skipped on non-tag pushes, if required, deadlocks every merge
+  # (documented in AGENTS.md).
+  #
+  # Server image: PostgreSQL 16 (current stable). The Postgres driver uses
+  # libpq, which is compatible with both PostgreSQL and compatible servers
+  # (CockroachDB, etc.), but testing against PostgreSQL does not validate
+  # those alternatives.
+  #
+  # Postgres readiness differs from MySQL's: the server accepts connections
+  # briefly during initialisation before the target database exists. The probe
+  # must confirm the actual target database is connectable, not merely that a
+  # server is listening.
+  postgres-integration:
+    name: Postgres integration (release builds only)
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      LUNET_POSTGRES_HOST: 127.0.0.1
+      LUNET_POSTGRES_PORT: 5432
+      LUNET_POSTGRES_USER: postgres
+      LUNET_POSTGRES_PASSWORD: postgres
+      LUNET_POSTGRES_DATABASE: test
+      LUNET_DB_REQUIRED: "1"
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
+
+    - name: Install xmake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: "3.0.8"
+
+    - name: Install Dependencies
+      run: bash contributing/deps/debian.sh --ci
+
+    - name: Configure
+      run: xmake f -m release -y
+
+    - name: Build Postgres driver
+      run: |
+        xmake build lunet-bin
+        xmake build lunet-postgres
+        if [ ! -f "$(find build -type f -name 'postgres.so' | head -n 1)" ]; then
+          echo "ERROR: lunet-postgres driver module not found after build" >&2
+          exit 1
+        fi
+
+    - name: Wait for Postgres readiness
+      run: |
+        set -euo pipefail
+        echo "Waiting for Postgres to accept connections on target database..."
+        for i in $(seq 1 30); do
+          if pg_isready -h 127.0.0.1 -p 5432 -U postgres -d test 2>/dev/null; then
+            echo "Postgres is ready"
+            exit 0
+          fi
+          echo "Attempt $i/30: Postgres not ready yet, waiting 2s..."
+          sleep 2
+        done
+        echo "ERROR: Postgres did not become ready within 60s" >&2
+        exit 1
+
+    - name: Run Postgres smoke tests
+      run: |
+        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
+        if [ -z "$LUNET_BIN" ]; then
+          echo "ERROR: lunet-run not found" >&2
+          exit 1
+        fi
+        echo "Running test/smoke_postgres.lua (parameterised queries with \$n placeholders, NULL, boolean item19e, mixed types)..."
+        "$LUNET_BIN" test/smoke_postgres.lua
+
   publish-release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))

@@ -202,7 +202,8 @@ typedef enum {
     PARAM_TYPE_NIL,
     PARAM_TYPE_INT,
     PARAM_TYPE_DOUBLE,
-    PARAM_TYPE_TEXT
+    PARAM_TYPE_TEXT,
+    PARAM_TYPE_BOOL
 } param_type_t;
 
 typedef struct {
@@ -210,6 +211,7 @@ typedef struct {
     union {
         long long i;
         double d;
+        unsigned char b;
         struct {
             char* data;
             size_t len;
@@ -259,8 +261,8 @@ static param_t* collect_params(lua_State* L, int start, int* nparams) {
                 break;
             }
             case LUA_TBOOLEAN:
-                params[i].type = PARAM_TYPE_INT;
-                params[i].value.i = lua_toboolean(L, idx);
+                params[i].type = PARAM_TYPE_BOOL;
+                params[i].value.b = lua_toboolean(L, idx) ? 1 : 0;
                 break;
             case LUA_TSTRING: {
                 size_t len;
@@ -324,6 +326,10 @@ static int bind_params(MYSQL_STMT* stmt, MYSQL_BIND* bind, param_t* params, int 
                 bind[i].buffer_type = MYSQL_TYPE_STRING;
                 bind[i].buffer = (void*)params[i].value.s.data;
                 bind[i].buffer_length = params[i].value.s.len;
+                break;
+            case PARAM_TYPE_BOOL:
+                bind[i].buffer_type = MYSQL_TYPE_TINY;
+                bind[i].buffer = (void*)&params[i].value.b;
                 break;
             default:
                 snprintf(err, errsize, "unknown parameter type");

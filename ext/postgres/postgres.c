@@ -63,7 +63,8 @@ typedef enum {
     PARAM_TYPE_NIL,
     PARAM_TYPE_INT,
     PARAM_TYPE_DOUBLE,
-    PARAM_TYPE_TEXT
+    PARAM_TYPE_TEXT,
+    PARAM_TYPE_BOOL
 } param_type_t;
 
 typedef struct {
@@ -71,6 +72,7 @@ typedef struct {
     union {
         long long i;
         double d;
+        unsigned char b;
         struct {
             char* data;
             size_t len;
@@ -120,8 +122,8 @@ static param_t* collect_params(lua_State* L, int start, int* nparams) {
                 break;
             }
             case LUA_TBOOLEAN:
-                params[i].type = PARAM_TYPE_INT;
-                params[i].value.i = lua_toboolean(L, idx);
+                params[i].type = PARAM_TYPE_BOOL;
+                params[i].value.b = lua_toboolean(L, idx) ? 1 : 0;
                 break;
             case LUA_TSTRING: {
                 size_t len;
@@ -339,27 +341,30 @@ static void db_query_work_cb(uv_work_t* req) {
            return;
       }
       
-      for (int i=0; i<ctx->nparams; i++) {
-          if (ctx->params[i].type == PARAM_TYPE_INT) {
-              char buf[64];
-              snprintf(buf, sizeof(buf), "%lld", ctx->params[i].value.i);
-              paramValues[i] = lunet_strdup_local(buf);
-              should_free[i] = 1;
-          } else if (ctx->params[i].type == PARAM_TYPE_DOUBLE) {
-              char buf[64];
-              snprintf(buf, sizeof(buf), "%g", ctx->params[i].value.d);
-              paramValues[i] = lunet_strdup_local(buf);
-              should_free[i] = 1;
-          } else if (ctx->params[i].type == PARAM_TYPE_TEXT) {
-              paramValues[i] = ctx->params[i].value.s.data;
-              should_free[i] = 0;
-          } else {
-              paramValues[i] = NULL;
-              should_free[i] = 0;
-          }
-      }
+       for (int i=0; i<ctx->nparams; i++) {
+           if (ctx->params[i].type == PARAM_TYPE_INT) {
+               char buf[64];
+               snprintf(buf, sizeof(buf), "%lld", ctx->params[i].value.i);
+               paramValues[i] = lunet_strdup_local(buf);
+               should_free[i] = 1;
+           } else if (ctx->params[i].type == PARAM_TYPE_DOUBLE) {
+               char buf[64];
+               snprintf(buf, sizeof(buf), "%g", ctx->params[i].value.d);
+               paramValues[i] = lunet_strdup_local(buf);
+               should_free[i] = 1;
+           } else if (ctx->params[i].type == PARAM_TYPE_TEXT) {
+               paramValues[i] = ctx->params[i].value.s.data;
+               should_free[i] = 0;
+           } else if (ctx->params[i].type == PARAM_TYPE_BOOL) {
+               paramValues[i] = ctx->params[i].value.b ? "true" : "false";
+               should_free[i] = 0;
+           } else {
+               paramValues[i] = NULL;
+               should_free[i] = 0;
+           }
+       }
 
-      ctx->result = PQexecParams(ctx->wrapper->conn, ctx->query, ctx->nparams, NULL, (const char * const *)paramValues, NULL, NULL, 0);
+       ctx->result = PQexecParams(ctx->wrapper->conn, ctx->query, ctx->nparams, NULL, (const char * const *)paramValues, NULL, NULL, 0);
 
       for(int i=0; i<ctx->nparams; i++) if(should_free[i]) lunet_free_nonnull((void*)paramValues[i]);
       lunet_free_nonnull(paramValues);
@@ -570,27 +575,30 @@ static void db_exec_work_cb(uv_work_t* req) {
            return;
       }
       
-      for (int i=0; i<ctx->nparams; i++) {
-          if (ctx->params[i].type == PARAM_TYPE_INT) {
-              char buf[64];
-              snprintf(buf, sizeof(buf), "%lld", ctx->params[i].value.i);
-              paramValues[i] = lunet_strdup_local(buf);
-              should_free[i] = 1;
-          } else if (ctx->params[i].type == PARAM_TYPE_DOUBLE) {
-              char buf[64];
-              snprintf(buf, sizeof(buf), "%g", ctx->params[i].value.d);
-              paramValues[i] = lunet_strdup_local(buf);
-              should_free[i] = 1;
-          } else if (ctx->params[i].type == PARAM_TYPE_TEXT) {
-              paramValues[i] = ctx->params[i].value.s.data;
-              should_free[i] = 0;
-          } else {
-              paramValues[i] = NULL;
-              should_free[i] = 0;
-          }
-      }
+       for (int i=0; i<ctx->nparams; i++) {
+           if (ctx->params[i].type == PARAM_TYPE_INT) {
+               char buf[64];
+               snprintf(buf, sizeof(buf), "%lld", ctx->params[i].value.i);
+               paramValues[i] = lunet_strdup_local(buf);
+               should_free[i] = 1;
+           } else if (ctx->params[i].type == PARAM_TYPE_DOUBLE) {
+               char buf[64];
+               snprintf(buf, sizeof(buf), "%g", ctx->params[i].value.d);
+               paramValues[i] = lunet_strdup_local(buf);
+               should_free[i] = 1;
+           } else if (ctx->params[i].type == PARAM_TYPE_TEXT) {
+               paramValues[i] = ctx->params[i].value.s.data;
+               should_free[i] = 0;
+           } else if (ctx->params[i].type == PARAM_TYPE_BOOL) {
+               paramValues[i] = ctx->params[i].value.b ? "true" : "false";
+               should_free[i] = 0;
+           } else {
+               paramValues[i] = NULL;
+               should_free[i] = 0;
+           }
+       }
 
-      result = PQexecParams(ctx->wrapper->conn, ctx->query, ctx->nparams, NULL, (const char * const *)paramValues, NULL, NULL, 0);
+       result = PQexecParams(ctx->wrapper->conn, ctx->query, ctx->nparams, NULL, (const char * const *)paramValues, NULL, NULL, 0);
 
       for(int i=0; i<ctx->nparams; i++) if(should_free[i]) lunet_free_nonnull((void*)paramValues[i]);
       lunet_free_nonnull(paramValues);

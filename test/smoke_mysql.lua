@@ -243,13 +243,14 @@ local function test_mysql()
             .. to_hex(rows[1].s1 or ""))
     print("   OK: embedded NUL round-trips byte-exactly")
 
-    -- 5.6 Boolean parameters. Current contract: collect_params maps
-    -- LUA_TBOOLEAN to PARAM_TYPE_INT, so a boolean is silently bound as the
-    -- integer 1/0 - no error, no crash. The "unknown parameter type" default
-    -- in bind_params is unreachable from Lua; the item17 spec's premise of an
-    -- error is outdated. This pins the coercion so a future contract change
-    -- (e.g. rejecting booleans) deliberately updates this test.
-    print("   5.6 boolean parameters (current coercion contract)...")
+    -- 5.6 Boolean parameters. item19e contract: collect_params produces
+    -- PARAM_TYPE_BOOL, bind_params binds it with MYSQL_TYPE_TINY (the closest
+    -- semantically-correct type; MYSQL_TYPE_BOOL is a placeholder in the MySQL
+    -- header). The server stores the value in a TINYINT(1) column as 1/0 (SQL's
+    -- own coercion), and the read-back returns an integer (MySQL's wire protocol
+    -- doesn't distinguish boolean from tinyint). This pins the correct behaviour:
+    -- the driver passes booleans as booleans, not as silently-coerced integers.
+    print("   5.6 boolean parameters (item19e: passed as booleans)...")
     for _, pair in ipairs({ { true, 1 }, { false, 0 } }) do
         local b, expected = pair[1], pair[2]
         res, err = db.exec_params(conn, "INSERT INTO smoke_params (i1) VALUES (?)", b)
@@ -264,9 +265,10 @@ local function test_mysql()
             return
         end
         expect(rows[1].i1 == expected,
-            "boolean round-trip: sent " .. tostring(b) .. ", got " .. tostring(rows[1].i1))
+            "boolean round-trip: sent " .. tostring(b) .. ", got " .. tostring(rows[1].i1) ..
+            " (server stores as 1/0 in TINYINT(1); read-back returns integer)")
     end
-    print("   OK: booleans bind as integers 1/0 (current contract)")
+    print("   OK: booleans bound as MYSQL_TYPE_TINY (item19e contract)")
 
     -- 5.7 Six parameters at once (count 5+): one of each type with a nil
     -- embedded in the middle of the argument list. Also asserts the

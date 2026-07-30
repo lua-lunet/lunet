@@ -62,7 +62,8 @@ typedef enum {
     PARAM_TYPE_NIL,
     PARAM_TYPE_INT,
     PARAM_TYPE_DOUBLE,
-    PARAM_TYPE_TEXT
+    PARAM_TYPE_TEXT,
+    PARAM_TYPE_BOOL
 } param_type_t;
 
 typedef struct {
@@ -70,6 +71,7 @@ typedef struct {
     union {
         long long i;
         double d;
+        unsigned char b;
         struct {
             char* data;
             size_t len;
@@ -119,8 +121,8 @@ static param_t* collect_params(lua_State* L, int start, int* nparams) {
                 break;
             }
             case LUA_TBOOLEAN:
-                params[i].type = PARAM_TYPE_INT;
-                params[i].value.i = lua_toboolean(L, idx);
+                params[i].type = PARAM_TYPE_BOOL;
+                params[i].value.b = lua_toboolean(L, idx) ? 1 : 0;
                 break;
             case LUA_TSTRING: {
                 size_t len;
@@ -184,6 +186,9 @@ static int bind_params(sqlite3_stmt* stmt, param_t* params, int nparams, char* e
                 break;
             case PARAM_TYPE_TEXT:
                 rc = sqlite3_bind_text(stmt, idx, params[i].value.s.data, params[i].value.s.len, SQLITE_TRANSIENT);
+                break;
+            case PARAM_TYPE_BOOL:
+                rc = sqlite3_bind_int(stmt, idx, params[i].value.b);
                 break;
             default:
                 rc = SQLITE_ERROR;

@@ -12,7 +12,7 @@ deliberately no `db.escape`.
 | `open(config)` | `host`, `port`, `user`, `password`, `database` |
 | `close(conn)` | |
 | `query(conn, sql, ...)` | returns array of row tables |
-| `exec(conn, sql, ...)` | returns `{ affected_rows, last_insert_id }` |
+| `exec(conn, sql, ...)` | returns `{ affected_rows }` |
 | `query_params` / `exec_params` | same behaviour as the above |
 
 ## Transactions

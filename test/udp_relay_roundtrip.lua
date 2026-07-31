@@ -85,7 +85,7 @@ lunet.spawn(function()
       print("RELAY: forwarded to peer")
     end
 
-    local reply, rhost, rport = udp.recv(peer_sock)
+    local reply = udp.recv(peer_sock)
     check(reply == data,
       "relay received echo: got '" .. tostring(reply) .. "' expected '" .. tostring(data) .. "'")
 
@@ -128,7 +128,7 @@ lunet.spawn(function()
     assert(ok, serr)
     print("CLIENT: sent #" .. (i + 1) .. " '" .. pl .. "'")
 
-    reply, rhost = udp.recv(h)
+    reply = udp.recv(h)
     check(reply == pl,
       "client roundtrip #" .. (i + 1) .. ": got '" .. tostring(reply) .. "' expected '" .. pl .. "'")
   end

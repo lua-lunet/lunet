@@ -16,8 +16,8 @@ end
 
 local codec = dofile(script_dir .. "/../examples/advisory_lock_cas/codec.lua")
 
-local hi_client_port = config.hi.client_port
-local lo_client_port = config.lo.client_port
+local hi_client_port = config.n1.client_port
+local lo_client_port = config.n2.client_port
 local host = "127.0.0.1"
 
 local function send_recv(sock, target_host, target_port, msg)

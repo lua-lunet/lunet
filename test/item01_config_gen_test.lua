@@ -38,34 +38,34 @@ local function test_config_gen()
     end
 
     -- Check structure
-    if type(config.hi) ~= "table" then
-        io.stderr:write("FAIL: config.hi is not a table\n")
+    if type(config.n1) ~= "table" then
+        io.stderr:write("FAIL: config.n1 is not a table\n")
         os.exit(1)
     end
-    if type(config.lo) ~= "table" then
-        io.stderr:write("FAIL: config.lo is not a table\n")
+    if type(config.n2) ~= "table" then
+        io.stderr:write("FAIL: config.n2 is not a table\n")
         os.exit(1)
     end
 
     -- Check required fields exist
     local required_fields = {"client_port", "peer_listen_port", "host"}
     for _, field in ipairs(required_fields) do
-        if config.hi[field] == nil then
-            io.stderr:write("FAIL: config.hi." .. field .. " is nil\n")
+        if config.n1[field] == nil then
+            io.stderr:write("FAIL: config.n1." .. field .. " is nil\n")
             os.exit(1)
         end
-        if config.lo[field] == nil then
-            io.stderr:write("FAIL: config.lo." .. field .. " is nil\n")
+        if config.n2[field] == nil then
+            io.stderr:write("FAIL: config.n2." .. field .. " is nil\n")
             os.exit(1)
         end
     end
 
     -- Check ports are integers > 1024
     local ports = {
-        config.hi.client_port,
-        config.hi.peer_listen_port,
-        config.lo.client_port,
-        config.lo.peer_listen_port
+        config.n1.client_port,
+        config.n1.peer_listen_port,
+        config.n2.client_port,
+        config.n2.peer_listen_port
     }
 
     for i, port in ipairs(ports) do
@@ -94,12 +94,12 @@ local function test_config_gen()
     end
 
     -- Check host is "127.0.0.1"
-    if config.hi.host ~= "127.0.0.1" then
-        io.stderr:write("FAIL: config.hi.host is not '127.0.0.1' (got '" .. tostring(config.hi.host) .. "')\n")
+    if config.n1.host ~= "127.0.0.1" then
+        io.stderr:write("FAIL: config.n1.host is not '127.0.0.1' (got '" .. tostring(config.n1.host) .. "')\n")
         os.exit(1)
     end
-    if config.lo.host ~= "127.0.0.1" then
-        io.stderr:write("FAIL: config.lo.host is not '127.0.0.1' (got '" .. tostring(config.lo.host) .. "')\n")
+    if config.n2.host ~= "127.0.0.1" then
+        io.stderr:write("FAIL: config.n2.host is not '127.0.0.1' (got '" .. tostring(config.n2.host) .. "')\n")
         os.exit(1)
     end
 

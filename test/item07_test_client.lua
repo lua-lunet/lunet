@@ -15,8 +15,8 @@ end
 
 local codec = dofile(script_dir .. "/../examples/advisory_lock_cas/codec.lua")
 
-local hi_client_port = config.hi.client_port
-local lo_client_port = config.lo.client_port
+local hi_client_port = config.n1.client_port
+local lo_client_port = config.n2.client_port
 local host = "127.0.0.1"
 
 local checks_passed = 0
@@ -109,9 +109,12 @@ lunet.spawn(function()
                 reply and tostring(reply.holder) or "nil"))
     end
 
-    -- Concurrent test: lock 2, both nodes, two competing SETs
+    -- Concurrent test: lock 2, both nodes, two competing SETs released
+    -- together on a barrier (BUG-2: no serializing sleep).
     local results = {}
     local done_count = 0
+    local ready_count = 0
+    local release = false
 
     local sock_a, sa_err = udp.bind(host, 0)
     if not sock_a then
@@ -130,20 +133,25 @@ lunet.spawn(function()
     lunet.spawn(function()
         local msg_id = make_msg_id()
         local msg = string.format("SET /locks/2 %016x 100 %s", unheld_token, msg_id)
+        ready_count = ready_count + 1
+        while not release do lunet.sleep(0) end
         local reply = send_recv(sock_a, host, hi_client_port, msg)
         results.a = reply
         done_count = done_count + 1
     end)
 
-    lunet.sleep(50)
-
     lunet.spawn(function()
         local msg_id = make_msg_id()
         local msg = string.format("SET /locks/2 %016x 200 %s", unheld_token, msg_id)
+        ready_count = ready_count + 1
+        while not release do lunet.sleep(0) end
         local reply = send_recv(sock_b, host, lo_client_port, msg)
         results.b = reply
         done_count = done_count + 1
     end)
+
+    while ready_count < 2 do lunet.sleep(0) end
+    release = true
 
     local wait_limit = 100
     local waited = 0

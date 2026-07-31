@@ -31,6 +31,16 @@ kill $SERVER_PID
 | `test/sdk_api.c` | C SDK lifecycle test (one-runtime contract, negative matrix, exit-code plumbing) | `xmake build sdk-api-test && timeout 10 $(find build -name sdk-api-test -type f \| head -1)` — **run from the repo root** (uses the relative path below) |
 | `test/sdk_api_script.lua` | Helper for sdk_api.c; sets `__lunet_exit_code = 23` | invoked by the sdk-api-test binary |
 | `test/smoke_sqlite3_tx.lua` | `lunet.sqlite3_tx` transaction wrapper: commit, abort-by-nil, raise, statement error, guards (#119) | `xmake build lunet-sqlite3 && xmake build-release` then `$(find build -path '*/release/lunet-run' -type f \| head -1) test/smoke_sqlite3_tx.lua` |
+| `test/harness.lua` | Shared Lua test harness (spawn/wait/kill/config_gen/tally) for the advisory_lock_cas suite | `dofile("test/harness.lua")` from drivers |
+| `test/udp_relay_roundtrip.lua` | Go/no-go proof: client → relay → peer → relay → client in one coroutine | `lunet-run test/udp_relay_roundtrip.lua` |
+| `test/item01_config_gen_test.lua` | advisory_lock_cas config generator (4 free ports, Lua output) | `lunet-run test/item01_config_gen_test.lua` |
+| `test/item02_lock_table_test.lua` | Lock table + CAS pure functions | `luajit test/item02_lock_table_test.lua` |
+| `test/item03_message_codec_test.lua` | Wire codec parse/format roundtrips | `luajit test/item03_message_codec_test.lua` |
+| `test/item04_node_skeleton_test.lua` | Node skeleton: bind 3 sockets, readiness, shutdown | `lunet-run test/item04_node_skeleton_test.lua` |
+| `test/item05_node_loop_test.lua` | Node main loop: sequential GET/SET/stale-token via two nodes | `lunet-run test/item05_node_loop_test.lua` |
+| `test/item06_e2e_test.lua` | E2E harness: run_demo.lua exit 0, logs, ports freed | `lunet-run test/item06_e2e_test.lua` |
+| `test/item07_concurrent_test.lua` | Concurrent SET: one winner, consensus | `make -C examples/advisory_lock_cas test-concurrent` |
+| `test/bug_repro/` | Issue #130 bug-reproduction evidence scripts | `lunet-run test/bug_repro/repro_bug01_splitbrain.lua` etc. |
 
 ## Tracing Verification
 

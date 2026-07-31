@@ -92,12 +92,17 @@ local function test_parse_reply_conflict()
     assert_eq(msg.holder, 99, "REPLY CONFLICT holder")
 end
 
--- 7. Parse REPLY NOT_FOUND
-local function test_parse_reply_not_found()
-    local msg = codec.parse("REPLY abc00001 NOT_FOUND")
-    assert_not_nil(msg, "parse REPLY NOT_FOUND returns table")
-    assert_eq(msg.type, "REPLY", "REPLY NOT_FOUND type")
-    assert_eq(msg.status, "NOT_FOUND", "REPLY NOT_FOUND status")
+-- 7. Parse REPLY INVALID and UNAVAILABLE; NOT_FOUND is gone
+local function test_parse_reply_bare_statuses()
+    local msg = codec.parse("REPLY abc00001 INVALID")
+    assert_not_nil(msg, "parse REPLY INVALID returns table")
+    assert_eq(msg.type, "REPLY", "REPLY INVALID type")
+    assert_eq(msg.status, "INVALID", "REPLY INVALID status")
+    local msg2 = codec.parse("REPLY abc00001 UNAVAILABLE")
+    assert_not_nil(msg2, "parse REPLY UNAVAILABLE returns table")
+    assert_eq(msg2.status, "UNAVAILABLE", "REPLY UNAVAILABLE status")
+    local msg3 = codec.parse("REPLY abc00001 NOT_FOUND")
+    assert_nil(msg3, "NOT_FOUND no longer parses")
 end
 
 -- 8. Parse garbage
@@ -134,10 +139,22 @@ local function test_format_reply_ok()
     assert_eq(s, "REPLY abc00001 OK 42 0000002a0000002a", "format_reply OK")
 end
 
--- 13. format_reply NOT_FOUND
-local function test_format_reply_not_found()
-    local s = codec.format_reply("abc00001", "NOT_FOUND")
-    assert_eq(s, "REPLY abc00001 NOT_FOUND", "format_reply NOT_FOUND")
+-- 13. format_reply INVALID / UNAVAILABLE
+local function test_format_reply_bare()
+    local s = codec.format_reply("abc00001", "INVALID")
+    assert_eq(s, "REPLY abc00001 INVALID", "format_reply INVALID")
+    local s2 = codec.format_reply("abc00001", "UNAVAILABLE")
+    assert_eq(s2, "REPLY abc00001 UNAVAILABLE", "format_reply UNAVAILABLE")
+end
+
+-- 13b. u64 token exactness beyond 2^53 (ULL roundtrip)
+local function test_token_u64_exact()
+    local big = 0xFFFFFFFF00000007ULL -- lock_id max u32, holder 7
+    local s = codec.format_reply("abc00001", "OK", 7, big)
+    assert_eq(s, "REPLY abc00001 OK 7 ffffffff00000007", "format big u64 token")
+    local msg = codec.parse(s)
+    assert_not_nil(msg, "parse big u64 token")
+    assert_eq(msg.token, big, "big u64 token roundtrips exactly")
 end
 
 -- 14. format_peer PEER_SET
@@ -186,13 +203,14 @@ test_parse_peer_get()
 test_parse_peer_set()
 test_parse_reply_ok()
 test_parse_reply_conflict()
-test_parse_reply_not_found()
+test_parse_reply_bare_statuses()
 test_parse_garbage()
 test_parse_incomplete()
 test_parse_invalid_token()
 test_parse_bad_status()
 test_format_reply_ok()
-test_format_reply_not_found()
+test_format_reply_bare()
+test_token_u64_exact()
 test_format_peer_set()
 test_format_peer_get()
 test_roundtrip()

@@ -65,7 +65,8 @@ end
 local function write_config(output_path, ports)
     local dir = output_path:match("(.+)/[^/]+$")
     if dir then
-        os.execute("mkdir -p " .. dir)
+        local quoted = "'" .. dir:gsub("'", "'\\''") .. "'"
+        os.execute("mkdir -p " .. quoted)
     end
 
     local f, err = io.open(output_path, "w")
@@ -74,8 +75,8 @@ local function write_config(output_path, ports)
     end
 
     f:write("return {\n")
-    f:write("  hi = { client_port = " .. ports[1] .. ", peer_listen_port = " .. ports[2] .. ', host = "127.0.0.1" },\n')
-    f:write("  lo = { client_port = " .. ports[3] .. ", peer_listen_port = " .. ports[4] .. ', host = "127.0.0.1" }\n')
+    f:write("  n1 = { client_port = " .. ports[1] .. ", peer_listen_port = " .. ports[2] .. ', host = "127.0.0.1" },\n')
+    f:write("  n2 = { client_port = " .. ports[3] .. ", peer_listen_port = " .. ports[4] .. ', host = "127.0.0.1" }\n')
     f:write("}\n")
 
     f:close()

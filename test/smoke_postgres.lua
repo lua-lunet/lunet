@@ -72,7 +72,8 @@ local function test_postgres()
 
     -- Test 5: Parameterised queries (item21: exercise query_params/exec_params)
     print("5. Parameterised queries...")
-    _, err = db.exec(conn, "CREATE TABLE IF NOT EXISTS smoke_params (id SERIAL PRIMARY KEY, i1 INTEGER, d1 DOUBLE PRECISION, t1 TEXT, b1 BOOLEAN)")
+    _, err = db.exec(conn, "CREATE TABLE IF NOT EXISTS smoke_params ("
+        .. "id SERIAL PRIMARY KEY, i1 INTEGER, d1 DOUBLE PRECISION, t1 TEXT, b1 BOOLEAN)")
     if err then
         print("FAIL: Could not create params table: " .. tostring(err))
         __lunet_exit_code = 1
@@ -80,69 +81,75 @@ local function test_postgres()
     end
 
     -- 5.1 Single integer parameter
-    local res
-    res, err = db.exec_params(conn, "INSERT INTO smoke_params (i1) VALUES ($1)", 42)
-    if err then
-        print("FAIL: exec_params integer insert errored: " .. tostring(err))
+    rows, err = db.query_params(conn,
+        "INSERT INTO smoke_params (i1) VALUES ($1) RETURNING id", 42)
+    if err or #rows ~= 1 then
+        print("FAIL: integer insert errored: " .. tostring(err))
         __lunet_exit_code = 1
         return
     end
-    rows, err = db.query_params(conn, "SELECT i1 FROM smoke_params WHERE id = $1", res.last_insert_id)
+    local id = rows[1].id
+    rows, err = db.query_params(conn, "SELECT i1 FROM smoke_params WHERE id = $1", id)
     if err or #rows ~= 1 or rows[1].i1 ~= 42 then
-        print("FAIL: query_params integer read-back failed: " .. tostring(err))
+        print("FAIL: integer read-back failed: " .. tostring(err))
         __lunet_exit_code = 1
         return
     end
     print("   OK: integer parameter")
 
     -- 5.2 Single string parameter
-    res, err = db.exec_params(conn, "INSERT INTO smoke_params (t1) VALUES ($1)", "hello")
-    if err then
-        print("FAIL: exec_params string insert errored: " .. tostring(err))
+    rows, err = db.query_params(conn,
+        "INSERT INTO smoke_params (t1) VALUES ($1) RETURNING id", "hello")
+    if err or #rows ~= 1 then
+        print("FAIL: string insert errored: " .. tostring(err))
         __lunet_exit_code = 1
         return
     end
-    rows, err = db.query_params(conn, "SELECT t1 FROM smoke_params WHERE id = $1", res.last_insert_id)
+    id = rows[1].id
+    rows, err = db.query_params(conn, "SELECT t1 FROM smoke_params WHERE id = $1", id)
     if err or #rows ~= 1 or rows[1].t1 ~= "hello" then
-        print("FAIL: query_params string read-back failed: " .. tostring(err))
+        print("FAIL: string read-back failed: " .. tostring(err))
         __lunet_exit_code = 1
         return
     end
     print("   OK: string parameter")
 
     -- 5.3 NULL parameter
-    res, err = db.exec_params(conn, "INSERT INTO smoke_params (i1) VALUES ($1)", nil)
-    if err then
-        print("FAIL: exec_params NULL insert errored: " .. tostring(err))
+    rows, err = db.query_params(conn,
+        "INSERT INTO smoke_params (i1) VALUES ($1) RETURNING id", nil)
+    if err or #rows ~= 1 then
+        print("FAIL: NULL insert errored: " .. tostring(err))
         __lunet_exit_code = 1
         return
     end
-    rows, err = db.query_params(conn, "SELECT i1 FROM smoke_params WHERE id = $1", res.last_insert_id)
+    id = rows[1].id
+    rows, err = db.query_params(conn, "SELECT i1 FROM smoke_params WHERE id = $1", id)
     if err or #rows ~= 1 or rows[1].i1 ~= nil then
-        print("FAIL: query_params NULL read-back failed: " .. tostring(err))
+        print("FAIL: NULL read-back failed: " .. tostring(err))
         __lunet_exit_code = 1
         return
     end
     print("   OK: NULL parameter")
 
     -- 5.4 Boolean parameter (item19e: passed as booleans, not coerced to 1/0)
-    for _, pair in ipairs({ { true, "t" }, { false, "f" } }) do
-        local b, expected = pair[1], pair[2]
-        res, err = db.exec_params(conn, "INSERT INTO smoke_params (b1) VALUES ($1)", b)
-        if err then
-            print("FAIL: exec_params boolean insert errored: " .. tostring(err))
+    for _, b in ipairs({ true, false }) do
+        rows, err = db.query_params(conn,
+            "INSERT INTO smoke_params (b1) VALUES ($1) RETURNING id", b)
+        if err or #rows ~= 1 then
+            print("FAIL: boolean insert errored: " .. tostring(err))
             __lunet_exit_code = 1
             return
         end
-        rows, err = db.query_params(conn, "SELECT b1 FROM smoke_params WHERE id = $1", res.last_insert_id)
+        id = rows[1].id
+        rows, err = db.query_params(conn, "SELECT b1 FROM smoke_params WHERE id = $1", id)
         if err or #rows ~= 1 then
-            print("FAIL: query_params boolean read-back failed: " .. tostring(err))
+            print("FAIL: boolean read-back failed: " .. tostring(err))
             __lunet_exit_code = 1
             return
         end
         -- Postgres returns booleans as Lua booleans (BOOLOID -> lua_pushboolean)
         local got = rows[1].b1
-        if not (got == b) then
+        if got ~= b then
             print("FAIL: boolean round-trip: sent " .. tostring(b) .. ", got " .. tostring(got))
             __lunet_exit_code = 1
             return
@@ -151,15 +158,19 @@ local function test_postgres()
     print("   OK: boolean parameter (item19e)")
 
     -- 5.5 Multiple parameters (mixed types)
-    res, err = db.exec_params(conn, "INSERT INTO smoke_params (i1, d1, t1, b1) VALUES ($1, $2, $3, $4)", 123, 3.14, "mixed", true)
-    if err then
-        print("FAIL: exec_params mixed insert errored: " .. tostring(err))
+    rows, err = db.query_params(conn,
+        "INSERT INTO smoke_params (i1, d1, t1, b1) VALUES ($1, $2, $3, $4) RETURNING id",
+        123, 3.14, "mixed", true)
+    if err or #rows ~= 1 then
+        print("FAIL: mixed insert errored: " .. tostring(err))
         __lunet_exit_code = 1
         return
     end
-    rows, err = db.query_params(conn, "SELECT i1, d1, t1, b1 FROM smoke_params WHERE id = $1", res.last_insert_id)
+    id = rows[1].id
+    rows, err = db.query_params(conn,
+        "SELECT i1, d1, t1, b1 FROM smoke_params WHERE id = $1", id)
     if err or #rows ~= 1 then
-        print("FAIL: query_params mixed read-back failed: " .. tostring(err))
+        print("FAIL: mixed read-back failed: " .. tostring(err))
         __lunet_exit_code = 1
         return
     end

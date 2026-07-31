@@ -34,7 +34,6 @@ lunet.spawn(function()
     assert(os.execute(bin .. " " .. root
         .. "/examples/advisory_lock_cas/config_gen.lua --output " .. cfg) == 0)
     local config = dofile(cfg)
-    local codec = dofile(root .. "/examples/advisory_lock_cas/codec.lua")
     local lock_mod = dofile(root .. "/examples/advisory_lock_cas/lock.lua")
 
     hi_pid = C.spawn_bg(bin .. " " .. root .. "/examples/advisory_lock_cas/node.lua "

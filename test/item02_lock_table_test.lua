@@ -102,7 +102,7 @@ end
 local function test_max_u32_lock_id()
     local tbl = lock.new()
     local maxu32 = 4294967295
-    local ok, t = lock.cas(tbl, maxu32, lock.pack_token(maxu32, 0), 1)
+    local ok, _ = lock.cas(tbl, maxu32, lock.pack_token(maxu32, 0), 1)
     assert_eq(ok, true, "CAS max u32 lock_id succeeds")
     local holder, token = lock.get(tbl, maxu32)
     assert_eq(holder, 1, "max u32 lock_id holder")
@@ -112,7 +112,7 @@ end
 local function test_max_u32_holder()
     local tbl = lock.new()
     local maxu32 = 4294967295
-    local ok, t = lock.cas(tbl, 1, lock.pack_token(1, 0), maxu32)
+    local ok, _ = lock.cas(tbl, 1, lock.pack_token(1, 0), maxu32)
     assert_eq(ok, true, "CAS max u32 holder succeeds")
     local holder, token = lock.get(tbl, 1)
     assert_eq(holder, maxu32, "max u32 holder")

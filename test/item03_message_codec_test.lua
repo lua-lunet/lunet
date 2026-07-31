@@ -154,7 +154,6 @@ end
 
 -- 16. Roundtrip
 local function test_roundtrip()
-    local original = "REPLY abc00001 OK 42 0000002a0000002a"
     local formatted = codec.format_reply("abc00001", "OK", 42, 0x0000002A0000002A)
     local msg = codec.parse(formatted)
     assert_not_nil(msg, "roundtrip parse succeeds")

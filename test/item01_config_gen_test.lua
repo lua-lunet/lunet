@@ -85,7 +85,7 @@ local function test_config_gen()
 
     -- Check all 4 ports are different
     local seen = {}
-    for i, port in ipairs(ports) do
+    for _, port in ipairs(ports) do
         if seen[port] then
             io.stderr:write("FAIL: duplicate port " .. port .. "\n")
             os.exit(1)
@@ -105,7 +105,7 @@ local function test_config_gen()
 
     -- Verify ports are actually free (can bind to them)
     lunet.spawn(function()
-        for i, port in ipairs(ports) do
+    for _, port in ipairs(ports) do
             local h, err = udp.bind("127.0.0.1", port)
             if not h then
                 io.stderr:write("FAIL: port " .. port .. " is not free: " .. tostring(err) .. "\n")

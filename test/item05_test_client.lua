@@ -26,7 +26,7 @@ local function send_recv(sock, target_host, target_port, msg)
         io.stderr:write("FAIL: send error: " .. tostring(err) .. "\n")
         return nil
     end
-    local data, rhost, rport = udp.recv(sock)
+    local data = udp.recv(sock)
     if not data then
         io.stderr:write("FAIL: recv returned nil\n")
         return nil

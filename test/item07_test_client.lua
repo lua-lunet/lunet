@@ -165,13 +165,11 @@ lunet.spawn(function()
             results.b and tostring(results.b.status) or "nil"))
 
     -- Test h: loser's CONFLICT shows winner's holder
-    local winner_holder, loser_holder
+    local winner_holder
     if a_ok then
         winner_holder = 100
-        loser_holder = 200
     else
         winner_holder = 200
-        loser_holder = 100
     end
 
     local loser_reply = a_ok and results.b or results.a

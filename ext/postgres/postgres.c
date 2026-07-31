@@ -549,7 +549,6 @@ typedef struct {
   int nparams;
 
   long long affected_rows;
-  unsigned long long insert_id;
   char err[256];
 } db_exec_ctx_t;
 
@@ -618,7 +617,6 @@ static void db_exec_work_cb(uv_work_t* req) {
 
   const char* affected = PQcmdTuples(result);
   ctx->affected_rows = affected[0] ? strtoll(affected, NULL, 10) : 0;
-  ctx->insert_id = (unsigned long long)PQoidValue(result);
 
   PQclear(result);
   uv_mutex_unlock(&ctx->wrapper->mutex);
@@ -654,9 +652,6 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
     lua_newtable(co);
     lua_pushstring(co, "affected_rows");
     lua_pushinteger(co, ctx->affected_rows);
-    lua_settable(co, -3);
-    lua_pushstring(co, "last_insert_id");
-    lua_pushinteger(co, ctx->insert_id);
     lua_settable(co, -3);
     lua_pushnil(co);
     int rc = lunet_co_resume(co, 2);

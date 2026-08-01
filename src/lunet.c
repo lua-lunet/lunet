@@ -59,6 +59,7 @@ int lunet_open_udp(lua_State *L) {
                       {"send", lunet_udp_send},
                       {"recv", lunet_udp_recv},
                       {"close", lunet_udp_close},
+                      {"getsockname", lunet_udp_getsockname},
                       {NULL, NULL}};
   luaL_newlib(L, funcs);
   return 1;
@@ -476,4 +477,11 @@ void lunet_runtime_shutdown(lunet_runtime_t *runtime) {
 #endif
   g_active_runtime = NULL;
   free(runtime);
+}
+
+void *lunet_runtime_get_lua_state(lunet_runtime_t *runtime) {
+  if (!runtime) {
+    return NULL;
+  }
+  return runtime->L;
 }

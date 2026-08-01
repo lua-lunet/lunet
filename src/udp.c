@@ -503,6 +503,51 @@ int lunet_udp_recv(lua_State *co) {
   return 3;
 }
 
+int lunet_udp_getsockname(lua_State *L) {
+  udp_ctx_t *ctx = (udp_ctx_t *)lua_touserdata(L, 1);
+  if (ctx == NULL) {
+    lua_pushnil(L);
+    lua_pushnil(L);
+    lua_pushstring(L, "invalid udp handle");
+    return 3;
+  }
+
+  struct sockaddr_storage addr;
+  int namelen = sizeof(addr);
+  memset(&addr, 0, sizeof(addr));
+
+  int ret = uv_udp_getsockname(&ctx->handle, (struct sockaddr *)&addr, &namelen);
+  if (ret < 0) {
+    lua_pushnil(L);
+    lua_pushnil(L);
+    lua_pushfstring(L, "failed to getsockname: %s", uv_strerror(ret));
+    return 3;
+  }
+
+  char host[INET6_ADDRSTRLEN];
+  int port = 0;
+
+  if (addr.ss_family == AF_INET) {
+    struct sockaddr_in *a4 = (struct sockaddr_in *)&addr;
+    uv_ip4_name(a4, host, sizeof(host));
+    port = ntohs(a4->sin_port);
+  } else if (addr.ss_family == AF_INET6) {
+    struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)&addr;
+    uv_ip6_name(a6, host, sizeof(host));
+    port = ntohs(a6->sin6_port);
+  } else {
+    lua_pushnil(L);
+    lua_pushnil(L);
+    lua_pushstring(L, "unknown address family");
+    return 3;
+  }
+
+  lua_pushstring(L, host);
+  lua_pushinteger(L, port);
+  lua_pushnil(L);
+  return 3;
+}
+
 int lunet_udp_close(lua_State *L) {
   if (lunet_ensure_coroutine(L, "udp.close") != 0) return 2;
 

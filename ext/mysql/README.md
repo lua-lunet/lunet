@@ -46,6 +46,11 @@ config.
 
 ### Driver-specific facts (all measured, see below)
 
+- **Booleans are bound as `MYSQL_TYPE_TINY` with `is_unsigned=1`.** MySQL has
+  no distinct boolean column type on the wire — `BOOLEAN` is an alias for
+  `TINYINT(1)`. A boolean insert stores 1/0 and the read-back returns an
+  integer, not a Lua boolean. `MYSQL_TYPE_BOOL` is a documented placeholder in
+  the header, not a wire type.
 - **`BEGIN` and `START TRANSACTION` do not work through this driver at all.**
   `mysql.c` always goes through `mysql_stmt_prepare` — there is no
   non-prepared path as there is in the postgres driver — and MySQL's

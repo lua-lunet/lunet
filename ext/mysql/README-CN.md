@@ -43,6 +43,10 @@ if not ok and err.poisoned then mysql.close(conn) end
 
 ### 驱动特有事实（全部经实测，见下文）
 
+- **布尔值以 `MYSQL_TYPE_TINY` 绑定，`is_unsigned=1`。** MySQL 在在线协议上没有
+  独立的布尔列类型——`BOOLEAN` 是 `TINYINT(1)` 的别名。布尔写入存入 1/0，
+  读回返回整数而非 Lua 布尔值。`MYSQL_TYPE_BOOL` 是头文件中一个文档化的占位
+  符，并非线协议类型。
 - **`BEGIN` 与 `START TRANSACTION` 在本驱动下完全无法使用。** `mysql.c` 始终走
   `mysql_stmt_prepare`——不像 postgres 驱动那样存在非预处理路径——而 MySQL 的
   预处理语句协议会以 *"This command is not supported in the prepared statement

@@ -42,6 +42,9 @@ if not ok and err.poisoned then sqlite.close(conn) end
 
 ### 驱动特有事实
 
+- **布尔值通过 `sqlite3_bind_int` 绑定。** SQLite 没有布尔类型，因此布尔写入存入
+  1/0，读回返回整数而非 Lua 布尔值。这是驱动的有意行为——不存在一个能区分
+  布尔的列类型可供读回比对。
 - **任何涉及写入的场景都请传 `"IMMEDIATE"`。** 第三个参数是加锁模式。SQLite 默认
   的 `DEFERRED` 在首条语句之前不加锁，因此另一个写者可能先抢到写锁，导致你的
   `UPDATE` 在 `BEGIN` **已经成功之后**才以 `SQLITE_BUSY` 失败。`IMMEDIATE` 把这个

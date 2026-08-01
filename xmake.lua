@@ -5,7 +5,20 @@
 -- The include/lunet_lua.h header enforces this at compile time.
 
 set_project("lunet")
-set_version("0.2.0")
+
+-- Version is derived, not maintained by hand. CI release builds extract it
+-- from the tag ref (LUNET_VERSION env var). Local builds default to a
+-- sentinel that is never mistaken for a real release number.
+-- item23: a hard-coded literal WILL drift (this one was four releases stale).
+local _version = os.getenv("LUNET_VERSION")
+if _version and _version ~= "" then
+    -- CI passes "0.7.0" (tag minus leading v)
+    set_version(_version)
+else
+    -- Sentinel for non-release builds. Not a real version — deliberately
+    -- unreachable from any tag so a mismatch is always visible.
+    set_version("0.0.0-dev")
+end
 set_languages("c99")
 
 add_rules("mode.debug", "mode.release")

@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="1.0.21"
-SHA256="9e4285c7a419e82dedb0be63a72eea357d6943bc3e28e6735bf600dd4883feaf"
+# 1.0.22, not 1.0.21: 1.0.21's crypto_ipcrypt/ipcrypt_armcrypto.c does not
+# compile on aarch64 with GCC. BYTESHL128 feeds a vextq_s8() result to
+# vreinterpretq_u64_u8(), and pfx_shift_left() assigns uint8x16_t values to
+# uint64x2_t locals. Clang accepts both (lax NEON vector conversions), GCC
+# rejects them, so the arm64 CI leg died in "Install Dependencies (Linux)".
+# Upstream fixed both in 1.0.22 (u8 intrinsics throughout).
+VERSION="1.0.22"
+SHA256="adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349"
 TARBALL="libsodium-${VERSION}.tar.gz"
 URL="https://download.libsodium.org/libsodium/releases/${TARBALL}"
 PREFIX="${SODIUM_PREFIX:-/tmp/libsodium}"

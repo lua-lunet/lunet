@@ -330,6 +330,7 @@ static int bind_params(MYSQL_STMT* stmt, MYSQL_BIND* bind, param_t* params, int 
             case PARAM_TYPE_BOOL:
                 bind[i].buffer_type = MYSQL_TYPE_TINY;
                 bind[i].buffer = (void*)&params[i].value.b;
+                bind[i].is_unsigned = 1;
                 break;
             default:
                 snprintf(err, errsize, "unknown parameter type");

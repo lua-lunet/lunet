@@ -216,9 +216,10 @@ jobs:
         cargo build --release --manifest-path ext/lnt_shared/Cargo.toml
         cargo build --release --manifest-path ext/jsonic/Cargo.toml
 
-    # On Linux, sodium-src.sh installs a source-built libsodium (>=1.0.21)
+    # On Linux, sodium-src.sh installs a source-built libsodium (1.0.22)
     # to /tmp/libsodium so the PAXE cdylib gets AES-256-GCM on ARM64
-    # (libsodium <1.0.20 lacks ARM Crypto Extensions support). macOS gets
+    # (libsodium <1.0.20 lacks ARM Crypto Extensions support, and 1.0.21
+    # does not compile on aarch64 with GCC). macOS gets
     # Homebrew 1.0.22; Windows gets vcpkg's current version. The env var
     # is build.rs's priority-1 path (see ext/paxe/build.rs:70).
     - name: Set PAXE libsodium path (Linux)

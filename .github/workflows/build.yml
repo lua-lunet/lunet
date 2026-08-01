@@ -929,20 +929,18 @@ jobs:
           exit 1
         fi
 
-    - name: Wait for MySQL readiness
+    # No host-side readiness probe. The service container's health check
+    # (mysqladmin ping inside the container) already guarantees that MySQL
+    # is accepting connections before any step executes; the smoke test
+    # step below additionally verifies host→container reachability through
+    # the published port. An extra host-side probe would require declaring
+    # mysql-client as a dependency (item26; it is not installed by
+    # debian.sh) for a check the health command already performs.
+    - name: Record MySQL client library
       run: |
-        set -euo pipefail
-        echo "Waiting for MySQL to accept connections..."
-        for i in $(seq 1 30); do
-          if mysqladmin ping -h 127.0.0.1 -P 3306 -u root -proot --silent 2>/dev/null; then
-            echo "MySQL is ready"
-            exit 0
-          fi
-          echo "Attempt $i/30: MySQL not ready yet, waiting 2s..."
-          sleep 2
-        done
-        echo "ERROR: MySQL did not become ready within 60s" >&2
-        exit 1
+        echo "MySQL client library resolution:"
+        dpkg -l | grep -E 'libmysqlclient|libmariadb' || echo "(none matched)"
+
 
     - name: Run MySQL smoke tests
       run: |
@@ -1025,20 +1023,11 @@ jobs:
           exit 1
         fi
 
-    - name: Wait for Postgres readiness
-      run: |
-        set -euo pipefail
-        echo "Waiting for Postgres to accept connections on target database..."
-        for i in $(seq 1 30); do
-          if pg_isready -h 127.0.0.1 -p 5432 -U postgres -d test 2>/dev/null; then
-            echo "Postgres is ready"
-            exit 0
-          fi
-          echo "Attempt $i/30: Postgres not ready yet, waiting 2s..."
-          sleep 2
-        done
-        echo "ERROR: Postgres did not become ready within 60s" >&2
-        exit 1
+    # No host-side readiness probe: same rationale as mysql-integration
+    # (the container health check already guarantees readiness, and the
+    # smoke test step verifies host→container reachability). An extra
+    # host-side probe would require declaring postgresql-client as a
+    # dependency (item26; it is not installed by debian.sh).
 
     - name: Run Postgres smoke tests
       run: |

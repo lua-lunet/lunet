@@ -83,11 +83,8 @@ void lunet_trace_coref_remove(const char *file, int line, int ref) {
     if (loc >= 0 && loc < lunet_trace_state.location_count) {
        lunet_trace_state.locations[loc].count--;
     } else {
-       /* Fallback if tracking lost or ref reused weirdly? */
-       /* Maybe track release location as negative? No, that causes the bug.
-          If we can't match it, we just don't decrement any location count.
-          This will show as a leak in summary, which is better than negative counts.
-       */
+       /* Unmatched release: leave every location count alone so the summary
+          reports a leak rather than a negative count. */
        fprintf(stderr,
                "[TRACE] WARNING: Release of ref %d at %s:%d has no matching creation location (loc=%d, locations=%d).\n",
                ref, file, line, loc, lunet_trace_state.location_count);

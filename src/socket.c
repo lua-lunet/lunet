@@ -735,10 +735,8 @@ static void lunet_write_cb(uv_write_t *req, int status) {
           (void *)write_req, (void *)ctx, status);
 #endif
 
-  /* ---- UAF guard ----
-   * If close_cb already ran and socket_ctx_release freed ctx, write_req->ctx
-   * may be stale. With refcount, ctx stays alive until we release. But if
-   * something went very wrong, guard against NULL. */
+  /* The write's refcount keeps ctx alive until socket_ctx_release below, so a
+   * NULL here means close_cb already tore it down (see issue #50). */
   if (!ctx) {
     if (write_req->data) {
       lunet_free_nonnull(write_req->data);
@@ -827,9 +825,8 @@ static void lunet_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
 
   uv_read_stop(stream);
 
-  /* ---- UAF guard ----
-   * If close_cb already ran, handle->data is NULL. Free the buffer and bail.
-   * No socket_ctx_release here because the ctx is already gone. */
+  /* close_cb NULLs handle->data, so the ctx is already released here: free the
+   * buffer and bail without a matching socket_ctx_release (see issue #50). */
   if (!ctx) {
     if (buf && buf->base) {
       lunet_free_nonnull(buf->base);  /* must match lunet_alloc backend (libc or EasyMem) */
@@ -1273,9 +1270,6 @@ int lunet_socket_getpeername(lua_State *L) {
 
       lua_pushfstring(L, "%s:%d", buf, ntohs(addr.sin_port));
   } else {
-      // Unix socket: return empty string or path if available?
-      // uv_pipe_getpeername
-      // For now, return "unix"
       lua_pushstring(L, "unix");
   }
   

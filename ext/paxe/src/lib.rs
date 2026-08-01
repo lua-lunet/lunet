@@ -337,7 +337,9 @@ pub extern "C" fn lunet_paxe_init() -> c_int {
     }
     if let Err(e) = sodium::require_aes_gcm() {
         return fail(&format!(
-            "AES-256-GCM hardware path unavailable; PAXE cannot operate on this host: {e}"
+            "AES-256-GCM hardware path unavailable (libsodium {}); \
+             PAXE cannot operate on this host: {e}",
+            sodium::version_string()
         ));
     }
     // item09: key erasure at process exit is owned by the RUNTIME, not by
@@ -993,7 +995,13 @@ mod ffi_tests {
 
     /// Configure node A with a link key for peer B under `epoch`.
     fn setup_node_a(epoch: u32) {
-        assert_eq!(lunet_paxe_init(), RC_OK);
+        assert_eq!(
+            lunet_paxe_init(),
+            RC_OK,
+            "init failed (libsodium {}): {}",
+            crate::sodium::version_string(),
+            last_error_string()
+        );
         assert_eq!(lunet_paxe_set_local_id(NODE_A), RC_OK);
         assert_eq!(
             lunet_paxe_keystore_set(NODE_B, epoch, KEY.as_ptr(), KEY.len()),
@@ -1070,7 +1078,14 @@ mod ffi_tests {
         assert!(last_error_string().contains("0-65535"));
         assert_eq!(lunet_paxe_set_local_id(u32::MAX), RC_INVAL);
 
-        assert_eq!(lunet_paxe_init(), RC_OK);
+        assert_eq!(
+            lunet_paxe_init(),
+            RC_OK,
+            "init failed (libsodium {}): {} — see PAXE.md \"Requirements\" \
+             (AES-256-GCM hardware crypto; libsodium >= 1.0.20 on ARM64 Linux)",
+            crate::sodium::version_string(),
+            last_error_string()
+        );
         assert_eq!(lunet_paxe_set_local_id(NODE_A), RC_OK);
         // Second configuration without shutdown: malformed use, no wipe.
         assert_eq!(lunet_paxe_set_local_id(NODE_A), RC_INVAL);
@@ -1255,7 +1270,13 @@ mod ffi_tests {
             eprintln!("skipping: AES-GCM hardware path unavailable");
             return;
         }
-        assert_eq!(lunet_paxe_init(), RC_OK);
+        assert_eq!(
+            lunet_paxe_init(),
+            RC_OK,
+            "init failed (libsodium {}): {}",
+            crate::sodium::version_string(),
+            last_error_string()
+        );
         // Seal before set_local_id: operational, clear message.
         let (rc, _) = seal(b"x", NODE_B, CHAN);
         assert_eq!(rc, RC_ERR);

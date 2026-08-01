@@ -28,9 +28,10 @@ if [[ "$QA_ONLY" -eq 1 ]]; then
 else
     $SUDO apt-get install -y $EXTRA \
         pkg-config libuv1-dev luajit libluajit-5.1-dev \
-        zlib1g-dev libsqlite3-dev libsodium-dev libcurl4-openssl-dev \
+        zlib1g-dev libsqlite3-dev libcurl4-openssl-dev \
         libpq-dev default-libmysqlclient-dev luarocks lua5.1 \
         build-essential git curl ca-certificates libasan8
+    bash "$(dirname "$0")/sodium-src.sh"
 fi
 
 # lua-language-server is not in apt; download a pinned release binary.

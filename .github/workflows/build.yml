@@ -228,6 +228,15 @@ jobs:
         cargo build --release --manifest-path ext/lnt_shared/Cargo.toml
         cargo build --release --manifest-path ext/jsonic/Cargo.toml
 
+    # On Linux, sodium-src.sh installs a source-built libsodium (>=1.0.21)
+    # to /tmp/libsodium so the PAXE cdylib gets AES-256-GCM on ARM64
+    # (libsodium <1.0.20 lacks ARM Crypto Extensions support). macOS gets
+    # Homebrew 1.0.22; Windows gets vcpkg's current version. The env var
+    # is build.rs's priority-1 path (see ext/paxe/build.rs:70).
+    - name: Set PAXE libsodium path (Linux)
+      if: runner.os == 'Linux'
+      run: echo "PAXE_SODIUM_LIB_DIR=/tmp/libsodium/lib" >> "$GITHUB_ENV"
+
     # PAXE Rust scaffold (ext/paxe): zero-dependency cdylib. The
     # three-platform claim is tested here, not asserted — this step runs on
     # Windows too, unlike the ext modules above. Cargo is preinstalled on

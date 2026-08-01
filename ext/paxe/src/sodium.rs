@@ -37,7 +37,7 @@
 
 use std::error::Error;
 use std::fmt;
-use std::os::raw::{c_int, c_uchar, c_ulonglong, c_void};
+use std::os::raw::{c_char, c_int, c_uchar, c_ulonglong, c_void};
 use std::ptr::NonNull;
 
 /// AES-256-GCM key size in bytes, per libsodium.
@@ -53,10 +53,13 @@ pub const ABYTES: usize = 16;
 // ---------------------------------------------------------------------------
 
 mod ffi {
-    use super::{c_int, c_uchar, c_ulonglong, c_void};
+    use super::{c_char, c_int, c_uchar, c_ulonglong, c_void};
 
     extern "C" {
         /// CONTRACT (libsodium docs, "Initialization"):
+        /// Returns the library version string (e.g. "1.0.21").
+        pub fn sodium_version_string() -> *const c_char;
+
         /// Initialises the library: seeds the CSPRNG, probes CPU features,
         /// sets up the guarded-heap canary. MUST run before any other
         /// libsodium function.
@@ -554,6 +557,19 @@ pub fn init() -> Result<InitStatus, SodiumError> {
         1 => Ok(InitStatus::AlreadyInitialised),
         _ => Err(SodiumError::InitFailed),
     }
+}
+
+/// Return the linked libsodium version string (e.g. "1.0.21").
+/// Must be called after `init()`. Never fails — libsodium 1.0.0+ always
+/// provides this symbol.
+pub fn version_string() -> &'static str {
+    let ptr = unsafe { ffi::sodium_version_string() };
+    if ptr.is_null() {
+        return "(unknown)";
+    }
+    unsafe { std::ffi::CStr::from_ptr(ptr) }
+        .to_str()
+        .unwrap_or("(non-UTF-8 version string)")
 }
 
 /// Startup ABI check: compare our compile-time KEY/NPUB/ABYTE sizes

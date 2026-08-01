@@ -298,6 +298,8 @@ jobs:
         # DB transaction wrappers (#119): one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
+        # Release layout documentation (#133)
+        cp docs/RELEASE-LAYOUT.md docs/RELEASE-LAYOUT-CN.md "$DIST_DIR/"
         tar -C "$DIST_DIR" -czf "lunet-linux-${{ matrix.arch }}.tar.gz" .
 
     - name: Package release archive (macOS)
@@ -321,6 +323,8 @@ jobs:
         # DB transaction wrappers (#119): one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
+        # Release layout documentation (#133)
+        cp docs/RELEASE-LAYOUT.md docs/RELEASE-LAYOUT-CN.md "$DIST_DIR/"
         tar -C "$DIST_DIR" -czf lunet-macos.tar.gz .
 
     - name: Package release SDK (Linux)
@@ -369,6 +373,8 @@ jobs:
         }
         # DB transaction wrappers (#119): one per driver, deliberately not shared.
         Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
+        # Release layout documentation (#133)
+        Copy-Item docs\RELEASE-LAYOUT.md, docs\RELEASE-LAYOUT-CN.md $dist
         Compress-Archive -Path (Join-Path $dist "*") -DestinationPath lunet-windows-amd64.zip -Force
 
     - name: Package release SDK (Windows)

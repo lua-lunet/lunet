@@ -145,7 +145,10 @@ jobs:
     # item23: extract the version from the tag (strip leading v) and inject
     # it into the build. On non-tag builds this is a no-op and xmake.lua
     # falls back to the 0.0.0-dev sentinel.
+    # shell: bash is required — this job also runs on Windows, where the
+    # default shell is pwsh and the [[ ... =~ ... ]] test is a parse error.
     - name: Inject version from tag
+      shell: bash
       run: |
         TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}"
         if [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+) ]]; then

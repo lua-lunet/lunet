@@ -81,6 +81,12 @@
 //!
 //! - **Swap:** `sodium_mlock` pins the guarded pages in RAM on every
 //!   supported platform; locked pages never reach swap.
+//! - **Swap, Windows:** the lock budget there is not an rlimit but the
+//!   process minimum working set — 200KB by default, roughly 48 locked
+//!   pages for the whole process, one of which every stored key consumes.
+//!   `sodium::mlock` raises that budget on a quota refusal and retries,
+//!   so a node holding dozens of per-link keys still gets every one of
+//!   them locked instead of `MlockFailed` at some arbitrary key count.
 //! - **Core dumps, Linux:** libsodium's `sodium_mlock` sets
 //!   `MADV_DONTDUMP`, so the guarded pages are excluded from the kernel
 //!   core. Verified: a 32-byte guarded key pattern appeared 0 times in

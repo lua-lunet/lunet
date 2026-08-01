@@ -284,6 +284,141 @@ mod ffi {
         #[cfg(all(unix, target_pointer_width = "64"))]
         pub fn setrlimit(resource: c_int, rlim: *const super::RLimit) -> c_int;
     }
+
+    // kernel32, not libsodium: declared here because this module is the
+    // crate's sole extern containment boundary (item02), and the Windows
+    // page-locking budget below needs them. `extern "system"` is the
+    // Win32 calling convention (stdcall on x86, identical to "C"
+    // elsewhere); `HANDLE` is an opaque pointer and `BOOL` is a 32-bit
+    // int that is zero on failure.
+    #[cfg(windows)]
+    extern "system" {
+        /// CONTRACT (Win32, processthreadsapi.h): returns the PSEUDO
+        /// handle for the calling process. It is not a real handle: it
+        /// needs no `CloseHandle`, it can never fail, and it carries full
+        /// access rights, so `PROCESS_SET_QUOTA` (what
+        /// `SetProcessWorkingSetSize` requires) is always present.
+        pub fn GetCurrentProcess() -> *mut c_void;
+
+        /// CONTRACT (Win32, memoryapi.h): writes the process's current
+        /// minimum and maximum working-set sizes, in BYTES, through the
+        /// two out-pointers. Returns 0 on failure (`GetLastError` set),
+        /// non-zero on success.
+        pub fn GetProcessWorkingSetSize(
+            process: *mut c_void,
+            minimum: *mut usize,
+            maximum: *mut usize,
+        ) -> c_int;
+
+        /// CONTRACT (Win32, memoryapi.h): sets the process's minimum and
+        /// maximum working-set sizes, in BYTES. Returns 0 on failure
+        /// (`GetLastError` set), non-zero on success. The minimum is the
+        /// quota `VirtualLock` draws its locked pages from — raising it
+        /// is the documented way to lock more than the default handful of
+        /// pages. Failure is possible (the caller may lack
+        /// SE_INC_WORKING_SET_NAME) and is never fatal here.
+        pub fn SetProcessWorkingSetSize(
+            process: *mut c_void,
+            minimum: usize,
+            maximum: usize,
+        ) -> c_int;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Windows page-locking budget.
+//
+// On Unix the mlock budget is RLIMIT_MEMLOCK, which is generous enough for
+// per-link keys and is a system-administration matter when it is not. On
+// Windows libsodium's `sodium_mlock` is `VirtualLock`, whose budget is the
+// process MINIMUM WORKING SET — 200KB by default, i.e. roughly 48 lockable
+// pages for the WHOLE process, and each guarded key allocation costs one.
+// Microsoft's documented remedy is exactly this: "Applications that need to
+// lock larger numbers of pages must first call the SetProcessWorkingSetSize
+// function to increase their minimum and maximum working set sizes"
+// (learn.microsoft.com, VirtualLock).
+//
+// Growing lazily on the specific quota error rather than eagerly at init
+// keeps the default-sized process untouched until a lock actually needs the
+// room, and keeps the fix correct no matter which entry point allocated the
+// first key (the unit tests never call `lunet_paxe_init`).
+// ---------------------------------------------------------------------------
+
+/// Raise the process working set so `VirtualLock` has quota for `len` more
+/// bytes, and report whether the caller should retry the lock.
+///
+/// Returns false — leaving the working set untouched — unless the most
+/// recent OS error is one of the two quota refusals, so an mlock that
+/// failed for any other reason never silently inflates the process, and
+/// false once cumulative growth reaches the ceiling, so a pathological
+/// caller cannot grow the working set without bound.
+#[cfg(windows)]
+fn grow_locked_page_budget(len: usize) -> bool {
+    /// `ERROR_WORKING_SET_QUOTA`: "Insufficient quota to complete the
+    /// requested service" — what `VirtualLock` reports when the minimum
+    /// working set has no room left for another locked page.
+    const ERROR_WORKING_SET_QUOTA: i32 = 1453;
+    /// `ERROR_NOT_ENOUGH_QUOTA`: the other quota spelling Windows uses for
+    /// the same refusal. Both mean "raise the working set"; neither means
+    /// the region or the caller is wrong.
+    const ERROR_NOT_ENOUGH_QUOTA: i32 = 1816;
+    /// Headroom added per growth, on top of the failing request: 8MiB is
+    /// 2048 pages, far more per-link keys than any node holds, so in
+    /// practice this runs once for the lifetime of the process.
+    const HEADROOM: usize = 8 * 1024 * 1024;
+    /// Ceiling on CUMULATIVE growth across all calls.
+    const MAX_TOTAL: usize = 64 * 1024 * 1024;
+
+    // Must be read before any other Win32 call: `sodium_mlock` maps
+    // straight onto `VirtualLock`, so the thread's last error is still
+    // the one the failed lock set.
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(ERROR_WORKING_SET_QUOTA) | Some(ERROR_NOT_ENOUGH_QUOTA) => {}
+        _ => return false,
+    }
+
+    /// Bytes of growth already requested. Serialises concurrent growth so
+    /// two threads cannot both read the same working-set size and have
+    /// one of the two increments silently lost.
+    static GRANTED: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
+    // A poisoned mutex means another thread panicked mid-growth; the
+    // counter is still a plain integer with no broken invariant, so
+    // recover rather than propagate (a panic here would abort the host).
+    let mut granted = match GRANTED.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    let step = len.saturating_add(HEADROOM);
+    let total = granted.saturating_add(step);
+    if total > MAX_TOTAL {
+        return false;
+    }
+
+    let mut minimum: usize = 0;
+    let mut maximum: usize = 0;
+    // SAFETY: both out-pointers address live, aligned `usize`s owned by
+    // this frame, and the pseudo handle is always valid.
+    let queried = unsafe {
+        ffi::GetProcessWorkingSetSize(ffi::GetCurrentProcess(), &mut minimum, &mut maximum)
+    };
+    if queried == 0 {
+        return false;
+    }
+    let new_minimum = minimum.saturating_add(step);
+    // The maximum must never sit below the minimum, or the call is
+    // rejected outright.
+    let new_maximum = maximum.saturating_add(step).max(new_minimum);
+    // SAFETY: the pseudo handle is always valid and both sizes are plain
+    // by-value integers.
+    if unsafe { ffi::SetProcessWorkingSetSize(ffi::GetCurrentProcess(), new_minimum, new_maximum) }
+        == 0
+    {
+        return false;
+    }
+
+    *granted = total;
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -824,14 +959,32 @@ impl Drop for GuardedAllocation {
 /// no equivalent; core-dump suppression there is `disable_core_dumps`,
 /// item15b). Failure (typically RLIMIT_MEMLOCK) is reported, never
 /// panicked on; the caller decides policy.
+///
+/// On Windows the budget is not an rlimit but the process minimum working
+/// set (200KB by default — about 48 locked pages for the whole process,
+/// one per guarded key), so a quota refusal there is retried ONCE after
+/// [`grow_locked_page_budget`] raises that budget. A lock that still
+/// fails, or fails for any other reason, is reported unchanged: locking
+/// is never downgraded to best-effort, because the pages staying out of
+/// swap is the guarantee the keystore is built on.
 pub fn mlock(buf: &mut [u8]) -> Result<(), SodiumError> {
     if buf.is_empty() {
         return Ok(());
     }
-    match unsafe { ffi::sodium_mlock(buf.as_mut_ptr() as *mut c_void, buf.len()) } {
-        0 => Ok(()),
-        _ => Err(SodiumError::MlockFailed),
+    if try_mlock(buf) {
+        return Ok(());
     }
+    #[cfg(windows)]
+    if grow_locked_page_budget(buf.len()) && try_mlock(buf) {
+        return Ok(());
+    }
+    Err(SodiumError::MlockFailed)
+}
+
+/// One `sodium_mlock` attempt: true on success. Split out so the Windows
+/// retry above locks the same region through exactly the same call.
+fn try_mlock(buf: &mut [u8]) -> bool {
+    unsafe { ffi::sodium_mlock(buf.as_mut_ptr() as *mut c_void, buf.len()) == 0 }
 }
 
 /// Zero `buf` and then unlock its pages (libsodium's erase-then-unlock
@@ -1108,6 +1261,31 @@ mod tests {
         assert!(g.as_slice().iter().all(|&b| b == 0));
         mlock(&mut []).expect("empty mlock is a no-op");
         munlock(&mut []).expect("empty munlock is a no-op");
+    }
+
+    /// Windows-only regression pin: `VirtualLock` draws from the process
+    /// MINIMUM WORKING SET, 200KB (about 48 pages) by default, and every
+    /// guarded key costs a page — so a node with a few dozen live per-link
+    /// keys used to hit `ERROR_WORKING_SET_QUOTA` and report `MlockFailed`
+    /// even though nothing was wrong with the key or the allocation. This
+    /// holds 128 key-sized guarded regions locked AT ONCE, comfortably past
+    /// the default quota, which fails without the working-set growth in
+    /// `mlock`. Not run on Unix: there the budget is RLIMIT_MEMLOCK, which
+    /// is as low as 64KiB in some containers, so the same assertion would
+    /// pin an environment limit rather than this crate's behaviour.
+    #[cfg(windows)]
+    #[test]
+    fn many_locked_keys_outlast_the_default_windows_quota() {
+        init().expect("init");
+        let mut held = Vec::new();
+        for i in 0..128 {
+            let mut g = GuardedAllocation::new(KEYBYTES).expect("alloc");
+            mlock(g.as_mut_slice()).unwrap_or_else(|e| panic!("mlock #{i}: {e:?}"));
+            held.push(g);
+        }
+        for g in held.iter_mut() {
+            munlock(g.as_mut_slice()).expect("munlock");
+        }
     }
 
     #[test]

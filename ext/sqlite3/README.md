@@ -44,6 +44,10 @@ will scatter `BEGIN`, the work, and `COMMIT` across handles and commit nothing.
 
 ### Driver-specific facts
 
+- **Booleans are bound as `sqlite3_bind_int`.** SQLite has no boolean type, so a
+  boolean insert stores 1/0 and the read-back returns an integer, not a Lua
+  boolean. This is the driver's intentional behaviour — there is no
+  boolean-distinguishing column type to read back against.
 - **Pass `"IMMEDIATE"` for anything that writes.** The third argument is the
   locking mode. SQLite's default `DEFERRED` takes no lock until the first
   statement, so another writer can grab the write lock first and your `UPDATE`

@@ -142,6 +142,22 @@ jobs:
       shell: pwsh
       run: pwsh contributing/deps/windows.ps1
 
+    # item23: extract the version from the tag (strip leading v) and inject
+    # it into the build. On non-tag builds this is a no-op and xmake.lua
+    # falls back to the 0.0.0-dev sentinel.
+    # shell: bash is required — this job also runs on Windows, where the
+    # default shell is pwsh and the [[ ... =~ ... ]] test is a parse error.
+    - name: Inject version from tag
+      shell: bash
+      run: |
+        TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}"
+        if [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+          echo "LUNET_VERSION=${BASH_REMATCH[1]}" >> "$GITHUB_ENV"
+          echo "Injected version: ${BASH_REMATCH[1]} (from tag $TAG)"
+        else
+          echo "No version tag ($TAG); using sentinel default"
+        fi
+
     - name: Configure (Unix)
       if: runner.os != 'Windows'
       run: xmake f -m release -y
@@ -163,7 +179,6 @@ jobs:
         xmake build lunet-static
         xmake build sdk-api-test
         xmake build lunet-sqlite3
-        xmake build lunet-paxe
         xmake build lunet-httpc
         xmake build lunet-postgres
         xmake build lunet-mysql
@@ -176,7 +191,6 @@ jobs:
         xmake build lunet-static
         xmake build sdk-api-test
         xmake build lunet-sqlite3
-        xmake build lunet-paxe
         xmake build lunet-httpc
         xmake build lunet-postgres
         xmake build lunet-mysql
@@ -218,6 +232,52 @@ jobs:
         cargo build --release --manifest-path ext/lnt_shared/Cargo.toml
         cargo build --release --manifest-path ext/jsonic/Cargo.toml
 
+    # On Linux, sodium-src.sh installs a source-built libsodium (1.0.22)
+    # to /tmp/libsodium so the PAXE cdylib gets AES-256-GCM on ARM64
+    # (libsodium <1.0.20 lacks ARM Crypto Extensions support, and 1.0.21
+    # does not compile on aarch64 with GCC). macOS gets
+    # Homebrew 1.0.22; Windows gets vcpkg's current version. The env var
+    # is build.rs's priority-1 path (see ext/paxe/build.rs:70).
+    - name: Set PAXE libsodium path (Linux)
+      if: runner.os == 'Linux'
+      run: echo "PAXE_SODIUM_LIB_DIR=/tmp/libsodium/lib" >> "$GITHUB_ENV"
+
+    # PAXE Rust scaffold (ext/paxe): zero-dependency cdylib. The
+    # three-platform claim is tested here, not asserted — this step runs on
+    # Windows too, unlike the ext modules above. Cargo is preinstalled on
+    # the GH runners; ext/paxe/rust-toolchain.toml pins the toolchain and
+    # rustup auto-installs the pinned version on first use. Cargo must run
+    # with ext/paxe as the working directory: rustup resolves
+    # rust-toolchain.toml from the cwd, not from --manifest-path.
+    - name: Build PAXE Rust crate
+      working-directory: ext/paxe
+      run: cargo build --release
+
+    # The crate's test suite (including the known-answer vectors, the primary
+    # defence against a wrong wire format) runs here — after the toolchain and
+    # dependencies are in place, before the artefact is verified — so a test
+    # failure stops the job before a bad cdylib is packaged. Same
+    # working-directory requirement as the build step above (rustup resolves
+    # rust-toolchain.toml from the cwd).
+    - name: Test PAXE Rust crate
+      working-directory: ext/paxe
+      run: cargo test
+
+    # Windows cdylib naming differs from Unix (.dll, no "lib" prefix), so
+    # confirm the artefact under the expected per-platform name rather than
+    # assuming it.
+    - name: Verify PAXE cdylib artefact
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ runner.os }}" in
+          Windows) ART=ext/paxe/target/release/lunet_paxe.dll ;;
+          macOS)   ART=ext/paxe/target/release/liblunet_paxe.dylib ;;
+          *)       ART=ext/paxe/target/release/liblunet_paxe.so ;;
+        esac
+        if [ ! -f "$ART" ]; then echo "missing artefact: $ART" >&2; exit 1; fi
+        echo "PAXE cdylib OK: $ART"
+
     - name: Examples compile check (Unix)
       if: runner.os != 'Windows'
       run: |
@@ -245,37 +305,6 @@ jobs:
         $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
         if (-not $lunet) { throw "lunet-run.exe not found" }
         & $lunet.FullName examples/03_db_sqlite3.lua
-
-    - name: PAXE example smoke (Unix)
-      if: runner.os != 'Windows'
-      run: |
-        set -euo pipefail
-        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
-        # AES-256-GCM requires hardware crypto extensions (AES-NI on x86,
-        # ARMv8 CE on arm64). Check availability before running the example.
-        cat > /tmp/check_aes.lua <<'LUA'
-        local ok, err = pcall(function()
-          local paxe = require("lunet.paxe")
-          local init_ok = paxe.init()
-          print(init_ok and "AES_SUPPORTED" or "AES_UNSUPPORTED")
-        end)
-        if not ok then print("AES_UNSUPPORTED") end
-        LUA
-        RESULT=$("$LUNET_BIN" /tmp/check_aes.lua)
-        echo "AES check: $RESULT"
-        if echo "$RESULT" | grep -q "AES_SUPPORTED"; then
-          "$LUNET_BIN" examples/06_paxe_encryption.lua
-        else
-          echo "SKIP: AES-256-GCM not available on this hardware"
-        fi
-
-    - name: PAXE example smoke (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
-        if (-not $lunet) { throw "lunet-run.exe not found" }
-        & $lunet.FullName examples/06_paxe_encryption.lua
 
     - name: Package release archive (Linux)
       if: matrix.platform == 'linux'
@@ -774,6 +803,190 @@ jobs:
       run: xmake lint
     - name: xmake check
       run: xmake check
+
+  # MySQL driver integration test — Linux-only, release builds only.
+  #
+  # This job validates the MySQL driver against a live database server. It runs
+  # only for release builds (version tags or manual dispatch with a version tag
+  # ref), not on every push or pull request. The reason is cost: pulling a MySQL
+  # image and waiting for it to become healthy adds meaningful wall-clock time
+  # to the most frequently executed job in the repository, on every single run,
+  # for a driver that most changes do not touch. Branch protection already
+  # requires `build` across all three platforms with `strict` set, so slowing it
+  # slows every merge.
+  #
+  # The consequence to accept deliberately: driver defects will be caught at tag
+  # time rather than at pull-request time. A green pull request must not be read
+  # as driver validation — that happens only at release time.
+  #
+  # This job is deliberately NOT added to the required status checks on main,
+  # for the same reason `publish-release` is excluded: a check that is skipped
+  # on non-tag pushes, if required, deadlocks every merge (documented in
+  # AGENTS.md).
+  #
+  # Server image: MySQL 8.4 (LTS). MariaDB presents the same client API but has
+  # differed in client header details (see item19 is_null fix); testing against
+  # MySQL does not validate MariaDB, and vice versa. MySQL 8.4 is chosen as the
+  # primary target.
+  mysql-integration:
+    name: MySQL integration (release builds only)
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -P 3306 -u root -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      LUNET_MYSQL_HOST: 127.0.0.1
+      LUNET_MYSQL_PORT: 3306
+      LUNET_MYSQL_USER: root
+      LUNET_MYSQL_PASSWORD: root
+      LUNET_MYSQL_DATABASE: test
+      LUNET_DB_REQUIRED: "1"
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
+
+    - name: Install xmake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: "3.0.8"
+
+    - name: Install Dependencies
+      run: bash contributing/deps/debian.sh --ci
+
+    - name: Configure
+      run: xmake f -m release -y
+
+    - name: Build MySQL driver
+      run: |
+        xmake build lunet-bin
+        xmake build lunet-mysql
+        if [ ! -f "$(find build -type f -name 'mysql.so' | head -n 1)" ]; then
+          echo "ERROR: lunet-mysql driver module not found after build" >&2
+          exit 1
+        fi
+
+    # No host-side readiness probe. The service container's health check
+    # (mysqladmin ping inside the container) already guarantees that MySQL
+    # is accepting connections before any step executes; the smoke test
+    # step below additionally verifies host→container reachability through
+    # the published port. An extra host-side probe would require declaring
+    # mysql-client as a dependency (item26; it is not installed by
+    # debian.sh) for a check the health command already performs.
+    - name: Record MySQL client library
+      run: |
+        echo "MySQL client library resolution:"
+        dpkg -l | grep -E 'libmysqlclient|libmariadb' || echo "(none matched)"
+
+
+    - name: Run MySQL smoke tests
+      run: |
+        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
+        if [ -z "$LUNET_BIN" ]; then
+          echo "ERROR: lunet-run not found" >&2
+          exit 1
+        fi
+        echo "Running test/smoke_mysql.lua (item17 parameterised, item18 mismatch, item19 NULL, item19a metadata, item19e boolean)..."
+        "$LUNET_BIN" test/smoke_mysql.lua
+
+  # Postgres driver integration test — Linux-only, release builds only.
+  #
+  # Same rationale as mysql-integration: cost of pulling a Postgres image and
+  # waiting for readiness on every push/PR is not justified for a driver most
+  # changes do not touch. Driver validation happens at tag time, not PR time.
+  #
+  # This job is deliberately NOT added to the required status checks on main,
+  # for the same reason publish-release and mysql-integration are excluded: a
+  # check that is skipped on non-tag pushes, if required, deadlocks every merge
+  # (documented in AGENTS.md).
+  #
+  # Server image: PostgreSQL 16 (current stable). The Postgres driver uses
+  # libpq, which is compatible with both PostgreSQL and compatible servers
+  # (CockroachDB, etc.), but testing against PostgreSQL does not validate
+  # those alternatives.
+  #
+  # Postgres readiness differs from MySQL's: the server accepts connections
+  # briefly during initialisation before the target database exists. The probe
+  # must confirm the actual target database is connectable, not merely that a
+  # server is listening.
+  postgres-integration:
+    name: Postgres integration (release builds only)
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      LUNET_POSTGRES_HOST: 127.0.0.1
+      LUNET_POSTGRES_PORT: 5432
+      LUNET_POSTGRES_USER: postgres
+      LUNET_POSTGRES_PASSWORD: postgres
+      LUNET_POSTGRES_DATABASE: test
+      LUNET_DB_REQUIRED: "1"
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
+
+    - name: Install xmake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: "3.0.8"
+
+    - name: Install Dependencies
+      run: bash contributing/deps/debian.sh --ci
+
+    - name: Configure
+      run: xmake f -m release -y
+
+    - name: Build Postgres driver
+      run: |
+        xmake build lunet-bin
+        xmake build lunet-postgres
+        if [ ! -f "$(find build -type f -name 'postgres.so' | head -n 1)" ]; then
+          echo "ERROR: lunet-postgres driver module not found after build" >&2
+          exit 1
+        fi
+
+    # No host-side readiness probe: same rationale as mysql-integration
+    # (the container health check already guarantees readiness, and the
+    # smoke test step verifies host→container reachability). An extra
+    # host-side probe would require declaring postgresql-client as a
+    # dependency (item26; it is not installed by debian.sh).
+
+    - name: Run Postgres smoke tests
+      run: |
+        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
+        if [ -z "$LUNET_BIN" ]; then
+          echo "ERROR: lunet-run not found" >&2
+          exit 1
+        fi
+        echo "Running test/smoke_postgres.lua (parameterised queries with \$n placeholders, NULL, boolean item19e, mixed types)..."
+        "$LUNET_BIN" test/smoke_postgres.lua
 
   publish-release:
     name: Publish release

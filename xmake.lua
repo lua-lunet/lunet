@@ -5,7 +5,20 @@
 -- The include/lunet_lua.h header enforces this at compile time.
 
 set_project("lunet")
-set_version("0.2.0")
+
+-- Version is derived, not maintained by hand. CI release builds extract it
+-- from the tag ref (LUNET_VERSION env var). Local builds default to a
+-- sentinel that is never mistaken for a real release number.
+-- item23: a hard-coded literal WILL drift (this one was four releases stale).
+local _version = os.getenv("LUNET_VERSION")
+if _version and _version ~= "" then
+    -- CI passes "0.7.0" (tag minus leading v)
+    set_version(_version)
+else
+    -- Sentinel for non-release builds. Not a real version — deliberately
+    -- unreachable from any tag so a mismatch is always visible.
+    set_version("0.0.0-dev")
+end
 set_languages("c99")
 
 add_rules("mode.debug", "mode.release")
@@ -481,6 +494,15 @@ target("lunet-mysql")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
     add_defines("LUNET_HAS_DB", "LUNET_DB_MYSQL")
+
+    -- item19: the MYSQL_BIND.is_null type confusion was caught by this
+    -- warning class; make the next instance fail the build. clang/gcc only:
+    -- MSVC's equivalent (C4133) fires on different constructs and the
+    -- Windows/vcpkg build cannot be verified from this machine. GCC >= 14
+    -- already treats this diagnostic as an error by default.
+    if not is_plat("windows") then
+        add_cflags("-Werror=incompatible-pointer-types", {force = true})
+    end
     
     if is_plat("macosx") then
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
@@ -563,58 +585,6 @@ target("lunet-postgres")
     end
 target_end()
 
--- PAXE Packet Encryption: require("lunet.paxe")
--- NOTE: PAXE requires libsodium and is only for secure peer-to-peer protocols
--- where the application can handle encryption/decryption details.
--- Depends on: libsodium (libsodium.so/libsodium.dylib/libsodium.dll)
--- Optional via: xmake build lunet-paxe
-target("lunet-paxe")
-    set_default(false)  -- Only build when explicitly requested
-    set_kind("shared")
-    add_rules("lunet.c_safety_lint")
-    set_prefixname("")
-    set_basename("paxe")  -- Output: lunet/paxe.so
-    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
-    if is_plat("windows") then
-        set_extension(".dll")
-    else
-        set_extension(".so")
-    end
-
-    add_files(core_sources)
-    add_files("src/paxe.c")
-    add_includedirs("include", {public = true})
-
-    -- CRITICAL: Fail fast if libsodium is not available
-    add_packages("luajit", "libuv", "zlib", {public = true})
-    add_packages("sodium")  -- Will fail at config time if not found (no optional = true)
-    lunet_apply_asan_flags("shared")
-    lunet_apply_easy_memory()
-
-    add_defines("LUNET_PAXE")
-
-    if is_plat("macosx") then
-        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
-    end
-    if is_plat("linux") then
-        add_defines("_GNU_SOURCE")
-        add_cflags("-pthread")
-        add_ldflags("-pthread")
-        add_syslinks("pthread", "dl", "m")
-    end
-    if is_plat("windows") then
-        add_cflags("/TC")
-        add_defines("LUNET_BUILDING_DLL")
-        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
-    end
-    if has_config("lunet_trace") then
-        add_defines("LUNET_TRACE")
-    end
-    if has_config("lunet_verbose_trace") then
-        add_defines("LUNET_TRACE_VERBOSE")
-    end
-target_end()
-
 -- HTTPS client module: require("lunet.httpc")
 -- Optional via: xmake build lunet-httpc
 target("lunet-httpc")
@@ -667,6 +637,17 @@ target_end()
 
 local function lunet_trim(s)
     return (s or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+-- Same truthiness semantics as test/db_smoke_gate.lua: unset, empty, "0",
+-- "false", "no" and "off" (any case) are false; anything else is true.
+local function lunet_env_truthy(name)
+    local v = os.getenv(name)
+    if not v then
+        return false
+    end
+    v = v:lower()
+    return v ~= "" and v ~= "0" and v ~= "false" and v ~= "no" and v ~= "off"
 end
 
 local function lunet_runner_path(mode)
@@ -902,9 +883,16 @@ task("smoke")
         local runner = lunet_runner_path("release")
         os.execv(runner, {"test/smoke_sqlite3.lua"})
 
+        -- LUNET_DB_REQUIRED: in a release CI run a missing driver module is a
+        -- build failure, not a reason to do less work (mirrors the strictness
+        -- gate in test/db_smoke_gate.lua).
+        local db_required = lunet_env_truthy("LUNET_DB_REQUIRED")
+
         local mysql_modules = os.files("build/**/release/lunet/mysql.*")
         if #mysql_modules > 0 then
             os.execv(runner, {"test/smoke_mysql.lua"})
+        elseif db_required then
+            raise("[smoke] FAIL mysql: driver module not built (LUNET_DB_REQUIRED is set)")
         else
             print("[smoke] skip mysql: driver module not built")
         end
@@ -912,6 +900,8 @@ task("smoke")
         local postgres_modules = os.files("build/**/release/lunet/postgres.*")
         if #postgres_modules > 0 then
             os.execv(runner, {"test/smoke_postgres.lua"})
+        elseif db_required then
+            raise("[smoke] FAIL postgres: driver module not built (LUNET_DB_REQUIRED is set)")
         else
             print("[smoke] skip postgres: driver module not built")
         end
@@ -1129,5 +1119,45 @@ task("jsonic-smoke")
         os.exec("xmake build-release")
         local runner = lunet_runner_path("release")
         os.execv(runner, {"test/smoke_jsonic.lua"})
+    end)
+task_end()
+
+-- =============================================================================
+-- paxe extension (Rust, optional) - PAXE datagram encryption via LuaJIT FFI
+-- =============================================================================
+-- Build:   xmake build-paxe
+-- Zero-dependency cdylib living in ext/paxe/, loaded at runtime by
+-- lunet.paxe via LuaJIT FFI. Not linked into lunet-run. The toolchain is
+-- pinned by ext/paxe/rust-toolchain.toml, so cargo must run with the crate
+-- dir as cwd (rustup resolves the pin from cwd, not --manifest-path).
+
+task("build-paxe")
+    set_menu {
+        usage = "xmake build-paxe",
+        description = "Build the paxe Rust extension (ext/paxe)"
+    }
+    on_run(function ()
+        local crate_dir = path.join(os.scriptdir(), "ext", "paxe")
+        print("[paxe] cargo build --release ...")
+        os.execv("cargo", {"build", "--release"}, {curdir = crate_dir})
+        print("[paxe] built: " .. path.join(crate_dir, "target", "release"))
+    end)
+task_end()
+
+task("test-paxe")
+    set_menu {
+        usage = "xmake test-paxe",
+        description = "Run the paxe Rust test suite (ext/paxe), debug and release profiles"
+    }
+    on_run(function ()
+        local crate_dir = path.join(os.scriptdir(), "ext", "paxe")
+        -- Both profiles run: panic = "abort" changes the release profile, so
+        -- debug-passing tests are not proof the release profile passes.
+        -- os.execv raises on non-zero exit, failing the task on any test failure.
+        print("[paxe] cargo test ...")
+        os.execv("cargo", {"test"}, {curdir = crate_dir})
+        print("[paxe] cargo test --release ...")
+        os.execv("cargo", {"test", "--release"}, {curdir = crate_dir})
+        print("[paxe] tests passed (debug + release)")
     end)
 task_end()

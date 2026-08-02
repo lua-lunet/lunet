@@ -11,7 +11,7 @@ SQL。本项目有意不提供 `db.escape`。
 | `open(config)` | `host`、`port`、`user`、`password`、`database` |
 | `close(conn)` | |
 | `query(conn, sql, ...)` | 返回行表数组 |
-| `exec(conn, sql, ...)` | 返回 `{ affected_rows, last_insert_id }` |
+| `exec(conn, sql, ...)` | 返回 `{ affected_rows }` |
 | `query_params` / `exec_params` | 与上述行为一致 |
 
 ## 事务

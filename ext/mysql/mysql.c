@@ -20,6 +20,18 @@
 #include "lunet_mem.h"
 #include "uv.h"
 
+/* The pointee type of MYSQL_BIND.is_null comes from the client header and
+   differs between the supported variants: MySQL 8.0+ (including the vcpkg
+   libmysql used on Windows) removed my_bool and declares it `bool *`, while
+   MariaDB Connector/C and MySQL 5.x declare it `my_bool *` (char). Take the
+   indicator element type from the header so the result binding below is
+   type-correct against whichever client library this is compiled with. */
+#if !defined(MARIADB_BASE_VERSION) && defined(MYSQL_VERSION_ID) && (MYSQL_VERSION_ID >= 80000)
+typedef bool lunet_mysql_null_indicator_t;
+#else
+typedef my_bool lunet_mysql_null_indicator_t;
+#endif
+
 #define LUNET_MYSQL_CONN_MT "lunet.mysql.conn"
 
 static int g_mysql_library_initialized = 0;
@@ -53,6 +65,14 @@ static char* lunet_strdup_local(const char* s) {
   char* out = lunet_alloc(len + 1);
   if (!out) return NULL;
   memcpy(out, s, len + 1);
+  return out;
+}
+
+static char* lunet_memdup_local(const char* s, size_t len) {
+  char* out = lunet_alloc(len + 1);
+  if (!out) return NULL;
+  memcpy(out, s, len);
+  out[len] = '\0';
   return out;
 }
 
@@ -182,7 +202,8 @@ typedef enum {
     PARAM_TYPE_NIL,
     PARAM_TYPE_INT,
     PARAM_TYPE_DOUBLE,
-    PARAM_TYPE_TEXT
+    PARAM_TYPE_TEXT,
+    PARAM_TYPE_BOOL
 } param_type_t;
 
 typedef struct {
@@ -190,6 +211,7 @@ typedef struct {
     union {
         long long i;
         double d;
+        unsigned char b;
         struct {
             char* data;
             size_t len;
@@ -239,8 +261,8 @@ static param_t* collect_params(lua_State* L, int start, int* nparams) {
                 break;
             }
             case LUA_TBOOLEAN:
-                params[i].type = PARAM_TYPE_INT;
-                params[i].value.i = lua_toboolean(L, idx);
+                params[i].type = PARAM_TYPE_BOOL;
+                params[i].value.b = lua_toboolean(L, idx) ? 1 : 0;
                 break;
             case LUA_TSTRING: {
                 size_t len;
@@ -304,6 +326,11 @@ static int bind_params(MYSQL_STMT* stmt, MYSQL_BIND* bind, param_t* params, int 
                 bind[i].buffer_type = MYSQL_TYPE_STRING;
                 bind[i].buffer = (void*)params[i].value.s.data;
                 bind[i].buffer_length = params[i].value.s.len;
+                break;
+            case PARAM_TYPE_BOOL:
+                bind[i].buffer_type = MYSQL_TYPE_TINY;
+                bind[i].buffer = (void*)&params[i].value.b;
+                bind[i].is_unsigned = 1;
                 break;
             default:
                 snprintf(err, errsize, "unknown parameter type");
@@ -411,6 +438,7 @@ typedef struct {
   char** col_names;
   int* col_types;
   char*** rows;
+  size_t** row_lens;
   int nrows;
   int ncols;
   char err[256];
@@ -455,34 +483,8 @@ static void db_query_work_cb(uv_work_t* req) {
     return;
   }
 
-  if (ctx->nparams > 0) {
-    MYSQL_BIND* bind = lunet_alloc(sizeof(MYSQL_BIND) * ctx->nparams);
-    if (!bind) {
-      snprintf(ctx->err, sizeof(ctx->err), "out of memory");
-      mysql_stmt_close(stmt);
-      mysql_thread_end();
-      uv_mutex_unlock(&ctx->wrapper->mutex);
-      return;
-    }
-    
-    if (bind_params(stmt, bind, ctx->params, ctx->nparams, ctx->err, sizeof(ctx->err))) {
-       lunet_free_nonnull(bind);
-       mysql_stmt_close(stmt);
-       mysql_thread_end();
-       uv_mutex_unlock(&ctx->wrapper->mutex);
-       return;
-    }
-    lunet_free_nonnull(bind); // bind_params calls mysql_stmt_bind_param which copies the structures? No, it uses the array. 
-    // Wait, mysql_stmt_bind_param documentation says "The array of MYSQL_BIND structures must remain valid until the statement is executed."
-    // But we are about to execute it.
-    // However, if we free 'bind' here, and then call mysql_stmt_execute, is it safe?
-    // mysql_stmt_bind_param documentation says: "The bind argument is an array of MYSQL_BIND structures. The library uses the information in this array to bind the buffers... "
-    // It usually doesn't copy the array, it uses the pointer. 
-    // BUT we are in the same function scope.
-    // Wait, I should free it AFTER execution.
-  }
-  
-  // Re-allocating bind for clarity and safety
+  /* The bind array must stay alive until mysql_stmt_execute has run:
+     mysql_stmt_bind_param stores the pointer, it does not copy. */
   MYSQL_BIND* bind = NULL;
   if (ctx->nparams > 0) {
       bind = lunet_alloc(sizeof(MYSQL_BIND) * ctx->nparams);
@@ -511,7 +513,7 @@ static void db_query_work_cb(uv_work_t* req) {
     return;
   }
   
-  if (bind) lunet_free_nonnull(bind); // Now we can free the bind array
+  if (bind) lunet_free_nonnull(bind);
 
   // Store result to get metadata about fields and buffer everything
   if (mysql_stmt_store_result(stmt)) {
@@ -527,8 +529,8 @@ static void db_query_work_cb(uv_work_t* req) {
       // No result set (e.g. UPDATE/INSERT)
       ctx->ncols = 0;
       ctx->nrows = 0;
-      // Should we check if it was supposed to return result? 
-      // mysql_stmt_field_count(stmt) would tell us.
+      /* A non-zero field count means metadata was expected, so its absence
+         is a real error rather than a statement with no result set. */
       if (mysql_stmt_field_count(stmt) > 0) {
           snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_result_metadata failed: %s", mysql_stmt_error(stmt));
       }
@@ -544,8 +546,9 @@ static void db_query_work_cb(uv_work_t* req) {
   ctx->col_names = lunet_alloc(sizeof(char*) * ctx->ncols);
   ctx->col_types = lunet_alloc(sizeof(int) * ctx->ncols);
   MYSQL_BIND* result_bind = lunet_alloc(sizeof(MYSQL_BIND) * ctx->ncols);
-  // Use char for is_null to match my_bool on older MySQL/MariaDB (char vs bool)
-  char* is_null = lunet_alloc(sizeof(char) * ctx->ncols);
+  // Element type matches the client header's MYSQL_BIND.is_null pointee
+  // (bool on MySQL 8.0+/vcpkg, my_bool==char on MariaDB/MySQL 5.x).
+  lunet_mysql_null_indicator_t* is_null = lunet_alloc(sizeof(lunet_mysql_null_indicator_t) * ctx->ncols);
   unsigned long* length = lunet_alloc(sizeof(unsigned long) * ctx->ncols);
   
   if (!ctx->col_names || !ctx->col_types || !result_bind || !is_null || !length) {
@@ -623,37 +626,53 @@ static void db_query_work_cb(uv_work_t* req) {
   // Fetch rows
   int capacity = 16;
   ctx->rows = lunet_alloc(sizeof(char**) * capacity);
-  if (!ctx->rows) {
+  ctx->row_lens = lunet_alloc(sizeof(size_t*) * capacity);
+  if (!ctx->rows || !ctx->row_lens) {
       // cleanup ... (omitted for brevity, assume critical failure)
       // Just set error and return, memory leak in edge case
       snprintf(ctx->err, sizeof(ctx->err), "out of memory");
   } else {
       ctx->nrows = 0;
       while (mysql_stmt_fetch(stmt) == 0) {
-          if (ctx->nrows >= capacity) {
-              capacity *= 2;
-              char*** new_rows = lunet_realloc(ctx->rows, sizeof(char**) * capacity);
-              if (!new_rows) {
-                  snprintf(ctx->err, sizeof(ctx->err), "out of memory");
-                  break;
-              }
-              ctx->rows = new_rows;
-          }
+           if (ctx->nrows >= capacity) {
+               capacity *= 2;
+               char*** new_rows = lunet_realloc(ctx->rows, sizeof(char**) * capacity);
+               size_t** new_lens = lunet_realloc(ctx->row_lens, sizeof(size_t*) * capacity);
+               if (!new_rows || !new_lens) {
+                   if (new_rows) ctx->rows = new_rows;
+                   if (new_lens) ctx->row_lens = new_lens;
+                   snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+                   break;
+               }
+               ctx->rows = new_rows;
+               ctx->row_lens = new_lens;
+           }
           
-          char** row = lunet_alloc(sizeof(char*) * ctx->ncols);
-          if (!row) {
-             snprintf(ctx->err, sizeof(ctx->err), "out of memory");
-             break;
-          }
-          
-          for (int i = 0; i < ctx->ncols; i++) {
-              if (is_null[i]) {
-                  row[i] = NULL;
-              } else {
-                  row[i] = lunet_strdup_local((char*)result_bind[i].buffer);
-              }
-          }
-          ctx->rows[ctx->nrows++] = row;
+           char** row = lunet_alloc(sizeof(char*) * ctx->ncols);
+           size_t* rowlens = lunet_alloc(sizeof(size_t) * ctx->ncols);
+           if (!row || !rowlens) {
+              if (row) lunet_free_nonnull(row);
+              if (rowlens) lunet_free_nonnull(rowlens);
+              snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+              break;
+           }
+
+           for (int i = 0; i < ctx->ncols; i++) {
+               if (is_null[i]) {
+                   row[i] = NULL;
+                   rowlens[i] = 0;
+               } else {
+                   /* length[i] is the client-reported fetched length; never read
+                      past the allocated buffer, which holds buffer_length-1 bytes. */
+                   size_t avail = result_bind[i].buffer_length - 1;
+                   size_t cell_len = length[i] < avail ? length[i] : avail;
+                   row[i] = lunet_memdup_local((char*)result_bind[i].buffer, cell_len);
+                   rowlens[i] = cell_len;
+               }
+           }
+           ctx->rows[ctx->nrows] = row;
+           ctx->row_lens[ctx->nrows] = rowlens;
+           ctx->nrows++;
       }
   }
 
@@ -720,7 +739,7 @@ static void db_query_after_cb(uv_work_t* req, int status) {
                           lua_pushnumber(co, strtod(ctx->rows[i][j], NULL));
                           break;
                       default:
-                          lua_pushstring(co, ctx->rows[i][j]);
+                          lua_pushlstring(co, ctx->rows[i][j], ctx->row_lens[i][j]);
                           break;
                   }
               }
@@ -745,9 +764,11 @@ cleanup:
               lunet_free_nonnull(ctx->rows[i][j]);
           }
           lunet_free_nonnull(ctx->rows[i]);
+          lunet_free_nonnull(ctx->row_lens[i]);
       }
       lunet_free_nonnull(ctx->rows);
   }
+  if (ctx->row_lens) lunet_free_nonnull(ctx->row_lens);
   if (ctx->col_names) {
       for (int i = 0; i < ctx->ncols; i++) lunet_free_nonnull(ctx->col_names[i]);
       lunet_free_nonnull(ctx->col_names);

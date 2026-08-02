@@ -49,7 +49,7 @@
     the transaction:
       - t.query(sql, ...)      -> rows (array of row tables); raises on error
       - t.query_row(sql, ...)  -> first row or nil; raises on error
-      - t.exec(sql, ...)       -> { affected_rows, last_insert_id }; raises on error
+      - t.exec(sql, ...)       -> { affected_rows }; raises on error
     Use t.exec for INSERT/UPDATE/DELETE: affected_rows is what a
     compare-and-set needs, and t.query does not report it.
 

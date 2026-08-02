@@ -1,248 +1,298 @@
 # PAXE：数据包加密扩展模块
 
-PAXE（Packet Encryption，数据包加密）是 Lunet 的安全数据包加密扩展，专为需要在应用层进行点对点加密/解密的应用而设计。
+PAXE（Packet Encryption，数据包加密）是 Lunet 的安全数据报加密扩展，专为需要在应用层实现经过认证的端到端加密 UDP 流量的集群而设计。
 
-## 架构
+本文档是 PAXE 线路协议的权威规范。实现均依据本文档编写；若本文档与任何旧有描述不一致，以本文档为准。除下文明确记录的分歧之外，PAXE 遵循参考实现（[trex-paxe](https://github.com/trex-paxos/trex-paxos-jvm/blob/main/trex-paxe/README.md)）的线路格式。
+
+## 现状
+
+下文的线路格式、密钥模型、限制与失败语义即是已实现的契约：加密核心（头部/标志编解码器、安全密钥库、标准与 DEK 模式的密封/开启、自动模式选择）与面向 Lua 的 API（`lunet.paxe`，见 [Lua API](#lua-apilunetpaxe)）均已实现并通过测试。
+
+**PAXE 已保护 UDP socket 流量**：`paxe.protect()` 可将单个 `lunet.udp` socket 选入密封与开启，接线位于 Lua 层（`ext/paxe/paxe.lua`），通过拦截 `lunet.udp` 模块表实现——`src/udp.c` 未被改动（见 [UDP socket 保护](#udp-socket-保护)）。保护是按 socket 的；刻意不提供进程级全局的 `set_enabled`/`is_enabled`——早先实现的全局开关曾打印 "enabled" 却什么都没保护，而单一全局标志无法表达同时服务加密集群端口与未加密本地端口的进程。统计计数器与[失败处理](#失败处理)中的失败策略已经实现（`paxe.stats()`、`paxe.set_fail_policy()`），其中包括对受保护 socket 上被丢弃的未加密数据报计数的 `rx_plaintext`。
+
+## 概述
 
 PAXE 是一个**扩展模块**，具有以下特点：
-- 依赖 **libsodium** 进行加密操作
-- 使用 **AES-256-GCM** 进行认证加密
-- 支持标准模式和 DEK（数据加密密钥）模式
-- 执行**原地解密**以减少内存拷贝
-- 提供原生 **Lua 绑定**，易于集成
+
+- 使用 **libsodium** 完成全部加密操作
+- 使用 **AES-256-GCM** 加密负载（认证加密）
+- 支持两种帧模式——**标准模式**与 **DEK（数据加密密钥）模式**——按负载大小自动选择
+- 将每个帧的头部与标志字节作为附加认证数据（AAD）进行认证
+- 使用**每链路（即每无序节点对）一个 32 字节共享密钥**，由带外方式注入
+- 通过**对端节点身份加标志字节中的 5 位密钥纪元**定位密钥
+
+## 线路格式
+
+所有多字节整数字段均为**大端序**。一个帧即一个 UDP 数据报。
+
+### 头部（8 字节）
+
+每个帧以 8 字节头部开始：
+
+| 字节 | 字段 | 大小 | 含义 |
+|------|------|------|------|
+| 0–1 | `fromId` | 2 | 源节点标识符 |
+| 2–3 | `toId` | 2 | 目标节点标识符 |
+| 4–5 | `channel` | 2 | 通道标识符（多路复用） |
+| 6–7 | `length` | 2 | **明文负载长度**（字节） |
+
+`length` 是**明文负载**的长度，而非线路上帧的长度。帧比 `length` 多出该模式的每帧开销（37 或 83 字节）。
+
+### 标志字节（1 字节，偏移 8）
+
+| 位 | 取值 | 含义 |
+|----|------|------|
+| 0 | 0 或 1 | DEK 标志：0 = 标准帧，1 = DEK 帧 |
+| 1 | 必须为 0 | 固定模式位 |
+| 2 | 必须为 1 | 固定模式位 |
+| 3–7 | 0–31 | 5 位密钥纪元 |
+
+接收方必须拒绝任何位 1 被置位或位 2 被清零的帧。这一固定模式的存在，使得全零和全一的垃圾数据只需检查一个字节即可被拒绝——成本低廉、先于任何加密运算，适用于一个会接收来自任何人的、未经请求的数据报的接收路径。
+
+纪元选择用哪个密钥解密帧；参见[密钥管理](#密钥管理)。由于纪元位于认证区间之内（参见[附加认证数据](#附加认证数据-aad)），任何篡改都会导致认证失败。
+
+### 标准帧
+
+当 DEK 标志为 0 时使用（负载小于 64 字节）：
 
 ```
-应用层 (Lua)
-    ↓ require("lunet.paxe")
-PAXE Lua 绑定 (C)
-    ↓
-PAXE 核心 (C)
-    ↓
-libsodium (AES-256-GCM)
+Header(8) ‖ Flags(1) ‖ Nonce(12) ‖ Ciphertext(N) ‖ Tag(16)
 ```
 
-## 构建 PAXE
+| 字节 | 字段 | 大小 |
+|------|------|------|
+| 0–7 | 头部 | 8 |
+| 8 | 标志字节 | 1 |
+| 9–20 | Nonce | 12 |
+| 21–20+N | 密文 | N |
+| 21+N – 帧尾 | 认证标签 | 16 |
 
-### 前置条件
-- libsodium 开发头文件（Linux 上为 `libsodium-dev`，macOS 通过 Homebrew 安装）
-- LuaJIT 和 libuv（标准 Lunet 依赖）
+帧总大小：**N + 37**。每帧开销：**37 字节**。
 
-### 配置与构建
+### DEK 帧
 
-```bash
-# 安装 libsodium (macOS)
-brew install libsodium
+当 DEK 标志为 1 时使用（负载为 64 字节及以上）：
 
-# 安装 libsodium (Linux)
-apt-get install libsodium-dev
-
-# 构建 PAXE 扩展模块
-xmake build lunet-paxe
+```
+Header(8) ‖ Flags(1) ‖ KEK Nonce(12) ‖ Wrapped DEK(32) ‖ DEK Nonce(12) ‖ Length(2) ‖ Ciphertext(N) ‖ Tag(16)
 ```
 
-### 构建产物
-- 发布版：`build/macosx/arm64/release/lunet/paxe.so`
-- 调试版：`build/macosx/arm64/debug/lunet/paxe.so`
+| 字节 | 字段 | 大小 |
+|------|------|------|
+| 0–7 | 头部 | 8 |
+| 8 | 标志字节 | 1 |
+| 9–20 | KEK Nonce | 12 |
+| 21–52 | 封装 DEK | 32 |
+| 53–64 | DEK Nonce | 12 |
+| 65–66 | Length | 2 |
+| 67–66+N | 密文 | N |
+| 67+N – 帧尾 | 认证标签 | 16 |
 
-## 快速失败的依赖检查
+帧总大小：**N + 83**。每帧开销：**83 字节**。
 
-如果 libsodium 不可用，构建会在**配置阶段立即失败**并给出清晰的错误信息：
+位于字节 65–66 的内部 `Length` 字段与头部 `length`（明文负载长度）重复。若两者不一致，接收方必须拒绝该帧。这种重复是冗余的——头部长度已被认证——仅为与参考实现兼容而保留。
 
-```bash
-$ xmake build lunet-paxe
-# ERROR: libsodium package not found
-#   Install via: brew install libsodium (macOS)
-#   Install via: apt-get install libsodium-dev (Linux)
-#   Install via: vcpkg install libsodium (Windows)
-```
+### 附加认证数据（AAD）
 
-## Lua API
+AES-GCM 的附加认证数据为 **9 字节：头部后跟标志字节**（帧的字节 0–8）。
 
-```lua
-local paxe = require("lunet.paxe")
+**与参考实现的有意分歧。** 参考实现将标志字节置于认证区间之外。但标志字节的位 0 决定解析几何——37 字节布局还是 83 字节布局——因此未经认证的标志字节会让攻击者翻转接收方对帧的解释方式：这是一个模式混淆攻击向量。因此 PAXE 对标志字节进行认证。同一区间还认证了密钥纪元，这正是基于纪元的轮换之所以安全的原因。
 
--- 初始化
-local ok, err = paxe.init()          -- 初始化 PAXE + libsodium
-paxe.shutdown()                       -- 清理
+## 模式选择
 
--- 启用/禁用
-paxe.set_enabled(true)                -- 启用加密
-local enabled = paxe.is_enabled()     -- 检查是否启用
+发送方按负载大小选择帧模式：
 
--- 密钥管理（密钥必须恰好为 32 字节）
-local ok, err = paxe.keystore_set(key_id, key_string)
-paxe.keystore_clear()                 -- 安全擦除所有密钥
+| 负载大小 | 模式 |
+|----------|------|
+| 小于 64 字节 | 标准模式 |
+| 64 字节及以上 | DEK 模式 |
 
--- 失败策略："DROP"、"LOG_ONCE" 或 "VERBOSE"
-paxe.set_fail_policy("DROP")
+64 字节即一条 CPU 缓存行。该阈值由协议固定——不是调优旋钮——以确保收发双方始终就布局达成一致。
 
--- 加密（标准模式）
-local ciphertext, err = paxe.encrypt(plaintext, key_id)
+## 密码学
 
--- 解密
-local plaintext, key_id, flags = paxe.try_decrypt(ciphertext)
--- 失败时返回 nil, error_string
+- **负载**：AES-256-GCM，每帧使用经 libsodium 生成的全新随机 12 字节 nonce，认证标签 16 字节。AAD 即上文所述的 9 字节头部加标志字节区间。
+- **DEK 封装**（仅 DEK 模式）：每帧的 32 字节数据加密密钥通过与 ChaCha20 流进行 XOR 完成封装，该流以充当 KEK 的链路密钥为密钥，使用 KEK nonce。流 XOR 没有认证标签，因此**封装在构造上就是不带认证的**。被损坏的封装 DEK 不会产生封装错误；它会产生一个错误的 DEK，而该帧随后会在负载标签校验处失败。因此，损坏表现为负载标签失败，而非封装失败。这是有意为之，审阅者不应将其误读为缺失的检查。
 
--- 统计信息
-local stats = paxe.stats()
--- stats.rx_total, stats.rx_ok, stats.rx_auth_fail 等
+## 密钥管理
 
--- 常量
-paxe.OVERHEAD_STANDARD  -- 36 字节（头部 + 随机数 + 标签）
-paxe.OVERHEAD_DEK       -- 82 字节（DEK 模式开销）
-paxe.VERSION            -- 模块版本字符串
-```
+### 每链路一个密钥
 
-## C API
+密钥为 32 字节共享对称密钥——**每链路一个，即每无序节点对一个**——由运维人员带外注入（例如通过 ssh 下发）。线路上没有密钥协商。
 
-### 初始化
-```c
-int paxe_init(void);                    // 初始化 PAXE + libsodium
-void paxe_shutdown(void);                // 清理
-int paxe_is_enabled(void);               // 检查是否启用
-void paxe_set_enabled(int enabled);      // 启用/禁用
-```
+每链路粒度是本设计赖以成立的安全属性。`fromId` 经过认证（它位于 AAD 之内），但认证只能将 `fromId` 绑定到*持有密钥的人*。若整个集群使用单一密钥，则每个节点都持有同一密钥，任何节点都可以封装一个声称任意 `fromId` 的帧——AAD 将毫无意义。当每个无序节点对持有一个密钥时，第三方节点无法伪造声称 `fromId=A`、发往 `toId=B` 的帧，因为它并不持有 A↔B 密钥。每链路密钥使伪造的 `fromId` 不可能实现，而不仅仅是未经认证。
 
-### 密钥管理
-```c
-int paxe_keystore_set(uint32_t key_id, const uint8_t key[32]);
-int paxe_keystore_clear(void);           // 从内存中擦除密钥
-```
+**SRP v6a 被有意地不予实现。** 参考实现通过 SRP（RFC 5054）握手加 HKDF 建立节点对会话密钥；那套机制的存在是为了避免证书。对于运维人员可以带外注入共享密钥的集群而言，它不值得保留。此处的缺失是一个决定，而非疏漏。
 
-### 数据包操作
-```c
-ssize_t paxe_try_decrypt(uint8_t *buf, size_t len,
-                         uint32_t *out_key_id,
-                         uint8_t *out_flags);
-// 返回值：成功时返回明文长度，失败时返回 -1
-// 原地解密，将明文移动到缓冲区起始位置
-```
+### 密钥定位
 
-### 统计与策略
-```c
-typedef struct {
-    uint64_t rx_total;          // 接收的总数据包数
-    uint64_t rx_ok;             // 成功解密的数据包数
-    uint64_t rx_short;          // 数据包过短
-    uint64_t rx_len_mismatch;   // 长度不匹配
-    uint64_t rx_no_key;         // 未找到密钥
-    uint64_t rx_auth_fail;      // 认证失败
-    uint64_t rx_reserved_nonzero;
-} paxe_stats_t;
+接收方通过**（对端节点 id，纪元）**定位解密密钥：对端即头部中的 `fromId`，纪元即标志字节的位 3–7，本节点自身的 id 在初始化时配置一次。
 
-void paxe_stats_get(paxe_stats_t *out);
-void paxe_set_fail_policy(paxe_fail_policy_t policy);  // DROP, LOG_ONCE, VERBOSE
-```
+### 轮换
 
-## 数据包格式
+放弃 SRP 的同时也放弃了参考实现的隐式轮换机制——在那里，会话会被重新建立，密钥随之自然更替。注入式共享密钥不具备这种性质，这正是 5 位纪元存在的原因：32 个纪元（0–31），使轮换成为一个过程而非一次事件：
 
-### 标准模式 (AES-256-GCM)
-```
-头部 (8) | 随机数 (12) | 密文+标签 (N+16)
-```
+1. 在两个对端上以新纪元安装新密钥；旧纪元保持安装状态。
+2. 将发送方切换到新纪元。
+3. 在没有任何发送方使用旧纪元后将其退役。
 
-### DEK 模式（含数据加密密钥）
-```
-头部 (8) | KEK_随机数 (12) | 加密的DEK (32) | DEK_随机数 (12) | DEK_长度 (2) | 密文+标签 (N+16)
-```
-
-## 示例
-
-请参阅 `examples/` 目录中的可运行代码：
-
-- **`examples/06_paxe_encryption.lua`** - 完整的 API 演练，包含加密/解密往返
-- **`examples/07_paxe_stress.lua`** - 可配置迭代次数、数据包大小和密钥数量的压力测试
-
-### 快速开始
-
-```lua
-local paxe = require("lunet.paxe")
-
--- 初始化
-paxe.init()
-
--- 设置密钥（需要 32 字节）
-paxe.keystore_set(1, string.rep("K", 32))
-
--- 加密
-local ciphertext = paxe.encrypt("Hello, PAXE!", 1)
-
--- 解密
-local plaintext, key_id, flags = paxe.try_decrypt(ciphertext)
-print(plaintext)  -- "Hello, PAXE!"
-
--- 清理
-paxe.keystore_clear()
-paxe.shutdown()
-```
-
-## 测试
-
-### 运行示例
-```bash
-# 运行加密演示
-./build/macosx/arm64/release/lunet-run examples/06_paxe_encryption.lua
-
-# 运行压力测试（默认 1000 次迭代）
-./build/macosx/arm64/release/lunet-run examples/07_paxe_stress.lua
-```
-
-### 压力测试
-```bash
-# 高负载测试
-ITERATIONS=10000 PACKET_SIZE=1500 NUM_KEYS=256 \
-  ./build/macosx/arm64/release/lunet-run examples/07_paxe_stress.lua
-```
-
-### 使用追踪功能
-```bash
-# 使用详细追踪构建
-xmake f -c -y --lunet_trace=y --lunet_verbose_trace=y
-xmake build lunet-paxe
-
-# 运行并通过 stderr 查看日志
-./build/macosx/arm64/debug/lunet-run examples/06_paxe_encryption.lua 2>&1 | grep PAXE
-```
-
-## 性能
-
-基准测试（macOS arm64，Apple Silicon，发布版构建）：
-- 吞吐量：约 400,000 次/秒（加密 + 解密周期）
-- 带宽：约 400 MB/秒（1KB 数据包）
-- 开销：每个数据包 36 字节（标准模式）
-- 硬件 AES-256-GCM 加速
-
-## 安全注意事项
-
-1. **密钥派生**：密钥必须为 32 字节（256 位）。使用 KDF（HKDF、Argon2）从密码派生。
-2. **随机数处理**：PAXE 通过 libsodium 为每个数据包生成随机 12 字节随机数。
-3. **认证**：解密失败的数据包始终被丢弃（防止预言攻击）。
-4. **密钥擦除**：`keystore_clear()` 使用 `sodium_memzero()` 防止密钥被恢复。
-5. **基于策略的日志**：使用 `LOG_ONCE` 在不产生噪音的情况下检测攻击。
-
-## 构建标志
-
-| 标志 | 用途 | 使用场景 |
-|------|------|---------|
-| `LUNET_PAXE` | 启用 PAXE 编译 | 始终（由 xmake 目标设置） |
-| `LUNET_TRACE` | 调试追踪 + 计数器 | 开发/调试 |
-| `LUNET_TRACE_VERBOSE` | 逐事件 stderr 日志 | 详细调试 |
+新旧密钥在整个过程中共存，因此一次滚动重启即可完成整个集群的轮换——无需切换日（flag day），也不丢弃流量。纪元在线路上零成本：位 3–7 在参考实现中是保留且未使用的，PAXE 让它们发挥了作用。
 
 ## 限制
 
-- **单线程**：密钥存储不是线程安全的。如需多线程使用，请加锁保护。
-- **无密钥轮换 API**：通过清除并重新添加密钥来实现轮换。
-- **无压缩**：PAXE 仅提供加密功能。如需压缩请结合其他模块使用。
+最大的 UDP 数据报为 65507 字节。最大明文负载由每帧开销推导得出：
 
-## 未来增强
+| 模式 | 开销 | 最大负载 |
+|------|------|----------|
+| 标准模式 | 37 | 65507 − 37 = **65470 字节** |
+| DEK 模式 | 83 | 65507 − 83 = **65424 字节** |
 
-- [ ] 带版本控制的逐对等端密钥轮换
-- [ ] 硬件 AES 检测 + 回退
-- [ ] ChaCha20-Poly1305 支持（AES-GCM 的替代方案）
-- [ ] Perfetto 追踪集成
+发送方必须以错误拒绝超大负载。绝不允许通过截断长度字段使帧"放得下"：被截断的长度会产生一个对端必然拒绝的帧，而调用方看不到任何错误。早期实现正是这样做的，这是一个调试陷阱——请勿重新引入。
+
+## 失败处理
+
+无法解析、认证或解密某个帧的接收方会**丢弃该帧**。拒绝原因被有意地不返回给调用方，也绝不向发送方发出信号：一个会解释伪造帧*为何*失败的接收方就是一个解密预言机。
+
+丢弃行为由全局失败策略控制，通过 `paxe.set_fail_policy` 选择：
+
+| 策略 | 行为 |
+|------|------|
+| `silent`（默认） | 丢弃；仅计数 |
+| `log_once` | 每个窗口内每类丢弃的第一次向 stderr 记录一行（一条 `[PAXE]` 行），此后静默计数 |
+| `verbose` | 记录每一次丢弃 |
+
+由于拒绝原因绝不到达调用方，**统计计数器是唯一的诊断通道**。它们是进程级、累计的 `u64` 值，在进程存活期间绝不重置——请测量两次快照（`paxe.stats()`）之间的差值，绝不使用绝对值：
+
+| 计数器 | 含义 |
+|--------|------|
+| `rx_total` | 提交给已配置接收方的帧总数（成功开启 + 被丢弃） |
+| `rx_ok` | 成功开启的帧数 |
+| `rx_plaintext` | 丢弃：根本不是发给本节点的 PAXE 帧——不足 9 字节前缀，或头部 `toId` 不是本地 id（受保护 socket 上的明文、异构协议或误投流量）。由 socket 边界上的显式寻址检查捕获（见 [UDP socket 保护](#udp-socket-保护)），绝不依赖标志字节 |
+| `rx_short` | 丢弃：过短无法解析（不足 9 字节前缀，或携带 DEK 位却不足 83 字节 DEK 最小长度） |
+| `rx_bad_flags` | 丢弃：标志字节固定位违例（位 1 被置位或位 2 被清零）——廉价的垃圾过滤器 |
+| `rx_len_mismatch` | 丢弃：声明的明文长度与帧实际大小不一致 |
+| `rx_no_peer` | 丢弃：`fromId` 在**任何**纪元下都没有密钥——**拓扑**问题（该链路从未被预置） |
+| `rx_no_epoch` | 丢弃：`fromId` 已预置但不含该帧的纪元——**轮换**问题（两端对哪个纪元生效意见不一） |
+| `rx_dek_len_mismatch` | 丢弃：DEK 帧冗余的内部 Length 字段与头部长度不一致 |
+| `rx_auth_fail` | 丢弃：AES-GCM 标签校验失败（密钥错误、密文或 AAD 被篡改，或封装 DEK 损坏导致 DEK 错误） |
+| `tx_total` | 成功密封的帧数 |
+| `tx_standard` | `tx_total` 中以标准模式密封的数量（低于 64 字节阈值） |
+| `tx_dek` | `tx_total` 中以 DEK 模式密封的数量（达到或高于阈值）——在自动选择之下，运维人员正是通过这一分裂观察带宽/开销的分布 |
+| `tx_oversize` | 因负载过大而被拒绝的密封次数 |
+
+**不变式：** `rx_total == rx_ok + 全部拒绝原因之和`。提交给已配置接收方的每个帧恰好落入其中一个桶；未来新增的拒绝原因若没有配套计数器，就会打破这个等式并因此被捕获。（有两条路径被刻意排除在统计之外：提交给*未配置*接收方的帧——此时模块根本没有运行 PAXE——以及不可能发生的内部结果，它们不属于线路状况。）未知对端与未知纪元被刻意分为两个计数器：前者意味着配置或拓扑问题，后者意味着轮换出错；若将两者合并，就会丢掉使纪元机制可调试的关键区分。
+
+刻意**不为 ChaCha20 封装设置计数器**：流 XOR 不做认证，也不可能失败——被损坏的封装 DEK 会在负载标签校验处显现，并计入 `rx_auth_fail`。（早期实现曾对封装做错误检查，并把它的"失败"计为认证失败，统计了一个根本不可能发生的状况。）
+
+两条已记录的策略决策：
+
+- **log-once 的重置范围。** log-once 记忆在 `shutdown()` 时重置（重新初始化的模块开启一个新窗口），并在策略被设置为 `log_once` 时重置——重新进入该策略是运维人员"再告诉我一次"的旋钮。攻击者无法重置该记忆（只有本地运维人员可以通过 API 做到），因此在一个窗口内，无论流量多大，每类原因最多记录一次；这种备忘化就是速率限制。计数器本身绝不重置。
+- **拒绝日志行中不含 `fromId` 或纪元。** 拒绝时刻可用的每个字段都由攻击者控制且*未经认证*——这正是该帧被丢弃的原因。记录这些字段会让未经认证的发送方以策略允许的速率向运维日志写入任意模样的对端身份：这是一条欺骗通道，在 `verbose` 下还是一条大流量的欺骗通道。计数器在不承担这种暴露的前提下承载诊断信号——被移动的计数器不会谎报是哪个计数器动了。因此日志行只携带原因，并带有固定的 `[PAXE] ` 前缀，使策略输出在 stderr 上可与 trace 构建的输出区分（测试断言该前缀，绝不断言 stderr 为空，从而不会在构建模式之间反转）。
+
+**与参考实现的有意分歧**：参考实现在认证失败时抛出 `SecurityException`。但对于一个你反正要丢弃的数据报，并不存在可以向其抛出异常的调用方。带策略的丢弃才是 UDP 的正确语义。
+
+## 通道
+
+遵循参考实现：通道 1–99 保留给系统流量，应用通道从 100 开始。通道字段经过认证（位于 AAD 之内）但不被加密。
+
+## 与参考实现的有意分歧
+
+下表所列每处分歧均在相应章节中附有推理说明：
+
+| 方面 | 参考实现 | PAXE（本文档） | 原因 |
+|------|----------|----------------|------|
+| 标志字节 | 位于认证区间之外 | 位于 AAD 之内（9 字节：头部 + 标志字节） | 位 0 决定解析几何；未认证的标志字节是模式混淆攻击向量 |
+| 标志字节位 3–7 | 保留 | 5 位密钥纪元（0–31） | 无需切换日的轮换，替代随 SRP 一同失去的隐式更替 |
+| 密钥建立 | SRP v6a（RFC 5054）+ HKDF | 每链路共享密钥，带外注入 | 运维下发的集群；会话机制不值得保留 |
+| 认证失败 | `SecurityException` | 按全局策略丢弃 | 被丢弃的数据报没有可抛出异常的调用方 |
+
+## 安全注意事项
+
+1. **密钥大小与存储**：密钥必须恰好为 32 字节，属于长期共享秘密。请在静止状态下妥善保护，并以带外方式注入。
+2. **Nonce 处理**：每帧使用经 libsodium 生成的全新随机 12 字节 nonce。
+3. **认证失败**：一律按失败策略丢弃——绝不出错并向调用方或发送方解释失败原因（不产生解密预言机）。
+4. **头部暴露**：头部与标志字节经过认证但不被加密。`fromId`、`toId`、`channel`、`length` 与纪元对被动观察者可见。
+5. **封装 DEK**：构造上不带认证；损坏会在负载标签校验处显现。
+6. **核心转储（按平台分野）**——通过对存活进程执行 abort 并检查崩溃遗留物来验证：已安装的密钥保存在有保护的、`mlock` 的 libsodium 分配中。`mlock` 在所有平台上都使页面免于换出（swap），但核心转储排除则因平台而异：在 Linux 上，libsodium 的 `mlock` 会设置 `MADV_DONTDUMP`，32 字节的受保护密钥在真实的 abort 后内核核心中出现 0 次。在 macOS 上则**没有**这种排除——Darwin 没有 `MADV_DONTDUMP`，`mlock` 不排除任何内容，完整的密钥曾在 abort 后的可转储内存中被恢复出来。因此 `paxe.init()` 默认禁用整个进程的核心转储（`setrlimit(RLIMIT_CORE, 0)`，仅软限制；继承的硬限制保持不变），使内核在任何平台上都不写出核心文件。该 rlimit 是进程级的，但这是合理的，因为加载 PAXE 本身就是选入：宿主只有通过显式 `require("lunet.paxe")` 才会到达 `init`——恰是它开始持有集群密钥的时刻——而从不加载 PAXE 的宿主不受影响。**调试时重新启用**：在启动前于环境中设置 `LUNET_PAXE_ALLOW_CORE_DUMPS=1`，即保留继承的限制（`ulimit -c unlimited`、`lldb -c /cores/...` 照常可用）；绝不要在生产节点上设置它——在 macOS 上，一旦设置，崩溃就会把存活密钥材料写入核心文件。操作系统层面亦可获得同样的抑制作为纵深防御（在服务启动环境中 `ulimit -c 0`）。
+
+## Lua API（`lunet.paxe`）
+
+该模块是一个 Rust cdylib（`ext/paxe`），由加载器 `ext/paxe/paxe.lua` 通过 LuaJIT FFI 加载——与 `lunet.jsonic` 相同的加载模型；可用环境变量 `LUNET_PAXE_LIB` 覆盖库路径。全部加密状态——密钥库，即所有密钥材料——都保存在 FFI 之后的 Rust 库内部；Lua 除在传入密钥的瞬间外绝不持有密钥（见[密钥材料与 Lua VM](#密钥材料与-lua-vm已知限制)）。
+
+### 函数
+
+| 函数 | 返回值 | 含义 |
+|----------|---------|---------|
+| `paxe.version()` | string | crate 版本号。 |
+| `paxe.init()` | `true` \| `nil, message` | 初始化 libsodium 并要求 AES-256-GCM 硬件路径可用。幂等。当宿主无法提供该路径时返回 `nil, message`——PAXE 拒绝运行，绝不替换为其他密码算法。作为其第一个动作，`init` 还会禁用进程的核心转储（`RLIMIT_CORE` 软限制置 0；调试时设置 `LUNET_PAXE_ALLOW_CORE_DUMPS=1` 可保留继承的限制）——见[安全注意事项](#安全注意事项)。 |
+| `paxe.set_local_id(node_id)` | `true` | 配置本节点身份（0–65535）——仅一次。未经 `shutdown()` 再次调用将抛出错误：静默重建密钥库会抹除已安装的密钥。 |
+| `paxe.keystore_set(peer, epoch, key)` | `true` \| `nil, message` | 安装与 `peer`（0–65535）共享的 32 字节密钥，置于 `epoch`（0–31）之下。覆盖已占用的槽位会抹除旧密钥。 |
+| `paxe.keystore_retire(peer, epoch)` | `true` \| `false` \| `nil, message` | 抹除一个 `(peer, epoch)` 槽位。槽位本已为空时返回 `false`（仅作信息，并非错误）。 |
+| `paxe.keystore_clear()` | `true` | 抹除所有已安装的密钥。 |
+| `paxe.seal(payload, to_id, channel)` | `frame` \| `nil, message` | 将 `payload`（字符串）密封给 `to_id` 的 `channel`。`fromId` 取自已配置的本地 id——永远不是参数，因此任何调用者都无法伪造来源。模式按负载大小选择（低于 64 字节为标准模式，64 字节及以上为 DEK 模式）。发送纪元取 `to_id` 下最新安装的纪元（见下文）。`channel` 必须满足 16 位范围，且不得落入保留的系统通道 1–99（应用通道自 100 起；允许通道 0）。 |
+| `paxe.open(frame)` | `payload, from_id, channel, mode` \| `nil, message` | 开启一个接收到的帧。成功时返回：负载、经认证的 `fromId`、通道，以及模式（`"standard"` 或 `"dek"`）。任何失败均返回 `nil` 加同一条不透明消息——见[不透明的 open 失败](#不透明的-open-失败)。 |
+| `paxe.stats()` | table | 进程级累计计数器的快照（见[失败处理](#失败处理)）：`rx_total`、`rx_ok`、`rx_plaintext`、`rx_short`、`rx_bad_flags`、`rx_len_mismatch`、`rx_no_peer`、`rx_no_epoch`、`rx_dek_len_mismatch`、`rx_auth_fail`、`tx_total`、`tx_standard`、`tx_dek`、`tx_oversize`。绝不重置；请测量两次快照之间的差值。 |
+| `paxe.set_fail_policy(name)` | `true` \| `false` | 选择丢弃日志策略：`"silent"`（默认）、`"log_once"`、`"verbose"`——大小写不敏感。其他拼写或非字符串参数返回 `false`。 |
+| `paxe.protect(udpsock, config)` | `true` | 将**一个** `lunet.udp` socket 选入保护：此后的 `udp.send` 在发送前密封，`udp.recv` 在交付前开启（见 [UDP socket 保护](#udp-socket-保护)）。`config.peer`（必选）是该 socket 密封目标的节点 id；`config.channel`（可选，默认 `0`）是密封通道。对非句柄 socket、畸形 config 或模块未配置抛出错误——为未配置的 socket 布防会静默丢弃每个数据报。 |
+| `paxe.unprotect(udpsock)` | `true` | 解除某 socket 的保护。幂等。 |
+| `paxe.is_protected(udpsock)` | `false` \| `true, peer, channel` | 查询 socket 的保护状态及其配置的对端/通道。 |
+| `paxe.shutdown()` | — | 将全部密钥清零并释放，遗忘本地身份。幂等；之后可再次调用 `set_local_id` 重新配置。统计计数器**不**被重置（它们在进程生命周期内累计）；log-once 记忆会被重置。进程正常退出时的密钥抹除**不**依赖此调用：`init` 注册了一个 `atexit` 钩子，即使脚本从未调用 `shutdown()` 也会将密钥库清零。 |
+
+**平台说明 —— Debian trixie arm64。** Debian trixie arm64 发行版的 `libsodium` 软件包在构建时未启用 ARM 加密扩展（crypto-extension）的 AES-256-GCM 路径，因此即使在实现了这些扩展的硬件上，`paxe.init()` 也会报告 AES-256-GCM 不可用。这是 Debian 的打包方式所致，而非 CPU 或 lunet 的缺陷：修复方法是换用一个构建了 ARM CE 路径的 libsodium（从源码构建，或经 Homebrew 安装），而不是改动 lunet。
+
+任何地方都不存在 `key_id`：密钥按 `(对端节点 id, 纪元)` 寻址。也刻意不提供 `set_enabled`/`is_enabled`：保护是按 socket 的，经 `paxe.protect`（见下文），它真正控制行为。
+
+### 错误约定
+
+一种约定，统一适用：
+
+- **参数畸形时抛出 Lua 错误**——这是调用脚本中的缺陷。Lua 类型错误由加载器检查；越界与违反约束的值由 Rust 检查，每条消息都指明约束：节点 id 满足 16 位（0–65535），纪元满足 5 位（0–31），通道满足 16 位并遵守保留的 1–99 范围，密钥必须恰好 32 字节。
+- **操作性失败返回 `nil, message`**——脚本应当处理的情况：未初始化或未配置、AES-256-GCM 不可用、对端未安装密钥、负载超过所选模式的最大值、密钥库已满、安全内存失败。
+
+任何输入都无法使进程崩溃：库以 `panic = "abort"` 构建，Rust panic 会杀死 LuaJIT 宿主进程。因此跨越 FFI 边界的每个值都经过验证（类型在加载器侧，范围与长度在 Rust 侧），每项检查都以返回告终而非 panic。
+
+### 发送纪元即最新安装的纪元
+
+`seal` 不接受纪元参数。这使[轮换](#轮换)成为完全程序化的流程：在新纪元下安装密钥会立即将发送方切换到该纪元，因为对端最新安装（编号最大）的纪元始终就是发送纪元。帧在标志位 3–7 中携带该纪元；接收方按 `(fromId, 线路纪元)` 定位密钥，在整个滚动期间都能开启新旧纪元的流量；随后退役旧纪元时仅抹除该纪元。
+
+### 不透明的 open 失败
+
+`open` 将一切帧级失败——过短、标志约束违例、长度不一致、未知密钥或纪元、认证失败，甚至密钥库未配置——收敛为同一种结果：`nil, "lunet.paxe: frame rejected"`。拒绝原因绝不返回给调用者，也绝不向发送方发出信号：一个解释伪造为何失败的接收方就是解密预言机（见[失败处理](#失败处理)）。带类型的原因在收敛之前、于拒绝点被记录进统计计数器；它们绝不跨越 FFI。
+
+### UDP socket 保护
+
+`paxe.protect(udpsock, config)` 将**一个** socket 选入 PAXE。这是已记录的按 socket 决策：没有进程级的启用标志，也没有 `set_enabled`/`is_enabled`，因为单一全局无法表达同时服务加密集群端口与未加密本地端口的进程——而已删除模块的全局开关曾是一个打印 "enabled" 的空操作。既然按 socket 保护是唯一的机制，便不存在需要交代的优先级问题。`paxe.unprotect` 解除布防，`paxe.is_protected` 查询状态，`udp.close` 也会移除该 socket 的保护项（已释放句柄的指针可能被后续的 bind 复用，绝不允许继承陈旧的保护状态）。
+
+**集成位于 Lua 侧，而非 `src/udp.c`**——这是已记录的集成层决策。Rust 核心已经可以通过 Lua 经 FFI 到达；`require("lunet.udp")` 返回一张由 C 函数组成的普通 Lua 表，因此 `protect` 拦截该共享表上的 `send`/`recv`/`close`，只把已登记的 socket 导入加密路径——未受保护的 socket 直接透传到原始 C 函数。若改在 C 中接线，则需要一条通往 Rust 的新 C ABI，并且要在 udp.c 的接收回调里做解密——该回调运行在 libuv 循环上而非 Lua 协程中，正是项目调试笔记（AGENTS.md）所记录的 use-after-free 崩溃高发上下文。C 回调与 `udp_ctx_t` 未被改动，也绝不接触密钥材料。
+
+**解密发生在交付时刻**，即 Lua 调用 `udp.recv` 时——而非 libuv 回调中的到达时刻（这是已记录的到达/交付决策）。因此 C 接收队列持有的是密文，绝不是明文：被开启的负载不会在到达与 `recv` 之间滞留于 C 内存，队列排空时也不需要密钥材料。`udp.close` 时的队列冲刷会丢弃从未认证的密文——不计数，因为它从未到达下述门径——对于反正也无法交付的帧而言，这与丢弃是同一终态。
+
+接收方向上，每个数据报的处理顺序为：
+
+1. **显式明文门径。** 仅当数据报至少携带 9 字节前缀、且其头部 `toId` 等于已配置的本地 id 时，才被视为 PAXE 帧。其余一切——明文、异构协议或误投流量——都被寻址检查丢弃并计入 `rx_plaintext`，**绝不**依赖标志字节固定位门径：构造的明文其第 8 字节完全可能通过该门径；当两者同时命中（普通垃圾流量）时，移动的计数器是 `rx_plaintext` 而非 `rx_bad_flags`。
+2. **开启。** 发往本节点的数据报进入 `open`。成功时 `udp.recv(sock)` 返回 `data, host, port, from_id, channel`——明文、传输层对端地址，以及经认证的 `fromId` 与通道。任何失败都按失败策略处理、移动相应原因计数器，并且**什么都不交付**——无数据、无错误指示（避免解密预言机）；`recv` 只是继续等待下一个数据报。等待期间的 close 或错误原样透传（`nil, nil, message`）。
+
+发送方向上，`udp.send(sock, host, port, data [, peer [, channel]])` 在传输前密封 `data`：对端取自调用处或 socket 配置的对端，通道同理（默认 `0`），帧模式按负载大小自动选择，发送纪元取该对端最新安装的纪元。密封失败——未配置、对端无密钥或负载超大——都会使发送以指明原因的清晰错误失败（超大型则指明所选模式的最大值）；什么都不传输，且超大会移动 `tx_oversize`。
+
+丢弃可见性：数据报到达在 trace 构建中由 udp.c 的 `UDP_TRACE_RX` 跟踪；每次丢弃都在 Rust 中计数并经失败策略上报（`log_once`/`verbose` 下的 `[PAXE] drop: <原因>` 行）——与同步 `open` 使用的是同一机制，而非另起一套。
+
+**进程退出时的密钥抹除由运行时负责**：`paxe.init` 注册一个 `atexit` 钩子，在正常终止时将密钥库清零并释放，即使脚本从未调用 `shutdown()`。`abort()`/`SIGKILL` 下没有任何钩子能够运行；针对那种情形的缓解是**按平台分野**的（[安全注意事项](#安全注意事项)第 6 条）：在 Linux 上，受保护页面的 `MADV_DONTDUMP` 使其不进内核核心；在 macOS 上不存在这种排除，缓解就是 `init` 默认的核心转储抑制——根本不写出任何核心文件。
+
+### 常量
+
+`paxe.OVERHEAD_STANDARD`（37）、`paxe.OVERHEAD_DEK`（83）、`paxe.MAX_PAYLOAD_STANDARD`（65470）与 `paxe.MAX_PAYLOAD_DEK`（65424）在加载时从 Rust 库读取——由构建帧的同一批层计算得出，绝不在 Lua 中以字面量复述。（已删除的 C 曾在 `#define` 与文档中硬编码 36 与 82，且两者以同样的方式出错。单一事实来源，导出即用。）
+
+### 密钥材料与 Lua VM（已知限制）
+
+密钥以 Lua 字符串的形式到达模块，而 Lua 字符串存活于 Lua VM 之内：被驻留（intern）、被垃圾回收、不可变，且可被 VM 自由复制，位于无保护、可被换出、模块无法抹除的内存中。因此，向 `keystore_set` 传入 32 字节密钥时，该副本会在 VM 恰好保留它的期间内一直暴露。模块有保护的、mlock 的、析构时清零的存储只能保护 Rust 持有的那份副本——无法保护 Lua 持有的那份。这是真实的限制，如实说明而非掩饰。
+
+**已记录的决策：** 本次提交中，Lua 字符串是唯一的密钥加载路径。Rust 侧的文件加载器——将预置的密钥文件直接读入受保护内存，使字节绝不经过 VM——是候选的后续工作，此处刻意不予包含。无法接受 VM 过境的运维方，在该功能落地之前，必须将进程映像与交换分区视为承载密钥材料来对待——正如他们对任何经 Lua 配置的机密本已必须做到的那样。
 
 ## 参考资料
 
+- 参考实现（trex-paxe）：https://github.com/trex-paxos/trex-paxos-jvm/blob/main/trex-paxe/README.md
 - libsodium：https://doc.libsodium.org/
 - AES-256-GCM：https://en.wikipedia.org/wiki/Galois/Counter_Mode
+- ChaCha20（libsodium）：https://doc.libsodium.org/advanced/stream_ciphers/chacha20
+- SRP（未实现；参见密钥管理）：RFC 5054，https://www.rfc-editor.org/rfc/rfc5054
 - Lunet 架构：参见 README.md 和 AGENTS.md

@@ -300,6 +300,15 @@ jobs:
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
         # Release layout documentation (#133)
         cp docs/RELEASE-LAYOUT.md docs/RELEASE-LAYOUT-CN.md "$DIST_DIR/"
+        # User documentation. Include by default, exclude by name via
+        # docs/.dist-exclude, so a new user-facing doc ships with no
+        # packaging change.
+        mkdir -p "$DIST_DIR/docs"
+        cp docs/*.md "$DIST_DIR/docs/"
+        while IFS= read -r doc; do
+          case "$doc" in ''|\#*) continue ;; esac
+          rm -f "$DIST_DIR/docs/$doc"
+        done < docs/.dist-exclude
         tar -C "$DIST_DIR" -czf "lunet-linux-${{ matrix.arch }}.tar.gz" .
 
     - name: Package release archive (macOS)
@@ -325,6 +334,15 @@ jobs:
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
         # Release layout documentation (#133)
         cp docs/RELEASE-LAYOUT.md docs/RELEASE-LAYOUT-CN.md "$DIST_DIR/"
+        # User documentation. Include by default, exclude by name via
+        # docs/.dist-exclude, so a new user-facing doc ships with no
+        # packaging change.
+        mkdir -p "$DIST_DIR/docs"
+        cp docs/*.md "$DIST_DIR/docs/"
+        while IFS= read -r doc; do
+          case "$doc" in ''|\#*) continue ;; esac
+          rm -f "$DIST_DIR/docs/$doc"
+        done < docs/.dist-exclude
         tar -C "$DIST_DIR" -czf lunet-macos.tar.gz .
 
     - name: Package release SDK (Linux)
@@ -375,6 +393,18 @@ jobs:
         Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
         # Release layout documentation (#133)
         Copy-Item docs\RELEASE-LAYOUT.md, docs\RELEASE-LAYOUT-CN.md $dist
+        # User documentation. Include by default, exclude by name via
+        # docs/.dist-exclude, so a new user-facing doc ships with no
+        # packaging change.
+        $docsOut = Join-Path $dist "docs"
+        New-Item -ItemType Directory -Force -Path $docsOut | Out-Null
+        Copy-Item docs\*.md $docsOut
+        Get-Content docs\.dist-exclude | ForEach-Object {
+          $line = $_.Trim()
+          if ($line -and -not $line.StartsWith("#")) {
+            Remove-Item (Join-Path $docsOut $line) -ErrorAction SilentlyContinue
+          }
+        }
         Compress-Archive -Path (Join-Path $dist "*") -DestinationPath lunet-windows-amd64.zip -Force
 
     - name: Package release SDK (Windows)

@@ -4,21 +4,21 @@
 ---Unified database module. The backend (MySQL, PostgreSQL, or SQLite3) is selected at compile time.
 local db = {}
 
+---Connection parameters for MySQL/PostgreSQL backends.
+---@class DbNetParams
+---@field host string Host to connect to (default: "localhost")
+---@field port integer Port to connect to (default: 3306 for MySQL, 5432 for PostgreSQL)
+---@field user string User to connect as (default: "root" for MySQL, "" for PostgreSQL)
+---@field password string Password to use (default: "")
+---@field database string Database to use (default: "")
+---@field charset string Charset to use (MySQL only, default: "utf8mb4")
+
+---Connection parameters for the SQLite3 backend.
+---@class DbFileParams
+---@field path string Database file path (default: ":memory:")
+
 ---Open a database connection
----
----For MySQL/PostgreSQL backends:
----@param params table Connection parameters
---- - host: string (default: "localhost")
---- - port: integer (default: 3306 for MySQL, 5432 for PostgreSQL)
---- - user: string (default: "root" for MySQL, "" for PostgreSQL)
---- - password: string (default: "")
---- - database: string (default: "")
---- - charset: string (MySQL only, default: "utf8mb4")
----
----For SQLite3 backend:
----@param params table Connection parameters
---- - path: string (default: ":memory:")
----
+---@param params DbNetParams|DbFileParams Connection parameters (shape depends on the compiled backend)
 ---@return lightuserdata|nil conn The connection handle or nil on error
 ---@return string|nil error Error message if failed
 function db.open(params) end

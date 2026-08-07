@@ -19,6 +19,9 @@ You MUST NOT do any git reset or stash or an git rm or rm or anything that might
     - If the change affects examples, packaging, or specialized jobs, run the corresponding local equivalents for the current OS as well.
     - macOS local notes: Homebrew's `zlib`, `curl`, `libpq`, and `mysql-client` are keg-only — export `PKG_CONFIG_PATH` with each `$(brew --prefix <pkg>)/lib/pkgconfig` before building drivers or running preflight (same as CI). As of 2026-07-25, ASan-instrumented debug binaries hang in `__malloc_init` at dyld time on macOS 26 (observed on 26.5.2, even for hello-world scripts; release and non-ASan debug/trace builds are unaffected). This blocks the ASan legs of `xmake preflight-easy-memory` locally — environmental, CI is unaffected.
 
+6.  **LUAJIT / LUA 5.1 ABI ONLY FOR TOOLING:** The runtime is LuaJIT (ABI-compatible with Lua 5.1). Homebrew's default `lua` is now 5.5 and is NOT supported for any build/QA tooling. Rocks installed without a version pin land in the 5.5 tree and crash under LuaJIT (e.g. `luacheck` 1.2.0 on Lua 5.5 dies with `attempt to assign to const variable 'field_name'`). Always install rocks against the 5.1 tree: `luarocks --lua-version=5.1 --lua-dir=$(brew --prefix luajit) install <rock>` (the `contributing/deps/*` scripts already do this). Do not attempt to port or debug tooling under Lua 5.5; coerce 5.1 instead.
+7.  **WORKTREES ARE OFF-LIMITS:** `paxe/` at the repo root is a separate git worktree (owner's checkout — the intended path was `.worktrees/paxe`). The `.worktrees/` directory likewise holds other worktrees. Do not read, search, list, or modify anything under them unless the user explicitly directs it. They are not part of this checkout's working state.
+
 ## Internationalisation Parity (STRICT)
 
 All user-facing documentation MUST be kept in sync between English and Chinese (简体中文).  When you create or modify any of the files below, you MUST create or update its counterpart:

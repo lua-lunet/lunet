@@ -45,7 +45,12 @@ if ! command -v lua-language-server >/dev/null 2>&1; then
     if [[ "$CI" -eq 1 ]]; then
         # Copy the entire installation directory (not just the binary); the
         # launcher script relies on sibling files such as bootstrap.lua.
-        $SUDO cp -r "$LUALS_DIR" /usr/local/lib/lua-language-server
+        # mktemp creates $LUALS_DIR with 0700; cp -r preserves that, which
+        # blocks non-root access to the binary.  Create the destination
+        # directory first (inherits system umask, typically 0755), then copy
+        # contents into it.
+        $SUDO mkdir -p /usr/local/lib/lua-language-server
+        $SUDO cp -r "$LUALS_DIR"/. /usr/local/lib/lua-language-server/
         $SUDO ln -sf /usr/local/lib/lua-language-server/bin/lua-language-server /usr/local/bin/lua-language-server
     else
         mkdir -p "$HOME/.local/lib/lua-language-server"

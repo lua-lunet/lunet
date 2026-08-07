@@ -792,6 +792,59 @@ task("test")
     end)
 task_end()
 
+task("check-types")
+    set_menu {
+        usage = "xmake check-types",
+        description = "Validate LuaCATS annotations with lua-language-server"
+    }
+    on_run(function ()
+        import("core.base.json")
+        local luals = "lua-language-server"
+        local ok = os.execv(luals, {"--version"}, {try = true})
+        assert(ok == 0, "lua-language-server not found on PATH. Install via contributing/deps/ (macOS: brew install lua-language-server, Debian: contributing/deps/debian.sh)")
+        local ts = os.date("%Y%m%d_%H%M%S")
+        local logdir = path.join(os.projectdir(), ".tmp", "logs", ts .. "-check-types")
+        os.mkdir(logdir)
+        local outfile = path.join(logdir, "check.json")
+        -- LuaLS generates its built-in meta definitions (string, number, table,
+        -- ...) into --metapath on first run, which defaults to a directory
+        -- inside the install tree. A system-wide install is root-owned, so a
+        -- non-root runner cannot write there: LuaLS logs the EACCES, carries on
+        -- without any builtins loaded and reports every stdlib type as
+        -- `Undefined type or alias`. Keep the cache project-local and writable.
+        local metadir = path.join(os.projectdir(), ".tmp", "luals-meta")
+        os.mkdir(metadir)
+        -- LuaLS 3.x always exits 0 for --check; the gate parses the JSON report
+        -- instead. Diagnostics are filtered to the checklevel (Warning = severity
+        -- 1..2), so any entry in the report is a gate failure.
+        os.execv(luals, {
+            "--check", path.join(os.projectdir(), "types"),
+            "--checklevel", "Warning",
+            "--check_format", "json",
+            "--check_out_path", outfile,
+            "--configpath", path.join(os.projectdir(), ".luarc.json"),
+            "--logpath", logdir,
+            "--metapath", metadir,
+        }, {try = true})
+        assert(os.isfile(outfile), "lua-language-server wrote no report to " .. outfile)
+        local report = json.loadfile(outfile)
+        local problems = 0
+        for uri, diags in pairs(report) do
+            local file = uri:gsub("^file://", "")
+            for _, d in ipairs(diags) do
+                problems = problems + 1
+                local line = (d.range and d.range.start and d.range.start.line or 0) + 1
+                local sev = d.severity == 1 and "Error" or "Warning"
+                cprint("${red}%s${clear}:%d: [%s] %s ${bright}(%s)${clear}", file, line, sev, tostring(d.message), tostring(d.code))
+            end
+        end
+        if problems > 0 then
+            raise(("check-types: %d problem(s) in types/ — full report: %s"):format(problems, outfile))
+        end
+        cprint("${green}check-types: types/ clean (0 problems)${clear} — report: " .. outfile)
+    end)
+task_end()
+
 task("build-release")
     set_menu {
         usage = "xmake build-release",

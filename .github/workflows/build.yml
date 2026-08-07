@@ -300,6 +300,8 @@ jobs:
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
         # Release layout documentation (#133)
         cp docs/RELEASE-LAYOUT.md docs/RELEASE-LAYOUT-CN.md "$DIST_DIR/"
+        # LuaCATS type annotations (#135)
+        cp -R types "$DIST_DIR/"
         tar -C "$DIST_DIR" -czf "lunet-linux-${{ matrix.arch }}.tar.gz" .
 
     - name: Package release archive (macOS)
@@ -325,6 +327,8 @@ jobs:
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
         # Release layout documentation (#133)
         cp docs/RELEASE-LAYOUT.md docs/RELEASE-LAYOUT-CN.md "$DIST_DIR/"
+        # LuaCATS type annotations (#135)
+        cp -R types "$DIST_DIR/"
         tar -C "$DIST_DIR" -czf lunet-macos.tar.gz .
 
     - name: Package release SDK (Linux)
@@ -375,6 +379,8 @@ jobs:
         Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
         # Release layout documentation (#133)
         Copy-Item docs\RELEASE-LAYOUT.md, docs\RELEASE-LAYOUT-CN.md $dist
+        # LuaCATS type annotations (#135)
+        Copy-Item -Recurse types (Join-Path $dist "types")
         Compress-Archive -Path (Join-Path $dist "*") -DestinationPath lunet-windows-amd64.zip -Force
 
     - name: Package release SDK (Windows)
@@ -774,6 +780,8 @@ jobs:
       run: xmake lint
     - name: xmake check
       run: xmake check
+    - name: xmake check-types
+      run: xmake check-types
 
   publish-release:
     name: Publish release

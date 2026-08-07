@@ -43,11 +43,16 @@ if ! command -v lua-language-server >/dev/null 2>&1; then
     curl --max-time 60 -fsSL "$LUALS_URL" -o "$LUALS_DIR/${LUALS_TARBALL}"
     tar -C "$LUALS_DIR" -xzf "$LUALS_DIR/${LUALS_TARBALL}"
     if [[ "$CI" -eq 1 ]]; then
-        $SUDO cp "$LUALS_DIR/bin/lua-language-server" /usr/local/bin/
+        # Copy the entire installation directory (not just the binary); the
+        # launcher script relies on sibling files such as bootstrap.lua.
+        $SUDO cp -r "$LUALS_DIR" /usr/local/lib/lua-language-server
+        $SUDO ln -sf /usr/local/lib/lua-language-server/bin/lua-language-server /usr/local/bin/lua-language-server
     else
+        mkdir -p "$HOME/.local/lib/lua-language-server"
+        cp -r "$LUALS_DIR/." "$HOME/.local/lib/lua-language-server/"
         mkdir -p "$HOME/.local/bin"
-        cp "$LUALS_DIR/bin/lua-language-server" "$HOME/.local/bin/"
-        echo "  lua-language-server installed to ~/.local/bin/ (add to PATH if needed)"
+        ln -sf "$HOME/.local/lib/lua-language-server/bin/lua-language-server" "$HOME/.local/bin/lua-language-server"
+        echo "  lua-language-server installed to ~/.local/lib/lua-language-server (add ~/.local/bin to PATH if needed)"
     fi
     rm -rf "$LUALS_DIR"
 fi

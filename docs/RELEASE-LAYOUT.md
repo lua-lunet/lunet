@@ -28,7 +28,31 @@ lunet/                              # extension modules
   liblunet_jsonic.dylib             #   (macOS — not shipped on Windows)
   jsonic.lua                        # jsonic Lua FFI loader + encoder
   dkjson-encode-v2.10.lua           # ordered-JSON encoder (used by jsonic)
+docs/                               # user documentation (see below)
+  HTTPC.md / HTTPC-CN.md
+  PHILOSOPHY.md / PHILOSOPHY-CN.md
+  SECURITY_ARCHITECTURE.md / SECURITY_ARCHITECTURE-CN.md
+  TYPE_OVERRIDES.md / TYPE_OVERRIDES-CN.md
 ```
+
+## Documentation in the archive
+
+The archive carries its own documentation so that a binary consumer, who has no
+checkout, is not left reading the repository to learn the API.
+
+Packaging is **include by default, exclude by name**: every `docs/*.md` is
+copied into the archive's `docs/` directory unless its basename appears in
+`docs/.dist-exclude`. Adding a new user-facing document therefore needs no
+change to the release workflow; only a deliberate exclusion does.
+
+Excluded today are the build-from-source and embedding guides, the contributor
+workflow, the badge guide, and an internal engineering report — none of which
+apply to someone consuming a prebuilt binary. `RELEASE-LAYOUT.md` is excluded
+from `docs/` only because it is shipped at the archive root instead.
+
+Because these files ship, they are part of the release: see the release quality
+gate in `AGENTS.md`, which requires a documentation review before a version tag
+is pushed.
 
 ## How extensions are loaded
 

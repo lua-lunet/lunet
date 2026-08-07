@@ -28,7 +28,28 @@ lunet/                              # 扩展模块
   liblunet_jsonic.dylib             #   （macOS，Windows 不提供）
   jsonic.lua                        # jsonic Lua FFI 加载器 + 编码器
   dkjson-encode-v2.10.lua           # 有序 JSON 编码器（jsonic 依赖）
+docs/                               # 用户文档（见下文）
+  HTTPC.md / HTTPC-CN.md
+  PHILOSOPHY.md / PHILOSOPHY-CN.md
+  SECURITY_ARCHITECTURE.md / SECURITY_ARCHITECTURE-CN.md
+  TYPE_OVERRIDES.md / TYPE_OVERRIDES-CN.md
 ```
+
+## 压缩包中的文档
+
+压缩包自带文档，这样使用二进制发布版、手中没有源码检出的用户，
+不必回到仓库去查阅 API。
+
+打包策略是**默认包含、按名排除**：每个 `docs/*.md` 都会被复制到压缩包的
+`docs/` 目录，除非其文件名出现在 `docs/.dist-exclude` 中。因此新增一篇面向
+用户的文档无需改动发布流程，只有刻意的排除才需要。
+
+目前排除的是从源码构建与嵌入指南、贡献者工作流、徽章指南，以及一份内部工程
+报告——这些对使用预编译二进制的用户都不适用。`RELEASE-LAYOUT.md` 之所以被排除
+在 `docs/` 之外，仅仅是因为它改为放在压缩包根目录。
+
+由于这些文件会随发布一同分发，它们属于发布内容的一部分：参见 `AGENTS.md` 中的
+发布质量门禁，其中要求在推送版本标签前先审阅文档。
 
 ## 扩展加载机制
 

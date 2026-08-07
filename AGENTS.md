@@ -45,13 +45,22 @@ Before creating or announcing a release:
    - `lunet-linux-arm64-sdk.tar.gz`
    - `lunet-macos-sdk.tar.gz`
    - `lunet-windows-amd64-sdk.zip`
-3. **Readable release notes:** Notes must include at minimum:
+3. **Review the shipped documentation:** The archives carry `docs/` (include by
+   default, excluded by name via `docs/.dist-exclude`), so documentation is a
+   release asset, not just repository content. Before tagging, re-read the docs
+   that ship and confirm they match the code being released: option names,
+   defaults, return shapes, and any behaviour changed in this cycle. A stale
+   shipped doc is worse than a missing one, because it is the copy the user has
+   locally and will trust over the repository. If a doc no longer applies to
+   binary consumers, add it to `docs/.dist-exclude` rather than leaving it to
+   rot in the archive.
+4. **Readable release notes:** Notes must include at minimum:
    - `## Highlights`
    - `## Binaries`
    - `## Quick Start`
-4. **Verify before sign-off:** Check the published release page and confirm notes formatting plus all assets are present.
-5. **If anything is missing:** Fix workflow/release and republish before telling downstream users to consume the tag.
-6. **Ignore the AppVeyor checks.** `continuous-integration/appveyor/pr` and
+5. **Verify before sign-off:** Check the published release page and confirm notes formatting plus all assets are present.
+6. **If anything is missing:** Fix workflow/release and republish before telling downstream users to consume the tag.
+7. **Ignore the AppVeyor checks.** `continuous-integration/appveyor/pr` and
    `.../branch` are orphaned webhooks: the AppVeyor account was deleted before
    its jobs were removed, so they report failure without building anything and
    there is no account left to disable them. They are excluded from the

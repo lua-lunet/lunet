@@ -806,6 +806,14 @@ task("check-types")
         local logdir = path.join(os.projectdir(), ".tmp", "logs", ts .. "-check-types")
         os.mkdir(logdir)
         local outfile = path.join(logdir, "check.json")
+        -- LuaLS generates its built-in meta definitions (string, number, table,
+        -- ...) into --metapath on first run, which defaults to a directory
+        -- inside the install tree. A system-wide install is root-owned, so a
+        -- non-root runner cannot write there: LuaLS logs the EACCES, carries on
+        -- without any builtins loaded and reports every stdlib type as
+        -- `Undefined type or alias`. Keep the cache project-local and writable.
+        local metadir = path.join(os.projectdir(), ".tmp", "luals-meta")
+        os.mkdir(metadir)
         -- LuaLS 3.x always exits 0 for --check; the gate parses the JSON report
         -- instead. Diagnostics are filtered to the checklevel (Warning = severity
         -- 1..2), so any entry in the report is a gate failure.
@@ -816,6 +824,7 @@ task("check-types")
             "--check_out_path", outfile,
             "--configpath", path.join(os.projectdir(), ".luarc.json"),
             "--logpath", logdir,
+            "--metapath", metadir,
         }, {try = true})
         assert(os.isfile(outfile), "lua-language-server wrote no report to " .. outfile)
         local report = json.loadfile(outfile)

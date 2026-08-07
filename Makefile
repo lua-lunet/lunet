@@ -17,7 +17,23 @@ init:
 		*) echo "Windows? run: pwsh contributing\\windows\\setup.ps1" ;; \
 	esac
 
+lint:
+	xmake lint
+
+check:
+	xmake check
+
+check-types:
+	xmake check-types
+
+test:
+	xmake test
+
 help:
 	@echo "Available targets:"
-	@echo "  init    - Install system deps + luarocks QA tools + verify the build (default)"
-	@echo "  help    - Show this message"
+	@echo "  init         - Install system deps + luarocks QA tools + verify the build (default)"
+	@echo "  lint         - Run C safety lint checks"
+	@echo "  check        - Run luacheck static analysis"
+	@echo "  check-types  - Validate LuaCATS annotations with lua-language-server"
+	@echo "  test         - Run Lua tests with busted"
+	@echo "  help         - Show this message"

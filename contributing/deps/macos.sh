@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install pkg-config libuv luajit zlib sqlite3 libsodium curl libpq mysql-client coreutils luarocks
+HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 brew install pkg-config libuv luajit zlib sqlite3 libsodium curl libpq mysql-client coreutils luarocks lua-language-server
 
 echo ""
 echo "=== Keg-only PKG_CONFIG_PATH hint ==="

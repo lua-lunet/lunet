@@ -31,5 +31,5 @@ exclude_files = {
 
 -- Type declaration stubs: unused arguments are inherent to the pattern
 files["types/"] = {
-    ignore = { "212" },
+    ignore = { "211", "212" },
 }

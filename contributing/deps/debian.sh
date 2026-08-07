@@ -33,6 +33,25 @@ else
         build-essential git curl ca-certificates libasan8
 fi
 
+# lua-language-server is not in apt; download a pinned release binary.
+LUALS_VER="3.15.0"
+LUALS_TARBALL="lua-language-server-${LUALS_VER}-linux-x64.tar.gz"
+LUALS_URL="https://github.com/LuaLS/lua-language-server/releases/download/${LUALS_VER}/${LUALS_TARBALL}"
+if ! command -v lua-language-server >/dev/null 2>&1; then
+    LUALS_DIR="$(mktemp -d)"
+    echo "Installing lua-language-server ${LUALS_VER}..."
+    curl --max-time 60 -fsSL "$LUALS_URL" -o "$LUALS_DIR/${LUALS_TARBALL}"
+    tar -C "$LUALS_DIR" -xzf "$LUALS_DIR/${LUALS_TARBALL}"
+    if [[ "$CI" -eq 1 ]]; then
+        $SUDO cp "$LUALS_DIR/bin/lua-language-server" /usr/local/bin/
+    else
+        mkdir -p "$HOME/.local/bin"
+        cp "$LUALS_DIR/bin/lua-language-server" "$HOME/.local/bin/"
+        echo "  lua-language-server installed to ~/.local/bin/ (add to PATH if needed)"
+    fi
+    rm -rf "$LUALS_DIR"
+fi
+
 if [[ "$CI" -eq 1 ]]; then
     exec bash "$(dirname "$0")/qa-luarocks.sh" --ci
 else

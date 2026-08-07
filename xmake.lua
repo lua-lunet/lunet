@@ -792,6 +792,29 @@ task("test")
     end)
 task_end()
 
+task("check-types")
+    set_menu {
+        usage = "xmake check-types",
+        description = "Validate LuaCATS annotations with lua-language-server"
+    }
+    on_run(function ()
+        local luals = "lua-language-server"
+        local ok = os.execv(luals, {"--version"}, {try = true})
+        if ok ~= 0 then
+            cprint("${yellow}xmake check-types: lua-language-server not found on PATH — skipping (install via contributing/deps/)${clear}")
+            return
+        end
+        local ts = os.date("%Y%m%d_%H%M%S")
+        local logdir = path.join(os.projectdir(), ".tmp", "logs", ts)
+        os.mkdir(logdir)
+        os.execv(luals, {
+            "--check", path.join(os.projectdir(), "types"),
+            "--checklevel", "Warning",
+            "--logpath", logdir,
+        })
+    end)
+task_end()
+
 task("build-release")
     set_menu {
         usage = "xmake build-release",

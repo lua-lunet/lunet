@@ -1,16 +1,16 @@
 [package]
 name = "lunet-paxe"
 version = "0.1.0"
-# Edition 2021, deliberately not 2024: this crate has zero dependencies and
-# needs nothing from the newer edition, and 2021 keeps the toolchain floor
-# low and the unsafe-attribute syntax simple (#[no_mangle], not
-# #[unsafe(no_mangle)]). Matches the conservative toolchain pin in
-# rust-toolchain.toml.
+# Edition 2021, deliberately not 2024: this crate needs nothing from the
+# newer edition, and 2021 keeps the toolchain floor low and the unsafe
+# attribute syntax simple (#[no_mangle], not #[unsafe(no_mangle)]). Matches
+# the conservative toolchain pin in rust-toolchain.toml and paxe-core's own
+# edition, so the two never disagree.
 edition = "2021"
 description = """
-PAXE datagram encryption for lunet (Rust rewrite replacing the deleted
-src/paxe.c). cdylib loaded at runtime by lunet.paxe via the LuaJIT FFI.
-Pure opt-in extension - not linked into lunet-run.
+PAXE datagram encryption for lunet: the C ABI that lunet.paxe binds to over
+the LuaJIT FFI. The protocol lives in paxe-core; this crate is the boundary
+and the cdylib. Pure opt-in extension - not linked into lunet-run.
 """
 license = "MIT"
 authors = []
@@ -19,14 +19,17 @@ authors = []
 name = "lunet_paxe"
 crate-type = ["cdylib"]
 
-# DEPENDENCY POLICY: zero crates. Not libc, not zeroize, not secrecy, not a
-# crypto crate. All cryptography AND all secure-memory handling come from
-# libsodium via extern "C" declarations (item02), statically linked into
-# this cdylib (owner decision): sodium_malloc/sodium_mlock/sodium_memzero
-# give guarded, locked, reliably-zeroed key storage, and the project already
-# requires and links libsodium for this module. This section stays empty by
-# decision, not by accident - do not add entries without owner sign-off.
+# DEPENDENCY POLICY: paxe-core and nothing else. Not libc, not zeroize, not
+# secrecy, not a crypto crate. All cryptography and all secure-memory
+# handling come from libsodium via paxe-core's extern "C" declarations,
+# statically linked by ITS build.rs - which is why this crate no longer has
+# one; cargo propagates the core's link directives to this cdylib's link.
+#
+# Pinned by REV, never by branch: a moving dependency would let the wire
+# format change under a lunet release without the lunet commit changing.
+# Bumping the rev is a deliberate, reviewable edit.
 [dependencies]
+paxe = { package = "paxe-core", git = "https://github.com/lua-lunet/paxe-core.git", rev = "2abda9366e0a297c499360540cd7d57c8b13e6ca", default-features = false }
 
 [profile.release]
 opt-level = 3
@@ -35,6 +38,6 @@ codegen-units = 1
 # Never unwind through an FFI boundary: unwinding into the LuaJIT host is
 # undefined behaviour, and with panic = "abort" a panic kills the whole
 # host process. The resulting no-panic-on-any-input constraint is a hard
-# design rule documented in src/lib.rs.
+# design rule, enforced in paxe-core.
 panic = "abort"
 strip = "symbols"

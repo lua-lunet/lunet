@@ -1,119 +1,24 @@
-//! # lunet-paxe
+//! lunet.paxe — the C ABI the LuaJIT FFI loader binds to.
 //!
-//! PAXE datagram encryption for lunet, built as a `cdylib` and loaded at
-//! runtime by the `lunet.paxe` Lua module through the LuaJIT FFI (the same
-//! loading model as `ext/jsonic`). This crate is the Rust replacement for
-//! the deleted `src/paxe.c`; it is a pure opt-in extension and is never
-//! linked into `lunet-run`.
+//! The protocol itself lives in `paxe-core`, pinned by commit in
+//! Cargo.toml and published independently. This crate is the lunet-facing
+//! boundary and nothing else: it owns the process-global session state
+//! (the keystore, the local node identity, the failure policy, the
+//! last-error buffer) because key material must never cross into Lua, and
+//! it exports the `lunet_paxe_*` symbols `ext/paxe/paxe.lua` declares.
 //!
-//! This crate so far: build plumbing, the libsodium FFI boundary
-//! ([`sodium`], item02), the secure keystore ([`keystore`], item03), the
-//! cryptography-free header/flags codec ([`codec`], item04), standard-mode
-//! seal/open with the single AAD construction point ([`standard`],
-//! item05), DEK-mode seal/open plus the automatic mode-selection layer
-//! ([`dek`], item06), the Lua-facing C ABI ([`lunet_paxe_init`] and
-//! friends, item07) consumed by `paxe.lua` through the LuaJIT FFI, and
-//! the statistics counters plus failure policy ([`stats`], item08) that
-//! are the operator's only diagnostic channel for dropped frames, and the
-//! item09 protected-socket boundary: [`lunet_paxe_frame_for_us`] (the
-//! explicit plaintext gate consumed by the Lua-side UDP wrapper) and
-//! runtime-owned key erasure at process exit (an `atexit` hook
-//! registered by [`lunet_paxe_init`]), and item15b's startup core-dump
-//! suppression ([`lunet_paxe_init`] sets the `RLIMIT_CORE` soft limit to
-//! 0 — the only mechanism that keeps key material out of crash dumps on
-//! macOS — with `LUNET_PAXE_ALLOW_CORE_DUMPS=1` as the documented
-//! debugging opt-out).
-//!
-//! ## The item07 C ABI
-//!
-//! All module state (the keystore, i.e. ALL key material) lives behind
-//! the FFI in thread-local storage; Lua never holds keys except
-//! transiently when passing one into `lunet_paxe_keystore_set` (the
-//! VM-transit limitation documented in PAXE.md). Buffers cross as
-//! (pointer, length); ids and epochs cross as u32 so out-of-range values
-//! are representable and rejected with a named constraint rather than
-//! silently truncated. Return codes:
-//!
-//! - `RC_OK` (0): success.
-//! - `RC_OK_ABSENT` (1): success, but the addressed slot did not exist
-//!   (keystore_retire of an absent `(peer, epoch)`).
-//! - `RC_ERR` (-1): OPERATIONAL failure. The message is in the
-//!   last-error buffer; `paxe.lua` returns `nil, message`.
-//! - `RC_INVAL` (-2): MALFORMED ARGUMENT — a bug in the calling script.
-//!   The message (naming the constraint) is in the last-error buffer;
-//!   `paxe.lua` RAISES it as a Lua error.
-//! - `RC_DROP` (-3): `open` rejected the frame. EVERY frame-level
-//!   failure — parse, unknown key, authentication, even an unconfigured
-//!   keystore — collapses to this ONE opaque outcome, and the typed
-//!   in-crate reason is never written to the last-error buffer: a
-//!   receiver that explains why a forgery failed is a decryption oracle
-//!   (PAXE.md "Failure Handling"). The typed reason is recorded into the
-//!   item08 counters at the reject point, BEFORE the collapse (see
-//!   [`stats`]); it never crosses the FFI.
-//!
-//! ## Dependency policy: zero crates
-//!
-//! This crate has **no** crate dependencies — not even `libc`. All
-//! cryptography and all secure-memory handling comes from libsodium via
-//! hand-written `extern "C"` declarations in [`sodium`], **statically
-//! linked into this cdylib** (owner decision, implemented in `build.rs`):
-//! `sodium_malloc` / `sodium_mlock` / `sodium_memzero` provide guarded,
-//! locked, reliably-zeroed key storage, which is exactly where
-//! sysadmin-injected shared cluster keys belong.
-//!
-//! ## NO PANIC ON ANY INPUT — hard constraint
-//!
-//! The release profile sets `panic = "abort"`, because unwinding across an
-//! FFI boundary into LuaJIT is undefined behaviour. The consequence is
-//! absolute: **any Rust panic aborts the entire LuaJIT host process**,
-//! taking down every coroutine, socket and connection it serves. A panic
-//! must therefore be *impossible* on any input, not merely unlikely:
-//!
-//! - No indexing, slicing or arithmetic on attacker-controlled datagram
-//!   bytes that can panic: no `buf[i]`, no `a + b` on untrusted lengths, no
-//!   `unwrap`/`expect` on anything derived from the wire.
-//! - Use `get()`, `chunks_exact()`, checked arithmetic and explicit error
-//!   returns instead.
-//! - Every `extern "C"` entry point validates every pointer and length
-//!   before use.
-//!
-//! This constraint is written here now, while the crate is empty, so the
-//! codec, keystore and AEAD items that follow are designed under it from
-//! their first line rather than having it retrofitted.
-//!
-//! ## FFI containment (item02, extended in item07)
-//!
-//! [`sodium`] is the ONLY module in this crate that may contain an
-//! `extern "C"` block or call libsodium, and the only module with a
-//! module-level `unsafe` allowance (enforced below by
-//! `#![deny(unsafe_code)]`). The item07 exported symbols in THIS file
-//! carry per-function `#[allow(unsafe_code)]` for the LuaJIT-facing
-//! pointer glue (raw pointer ⇄ slice conversion at the trust boundary) —
-//! the same per-symbol pattern [`lunet_paxe_version`] established. Every
-//! export validates every pointer and length before any unsafe block
-//! runs. [`sodium`] declares the libsodium primitives by hand
-//! — zero crate dependencies, not even `libc` — each with its contract
-//! written at the declaration, and exposes safe wrappers: fixed-size
-//! key/nonce/tag newtypes, slice-derived pointer+length pairs, a startup
-//! ABI size check, CSPRNG-only nonce generation, guarded allocations, and
-//! AES-GCM unavailability as a reportable error. libsodium is statically
-//! linked into this cdylib by `build.rs` (owner decision).
+//! Same shape as `lunet-advisory-lock`, which depends on `vrr-core` by
+//! git rev and exports its own ABI rather than re-exporting the core's.
+//! A dependent cdylib cannot be relied on to re-export an rlib's
+//! `#[no_mangle]` symbols, and there would be nothing gained by trying:
+//! the ABI is this crate's product.
 
-// Every module except sodium.rs is plain safe Rust; unsafe is denied here
-// and re-allowed by inner attribute inside sodium.rs alone.
+// sodium.rs is the only place unsafe is permitted, and it lives in
+// paxe-core; nothing in this crate needs it except the per-symbol
+// pointer reads below, each re-allowed at its declaration.
 #![deny(unsafe_code)]
 
-mod codec;
-mod dek;
-mod keystore;
-mod sodium;
-mod standard;
-mod stats;
-// item12's known-answer vectors exist ONLY in test builds: the whole
-// module is test code pinned against the #[cfg(test)] deterministic
-// seams, so it is compiled out of every non-test build by construction.
-#[cfg(test)]
-mod vectors;
+use paxe::{codec, dek, keystore, sodium, standard, stats};
 
 use std::cell::RefCell;
 use std::os::raw::{c_char, c_int};
@@ -201,10 +106,8 @@ fn check_u16(v: u32, what: &str) -> Result<u16, String> {
 
 /// u32 → bounded [`keystore::Epoch`] (0-31, the 5-bit wire field).
 fn check_epoch(v: u32) -> Result<keystore::Epoch, String> {
-    keystore::Epoch::new(
-        u8::try_from(v).map_err(|_| epoch_message(v))?,
-    )
-    .map_err(|_| epoch_message(v))
+    keystore::Epoch::new(u8::try_from(v).map_err(|_| epoch_message(v))?)
+        .map_err(|_| epoch_message(v))
 }
 
 fn epoch_message(v: u32) -> String {
@@ -520,9 +423,7 @@ pub extern "C" fn lunet_paxe_keystore_set(
         };
         let store = match s.as_mut() {
             Some(st) => st,
-            None => {
-                return fail("local node id not configured: call set_local_id() first")
-            }
+            None => return fail("local node id not configured: call set_local_id() first"),
         };
         match store.install(peer, epoch, material) {
             Ok(()) => RC_OK,
@@ -552,9 +453,7 @@ pub extern "C" fn lunet_paxe_keystore_retire(peer: u32, epoch: u32) -> c_int {
         };
         let store = match s.as_mut() {
             Some(st) => st,
-            None => {
-                return fail("local node id not configured: call set_local_id() first")
-            }
+            None => return fail("local node id not configured: call set_local_id() first"),
         };
         if store.retire(peer, epoch) {
             RC_OK
@@ -650,9 +549,7 @@ pub extern "C" fn lunet_paxe_seal(
         };
         let store = match s.as_ref() {
             Some(st) => st,
-            None => {
-                return fail("local node id not configured: call set_local_id() first")
-            }
+            None => return fail("local node id not configured: call set_local_id() first"),
         };
         // The send epoch: the NEWEST epoch installed for this peer.
         let (epoch, _) = match store.key_for_send_current(to_id) {
@@ -1063,7 +960,10 @@ mod ffi_tests {
     fn constants_are_the_codec_side_values_not_literals() {
         assert_eq!(lunet_paxe_overhead_standard(), standard::OVERHEAD as u32);
         assert_eq!(lunet_paxe_overhead_dek(), dek::DEK_OVERHEAD as u32);
-        assert_eq!(lunet_paxe_max_payload_standard(), standard::MAX_PAYLOAD as u32);
+        assert_eq!(
+            lunet_paxe_max_payload_standard(),
+            standard::MAX_PAYLOAD as u32
+        );
         assert_eq!(lunet_paxe_max_payload_dek(), dek::DEK_MAX_PAYLOAD as u32);
         // ...and those values are the documented protocol numbers.
         assert_eq!(lunet_paxe_overhead_standard(), 37);
@@ -1298,7 +1198,10 @@ mod ffi_tests {
         let (rc, _) = seal(&big, NODE_B, CHAN);
         assert_eq!(rc, RC_ERR);
         let msg = last_error_string();
-        assert!(msg.contains("DEK-mode maximum of 65424"), "message was: {msg}");
+        assert!(
+            msg.contains("DEK-mode maximum of 65424"),
+            "message was: {msg}"
+        );
         // Exactly the maximum seals.
         let max = vec![0u8; dek::DEK_MAX_PAYLOAD];
         let (rc, frame) = seal(&max, NODE_B, CHAN);
@@ -1358,7 +1261,11 @@ mod ffi_tests {
         let (rc, _, _, _, _) = open(frame);
         assert_eq!(rc, RC_DROP, "{reason:?}: the opaque drop");
         let after = stats::snapshot();
-        assert_eq!(after.rx_total - before.rx_total, 1, "{reason:?}: rx_total +1");
+        assert_eq!(
+            after.rx_total - before.rx_total,
+            1,
+            "{reason:?}: rx_total +1"
+        );
         assert_eq!(after.rx_ok - before.rx_ok, 0, "{reason:?}: rx_ok untouched");
         for r in stats::RejectReason::ALL {
             let moved = after.reject(r) - before.reject(r);
@@ -1385,8 +1292,16 @@ mod ffi_tests {
         let (rc, _, _, _, _) = open(b"whatever");
         assert_eq!(rc, RC_DROP);
         let after = stats::snapshot();
-        assert_eq!(after.rx_total - before.rx_total, 0, "unconfigured: uncounted");
-        assert_eq!(after.reject_sum() - before.reject_sum(), 0, "unconfigured: uncounted");
+        assert_eq!(
+            after.rx_total - before.rx_total,
+            0,
+            "unconfigured: uncounted"
+        );
+        assert_eq!(
+            after.reject_sum() - before.reject_sum(),
+            0,
+            "unconfigured: uncounted"
+        );
 
         setup_node_a(3);
         let payload40 = [0x55u8; 40]; // sub-threshold: standard frame
@@ -1427,7 +1342,11 @@ mod ffi_tests {
                     let before = stats::snapshot();
                     assert_eq!(lunet_paxe_frame_for_us(d.as_ptr(), d.len()), 0);
                     let after = stats::snapshot();
-                    assert_eq!(after.rx_total - before.rx_total, 1, "{reason:?}: rx_total +1");
+                    assert_eq!(
+                        after.rx_total - before.rx_total,
+                        1,
+                        "{reason:?}: rx_total +1"
+                    );
                     assert_eq!(after.rx_ok - before.rx_ok, 0, "{reason:?}: rx_ok untouched");
                     for r in stats::RejectReason::ALL {
                         let moved = after.reject(r) - before.reject(r);
@@ -1530,7 +1449,11 @@ mod ffi_tests {
         assert_eq!(after.tx_standard - before.tx_standard, 1, "63-byte seal");
         assert_eq!(after.tx_dek - before.tx_dek, 1, "64-byte seal");
         assert_eq!(after.tx_oversize - before.tx_oversize, 1, "oversize offer");
-        assert_eq!(after.rx_total - before.rx_total, 0, "sealing is not receiving");
+        assert_eq!(
+            after.rx_total - before.rx_total,
+            0,
+            "sealing is not receiving"
+        );
         // Failed seals for OTHER reasons (no key for the peer) are
         // operational errors reported to the caller, not drop accounting.
         let before = stats::snapshot();
@@ -1580,7 +1503,10 @@ mod ffi_tests {
             );
         }
         let bad = "loud";
-        assert_eq!(lunet_paxe_fail_policy_set(bad.as_ptr(), bad.len()), RC_INVAL);
+        assert_eq!(
+            lunet_paxe_fail_policy_set(bad.as_ptr(), bad.len()),
+            RC_INVAL
+        );
         assert!(last_error_string().contains("silent"));
         // A failed set changes nothing.
         assert_eq!(stats::policy(), stats::FailPolicy::Verbose);
@@ -1623,9 +1549,14 @@ mod ffi_tests {
         let d = datagram_to(NODE_A as u16, 40, 0x04);
         assert_eq!(lunet_paxe_frame_for_us(d.as_ptr(), d.len()), 0);
         let after = stats::snapshot();
-        assert_eq!(after.rx_total - before.rx_total, 0, "unconfigured: uncounted");
         assert_eq!(
-            after.reject(stats::RejectReason::Plaintext) - before.reject(stats::RejectReason::Plaintext),
+            after.rx_total - before.rx_total,
+            0,
+            "unconfigured: uncounted"
+        );
+        assert_eq!(
+            after.reject(stats::RejectReason::Plaintext)
+                - before.reject(stats::RejectReason::Plaintext),
             0,
             "unconfigured: uncounted"
         );
@@ -1642,7 +1573,11 @@ mod ffi_tests {
         let before = stats::snapshot();
         assert_eq!(lunet_paxe_frame_for_us(d.as_ptr(), d.len()), 1);
         let after = stats::snapshot();
-        assert_eq!(after.rx_total - before.rx_total, 0, "a frame is open's to count");
+        assert_eq!(
+            after.rx_total - before.rx_total,
+            0,
+            "a frame is open's to count"
+        );
 
         // THE item09 attack case: plaintext crafted so byte 8 PASSES the
         // flags constant-bit gate (0x04: pattern bits set), with a toId
@@ -1654,12 +1589,14 @@ mod ffi_tests {
         let after = stats::snapshot();
         assert_eq!(after.rx_total - before.rx_total, 1, "rx_total +1");
         assert_eq!(
-            after.reject(stats::RejectReason::Plaintext) - before.reject(stats::RejectReason::Plaintext),
+            after.reject(stats::RejectReason::Plaintext)
+                - before.reject(stats::RejectReason::Plaintext),
             1,
             "rx_plaintext +1"
         );
         assert_eq!(
-            after.reject(stats::RejectReason::BadFlags) - before.reject(stats::RejectReason::BadFlags),
+            after.reject(stats::RejectReason::BadFlags)
+                - before.reject(stats::RejectReason::BadFlags),
             0,
             "rx_bad_flags must not move: the flags byte was never consulted"
         );
@@ -1672,12 +1609,14 @@ mod ffi_tests {
         assert_eq!(lunet_paxe_frame_for_us(short.as_ptr(), short.len()), 0);
         let after = stats::snapshot();
         assert_eq!(
-            after.reject(stats::RejectReason::Plaintext) - before.reject(stats::RejectReason::Plaintext),
+            after.reject(stats::RejectReason::Plaintext)
+                - before.reject(stats::RejectReason::Plaintext),
             1,
             "sub-prefix datagram counts as plaintext"
         );
         assert_eq!(
-            after.reject(stats::RejectReason::TooShort) - before.reject(stats::RejectReason::TooShort),
+            after.reject(stats::RejectReason::TooShort)
+                - before.reject(stats::RejectReason::TooShort),
             0,
             "rx_short must not move"
         );

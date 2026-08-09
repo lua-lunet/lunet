@@ -5,3 +5,11 @@ version = 4
 [[package]]
 name = "lunet-paxe"
 version = "0.1.0"
+dependencies = [
+ "paxe-core",
+]
+
+[[package]]
+name = "paxe-core"
+version = "0.1.0"
+source = "git+https://github.com/lua-lunet/paxe-core.git?rev=2abda9366e0a297c499360540cd7d57c8b13e6ca#2abda9366e0a297c499360540cd7d57c8b13e6ca"

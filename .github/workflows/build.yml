@@ -220,14 +220,19 @@ jobs:
     # (libsodium <1.0.20 lacks ARM Crypto Extensions support, and 1.0.21
     # does not compile on aarch64 with GCC). macOS gets
     # Homebrew 1.0.22; Windows gets vcpkg's current version. The env var
-    # is build.rs's priority-1 path (see ext/paxe/build.rs:70).
+    # is the priority-1 path in paxe-core's build.rs, which is where the
+    # static-libsodium staging now lives; ext/paxe has no build script of
+    # its own and inherits the core's link directives.
     - name: Set PAXE libsodium path (Linux)
       if: runner.os == 'Linux'
       run: echo "PAXE_SODIUM_LIB_DIR=/tmp/libsodium/lib" >> "$GITHUB_ENV"
 
-    # PAXE Rust scaffold (ext/paxe): zero-dependency cdylib. The
-    # three-platform claim is tested here, not asserted — this step runs on
-    # Windows too, unlike the ext modules above. Cargo is preinstalled on
+    # PAXE (ext/paxe): the C ABI cdylib. The protocol lives in paxe-core,
+    # pinned by rev in ext/paxe/Cargo.toml, so this step fetches one git
+    # dependency — the only network access in the Rust build.
+    #
+    # The three-platform claim is tested here, not asserted — this step runs
+    # on Windows too, unlike the ext modules above. Cargo is preinstalled on
     # the GH runners; ext/paxe/rust-toolchain.toml pins the toolchain and
     # rustup auto-installs the pinned version on first use. Cargo must run
     # with ext/paxe as the working directory: rustup resolves
@@ -236,12 +241,18 @@ jobs:
       working-directory: ext/paxe
       run: cargo build --release
 
-    # The crate's test suite (including the known-answer vectors, the primary
-    # defence against a wrong wire format) runs here — after the toolchain and
-    # dependencies are in place, before the artefact is verified — so a test
-    # failure stops the job before a bad cdylib is packaged. Same
-    # working-directory requirement as the build step above (rustup resolves
-    # rust-toolchain.toml from the cwd).
+    # This crate's tests — the FFI boundary ones — run here, after the
+    # toolchain and dependencies are in place and before the artefact is
+    # verified, so a failure stops the job before a bad cdylib is packaged.
+    # Same working-directory requirement as the build step above (rustup
+    # resolves rust-toolchain.toml from the cwd).
+    #
+    # SCOPE, stated plainly: the 87 protocol tests and the 11 known-answer
+    # vectors — the primary defence against a wrong wire format — now live
+    # in paxe-core and run in ITS suite, not here. What guards lunet against
+    # a bad core is the pinned rev: it cannot change without a reviewed edit
+    # to ext/paxe/Cargo.toml. The Lua-side spec and the UDP end-to-end below
+    # still exercise the real cdylib on every run.
     - name: Test PAXE Rust crate
       working-directory: ext/paxe
       run: cargo test

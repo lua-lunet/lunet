@@ -1,7 +1,6 @@
-# Verifies issue #123 acceptance: prove that `contributing/deps/debian.sh` +
-# `make init` install the full lunet dev toolchain on a clean debian:trixie
-# (arm64) machine — the same list the CI "Install Dependencies (Linux)" step
-# uses. This is the Phase E Docker check from the issue.
+# Verifies that `contributing/deps/debian.sh` + `make init` install the full
+# lunet dev toolchain on a clean debian:trixie (arm64) machine — the same
+# list the CI "Install Dependencies (Linux)" step uses.
 #
 # Build:  docker build --no-cache -f docker/Dockerfile.deps -t lunet-deps:trixie .
 # Run:    docker run --rm lunet-deps:trixie bash -c "xmake --version && luacheck --version"

@@ -286,6 +286,7 @@ target("lunet")
     -- Enable tracing if requested
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -356,6 +357,7 @@ target("lunet-bin")
     -- Enable tracing if requested
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -384,6 +386,7 @@ target("lunet-static")
     end
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -454,6 +457,7 @@ target("lunet-sqlite3")
     end
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -512,6 +516,7 @@ target("lunet-mysql")
     end
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -557,6 +562,7 @@ target("lunet-postgres")
     end
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -609,6 +615,7 @@ target("lunet-paxe")
     end
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -655,6 +662,7 @@ target("lunet-httpc")
     end
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -918,7 +926,7 @@ task("build-release")
         os.exec("xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n -y")
         os.exec("xmake build")
         -- SDK targets are set_default(false); build them explicitly so the
-        -- local release gate covers what CI packages (#117).
+        -- local release gate covers what CI packages.
         os.exec("xmake build lunet-static")
         os.exec("xmake build sdk-api-test")
     end)
@@ -985,11 +993,35 @@ task("stress")
         description = "Run stress test with debug trace profile"
     }
     on_run(function ()
+        os.mkdir(path.join(os.projectdir(), ".tmp"))
         local workers = os.getenv("STRESS_WORKERS") or "50"
         local ops = os.getenv("STRESS_OPS") or "100"
         os.exec("xmake build-debug")
         local runner = lunet_runner_path("debug")
         os.execv(runner, {"test/stress_test.lua"}, {envs = {STRESS_WORKERS = workers, STRESS_OPS = ops}})
+        -- Accept/UDP concurrency regressions: parked-acceptor wakeup on close,
+        -- and accept+UDP heartbeat concurrency.
+        os.execv(runner, {"test/socket_close_wakeup.lua"})
+        os.execv(runner, {"test/accept_udp_concurrent.lua"})
+        -- accept() must reject a connected client handle passed where a
+        -- listener is expected: fail immediately instead of reading server-arm
+        -- fields through the client arm's read_ref/write_ref union overlay,
+        -- which would park the coroutine forever and corrupt client state.
+        os.execv(runner, {"test/socket_accept_type_check.lua"})
+        -- listen_cb error-path fault injection. Requires LUNET_TEST_FAULTS
+        -- (debug/trace profile only); each mode below exercises a distinct
+        -- branch in lunet_socket_test_fault_take.
+        os.execv(runner, {"test/socket_listen_error_paths.lua"},
+            {envs = {LUNET_TEST_SOCKET_LISTEN_FAULT = "nonthread_waiter"}})
+        os.execv(runner, {"test/socket_listen_error_paths.lua"},
+            {envs = {LUNET_TEST_SOCKET_LISTEN_FAULT = "queue_fail"}})
+        os.execv(runner, {"test/socket_listen_error_paths.lua"},
+            {envs = {LUNET_TEST_SOCKET_LISTEN_FAULT = "alloc_fail+drop_fail"}})
+        -- Listener handle must not dangle after the catastrophic self-close
+        -- path. Lua has no os.setenv, so the fault mode that drives
+        -- lunet_listen_cb into self-close must be supplied here.
+        os.execv(runner, {"test/socket_listener_self_close.lua"},
+            {envs = {LUNET_TEST_SOCKET_LISTEN_FAULT = "alloc_fail,drop_fail"}})
     end)
 task_end()
 
@@ -1072,7 +1104,7 @@ task_end()
 task("repro-50-asan-luajit")
     set_menu {
         usage = "xmake repro-50-asan-luajit",
-        description = "Run issue #50 repro with LuaJIT+Lunet ASan (macOS)"
+        description = "Run the socket stress repro with LuaJIT+Lunet ASan (macOS)"
     }
     on_run(function ()
         if not is_host("macosx") then

@@ -42,6 +42,7 @@ types/                              # LuaCATS type annotations (---@meta, docume
     signal.lua                      # OS signal handling
     socket.lua                      # TCP socket operations
     udp.lua                         # UDP socket operations
+*.md                                # bundled docs (see "Bundled documentation" below)
 ```
 
 The `types/` directory contains LuaCATS `---@meta` annotations — pure
@@ -53,6 +54,35 @@ and signature help:
 ```json
 { "workspace.library": ["/path/to/lunet/types"] }
 ```
+
+## Bundled documentation
+
+The archive's top level includes every `docs/*.md` file (and its `-CN.md`
+Chinese counterpart) from the repository, copied in by the release workflow
+by default. This is a default-copy-with-exclusions rule, not an allow-list:
+any new doc added under `docs/` is automatically bundled unless it is added
+to the `DOC_EXCLUDES` list in `.github/workflows/build.yml`.
+
+Currently excluded (internal-only, not useful to end users of the binary
+release):
+
+- `CONTRIBUTING-INTERNALS.md` / `CONTRIBUTING-INTERNALS-CN.md` — C code
+  conventions and debugging methodology for contributors working on the
+  runtime itself.
+- `BADGES.md` / `BADGES-CN.md` — README badge snippets for downstream
+  projects.
+- `EASY_MEMORY_REPORT.md` / `EASY_MEMORY_REPORT-CN.md` — EasyMem
+  integration and memory-profiling report for the runtime's own builds.
+- `WORKFLOW.md` / `WORKFLOW-CN.md` — developer workflow and xmake task
+  reference for contributors building from source.
+- `XMAKE_INTEGRATION.md` / `XMAKE_INTEGRATION-CN.md` — guide to building
+  and embedding Lunet from source; the binary archive needs no build
+  steps.
+
+This does not apply to the SDK archives (`*-sdk.tar.gz` / `*-sdk.zip`), which
+ship only `docs/EMBEDDING.md` / `docs/EMBEDDING-CN.md`, renamed to
+`README.md` / `README-CN.md` — see [`docs/EMBEDDING.md`](EMBEDDING.md) for
+the SDK layout.
 
 ## How extensions are loaded
 

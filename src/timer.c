@@ -44,7 +44,7 @@ void lunet_timer_trace_summary(void) {
 
 typedef struct {
   uv_timer_t timer;
-  lua_State *L;
+  lua_State *owner_L;
   int co_ref;
 } sleep_ctx_t;
 
@@ -55,7 +55,7 @@ static void lunet_sleep_close_cb(uv_handle_t *handle) {
 
 static void lunet_sleep_cb(uv_timer_t *timer) {
   sleep_ctx_t *ctx = (sleep_ctx_t *)timer->data;
-  lua_State *L = ctx->L;
+  lua_State *L = ctx->owner_L;
 
   TIMER_TRACE_WAKE(ctx);
 
@@ -96,11 +96,11 @@ int lunet_sleep(lua_State *co) {
     return lua_error(co);
   }
   // save coroutine reference to main lua state
-  ctx->L = default_luaL();
+  ctx->owner_L = default_luaL();
   lua_pushthread(co);
-  lua_xmove(co, ctx->L, 1);
+  lua_xmove(co, ctx->owner_L, 1);
   // Thread already on stack from xmove, use raw variant
-  lunet_coref_create_raw(ctx->L, ctx->co_ref);
+  lunet_coref_create_raw(ctx->owner_L, ctx->co_ref);
 
   // init timer
   uv_timer_init(uv_default_loop(), &ctx->timer);

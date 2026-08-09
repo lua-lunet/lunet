@@ -54,13 +54,13 @@ void lunet_fs_trace_summary(void) {
 
 typedef struct {
   uv_fs_t req;
-  lua_State *L;
+  lua_State *waiter_L;
   int co_ref;
 } fs_ctx_t;
 
 static void lunet_fs_open_cb(uv_fs_t *req) {
   fs_ctx_t *ctx = (fs_ctx_t *)req->data;
-  lua_State *L = ctx->L;
+  lua_State *L = ctx->waiter_L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
@@ -165,7 +165,7 @@ int lunet_fs_open(lua_State *L) {
     return 2;
   }
 
-  ctx->L = L;
+  ctx->waiter_L = L;
   lunet_coref_create(L, ctx->co_ref);
   ctx->req.data = ctx;
 
@@ -185,13 +185,13 @@ int lunet_fs_open(lua_State *L) {
 
 typedef struct {
   uv_fs_t req;
-  lua_State *L;
+  lua_State *waiter_L;
   int co_ref;
 } fs_close_ctx_t;
 
 static void lunet_fs_close_cb(uv_fs_t *req) {
   fs_close_ctx_t *ctx = (fs_close_ctx_t *)req->data;
-  lua_State *L = ctx->L;
+  lua_State *L = ctx->waiter_L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
@@ -235,7 +235,7 @@ int lunet_fs_close(lua_State *L) {
     return 1;
   }
 
-  ctx->L = L;
+  ctx->waiter_L = L;
   lunet_coref_create(L, ctx->co_ref);
   ctx->req.data = ctx;
 
@@ -254,13 +254,13 @@ int lunet_fs_close(lua_State *L) {
 
 typedef struct {
   uv_fs_t req;
-  lua_State *L;
+  lua_State *waiter_L;
   int co_ref;
 } fs_stat_ctx_t;
 
 static void lunet_fs_stat_cb(uv_fs_t *req) {
   fs_stat_ctx_t *ctx = (fs_stat_ctx_t *)req->data;
-  lua_State *L = ctx->L;
+  lua_State *L = ctx->waiter_L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
@@ -342,7 +342,7 @@ int lunet_fs_stat(lua_State *L) {
     return 2;
   }
 
-  ctx->L = L;
+  ctx->waiter_L = L;
   lunet_coref_create(L, ctx->co_ref);
   ctx->req.data = ctx;
 
@@ -362,7 +362,7 @@ int lunet_fs_stat(lua_State *L) {
 
 typedef struct {
   uv_fs_t req;
-  lua_State *L;
+  lua_State *waiter_L;
   int co_ref;
   size_t len;
   char *buf;
@@ -370,7 +370,7 @@ typedef struct {
 
 static void lunet_fs_read_cb(uv_fs_t *req) {
   fs_read_ctx_t *ctx = (fs_read_ctx_t *)req->data;
-  lua_State *L = ctx->L;
+  lua_State *L = ctx->waiter_L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
@@ -420,7 +420,7 @@ int lunet_fs_read(lua_State *L) {
     return 2;
   }
 
-  ctx->L = L;
+  ctx->waiter_L = L;
   lunet_coref_create(L, ctx->co_ref);
   ctx->len = len;
   ctx->buf = lunet_alloc(len);
@@ -451,7 +451,7 @@ int lunet_fs_read(lua_State *L) {
 
 typedef struct {
   uv_fs_t req;
-  lua_State *L;
+  lua_State *waiter_L;
   int co_ref;
   size_t len;
   char *buf;
@@ -459,7 +459,7 @@ typedef struct {
 
 static void lunet_fs_write_cb(uv_fs_t *req) {
   fs_write_ctx_t *ctx = (fs_write_ctx_t *)req->data;
-  lua_State *L = ctx->L;
+  lua_State *L = ctx->waiter_L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
@@ -509,7 +509,7 @@ int lunet_fs_write(lua_State *L) {
     return 2;
   }
 
-  ctx->L = L;
+  ctx->waiter_L = L;
   lunet_coref_create(L, ctx->co_ref);
   ctx->len = len;
   ctx->buf = lunet_alloc(len);
@@ -542,7 +542,7 @@ int lunet_fs_write(lua_State *L) {
 
 typedef struct {
   uv_fs_t req;
-  lua_State *L;
+  lua_State *waiter_L;
   int co_ref;
 } fs_scandir_ctx_t;
 
@@ -561,7 +561,7 @@ const char *dirent_type_to_string(uv_dirent_type_t type) {
 
 static void lunet_fs_scandir_cb(uv_fs_t *req) {
   fs_scandir_ctx_t *ctx = (fs_scandir_ctx_t *)req->data;
-  lua_State *L = ctx->L;
+  lua_State *L = ctx->waiter_L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
@@ -621,7 +621,7 @@ int lunet_fs_scandir(lua_State *L) {
     return 2;
   }
 
-  ctx->L = L;
+  ctx->waiter_L = L;
   lunet_coref_create(L, ctx->co_ref);
   ctx->req.data = ctx;
 

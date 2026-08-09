@@ -59,7 +59,7 @@ static void httpc_strlist_free(httpc_strlist_t *l) {
 
 typedef struct {
   uv_work_t req;
-  lua_State *L;
+  lua_State *waiter_L;
   int co_ref;
 
   char *url;
@@ -220,7 +220,7 @@ static void httpc_work_cb(uv_work_t *req) {
 static void httpc_after_cb(uv_work_t *req, int status) {
   (void)status;
   httpc_req_t *ctx = (httpc_req_t *)req->data;
-  lua_State *L = ctx->L;
+  lua_State *L = ctx->waiter_L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
@@ -436,7 +436,7 @@ static int httpc_request(lua_State *L) {
   }
   memset(ctx, 0, sizeof(*ctx));
 
-  ctx->L = L;
+  ctx->waiter_L = L;
   ctx->req.data = ctx;
   ctx->timeout_ms = timeout_ms;
   ctx->max_body_bytes = max_body_bytes;

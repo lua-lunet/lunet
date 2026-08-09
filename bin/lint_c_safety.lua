@@ -121,6 +121,37 @@ local function check_file(path)
                 msg = "Unsafe ref release. Use lunet_coref_release()"
             })
         end
+
+        -- Rule 4: No legacy ctx state fields. Async handle contexts must use
+        -- owner_L (owning main state, from default_luaL()) or waiter_L
+        -- (calling state, valid only for the op's lifetime via coref).
+        -- A bare "->L = L" / "->co = co" assignment mixes the two up.
+        if code_part:match("%-%>%s*L%s*=%s*L%s*[;,%)]") or
+           code_part:match("%-%>%s*co%s*=%s*co%s*[;,%)]") or
+           code_part:match("%-%>%s*L%s*=%s*co%s*[;,%)]") or
+           code_part:match("%-%>%s*co%s*=%s*L%s*[;,%)]") then
+            table.insert(file_violations, {
+                line = i,
+                content = line,
+                msg = "Legacy ctx state field. Use owner_L (long-lived handles) or waiter_L (op-scoped); see C Code Conventions"
+            })
+        end
+
+        -- Rule 5: owner_L must never be assigned the calling state. The only
+        -- permitted sources are default_luaL() (optionally with a fallback)
+        -- or another owner_L. The legitimate forms
+        --   ctx->owner_L = default_luaL();
+        --   ctx->owner_L = mainL ? mainL : L;
+        --   client_ctx->owner_L = ctx->owner_L;
+        -- do not match these patterns.
+        if code_part:match("owner_L%s*=%s*L%s*[;,%)]") or
+           code_part:match("owner_L%s*=%s*co%s*[;,%)]") then
+            table.insert(file_violations, {
+                line = i,
+                content = line,
+                msg = "owner_L assigned the calling state. Use default_luaL() (optionally with fallback) or inherit from another owner_L"
+            })
+        end
     end
 
     if #file_violations > 0 then

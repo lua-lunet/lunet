@@ -1,4 +1,4 @@
--- Smoke test for lunet.sqlite3_tx (transaction wrapper, issue #119)
+-- Smoke test for lunet.sqlite3_tx (transaction wrapper)
 --
 -- Run after `xmake build lunet-sqlite3 && xmake build-release`:
 --   "$(find build -path '*/release/lunet-run' -type f | head -1)" test/smoke_sqlite3_tx.lua

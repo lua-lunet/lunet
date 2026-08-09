@@ -26,7 +26,7 @@ typedef struct {
   int closed;
 } lunet_sqlite_conn_t;
 
-// Close the SQLite connection but don't destroy the mutex (caller may still hold it)
+/* Close the SQLite connection but don't destroy the mutex (caller may still hold it). */
 static void lunet_sqlite_conn_close(lunet_sqlite_conn_t* wrapper) {
   if (!wrapper || wrapper->closed) return;
   wrapper->closed = 1;
@@ -36,7 +36,7 @@ static void lunet_sqlite_conn_close(lunet_sqlite_conn_t* wrapper) {
   }
 }
 
-// Full cleanup including mutex - only call when mutex is NOT held (e.g., from GC)
+/* Full cleanup including mutex; only call when mutex is not held (for example, from GC). */
 static void lunet_sqlite_conn_destroy(lunet_sqlite_conn_t* wrapper) {
   lunet_sqlite_conn_close(wrapper);
   if (wrapper) {
@@ -196,7 +196,7 @@ static int bind_params(sqlite3_stmt* stmt, param_t* params, int nparams, char* e
 
 typedef struct {
   uv_work_t req;
-  lua_State* L;
+  lua_State* waiter_L;
   int co_ref;
 
   sqlite3* conn;
@@ -219,7 +219,7 @@ static void db_open_work_cb(uv_work_t* req) {
 
 static void db_open_after_cb(uv_work_t* req, int status) {
   db_open_ctx_t* ctx = (db_open_ctx_t*)req->data;
-  lua_State* L = ctx->L;
+  lua_State* L = ctx->waiter_L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
@@ -273,7 +273,7 @@ int lunet_db_open(lua_State* L) {
     return lua_error(L);
   }
   memset(ctx->err, 0, sizeof(ctx->err));
-  ctx->L = L;
+  ctx->waiter_L = L;
   ctx->req.data = ctx;
 
   lua_getfield(L, 1, "path");
@@ -310,7 +310,7 @@ int lunet_db_close(lua_State* L) {
   }
 
   uv_mutex_lock(&wrapper->mutex);
-  lunet_sqlite_conn_close(wrapper);  // Close connection but don't destroy mutex
+  lunet_sqlite_conn_close(wrapper); /* Keep mutex intact until after unlock. */
   uv_mutex_unlock(&wrapper->mutex);
   // Mutex will be destroyed by GC via lunet_sqlite_conn_destroy
 
@@ -320,7 +320,7 @@ int lunet_db_close(lua_State* L) {
 
 typedef struct {
   uv_work_t req;
-  lua_State* L;
+  lua_State* waiter_L;
   int co_ref;
 
   lunet_sqlite_conn_t* wrapper;
@@ -476,7 +476,7 @@ static void db_query_work_cb(uv_work_t* req) {
 
 static void db_query_after_cb(uv_work_t* req, int status) {
   db_query_ctx_t* ctx = (db_query_ctx_t*)req->data;
-  lua_State* L = ctx->L;
+  lua_State* L = ctx->waiter_L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
@@ -587,7 +587,7 @@ int lunet_db_query(lua_State* L) {
     return lua_error(L);
   }
   memset(ctx, 0, sizeof(*ctx));
-  ctx->L = L;
+  ctx->waiter_L = L;
   ctx->req.data = ctx;
   ctx->wrapper = wrapper;
   ctx->query = lunet_strdup_local(query);
@@ -628,7 +628,7 @@ int lunet_db_query(lua_State* L) {
 
 typedef struct {
   uv_work_t req;
-  lua_State* L;
+  lua_State* waiter_L;
   int co_ref;
 
   lunet_sqlite_conn_t* wrapper;
@@ -692,7 +692,7 @@ static void db_exec_work_cb(uv_work_t* req) {
 
 static void db_exec_after_cb(uv_work_t* req, int status) {
   db_exec_ctx_t* ctx = (db_exec_ctx_t*)req->data;
-  lua_State* L = ctx->L;
+  lua_State* L = ctx->waiter_L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
@@ -770,7 +770,7 @@ int lunet_db_exec(lua_State* L) {
     return 2;
   }
   memset(ctx, 0, sizeof(*ctx));
-  ctx->L = L;
+  ctx->waiter_L = L;
   ctx->req.data = ctx;
   ctx->wrapper = wrapper;
   ctx->query = lunet_strdup_local(query);
@@ -840,7 +840,7 @@ int lunet_db_query_params(lua_State* L) {
     return lua_error(L);
   }
   memset(ctx, 0, sizeof(*ctx));
-  ctx->L = L;
+  ctx->waiter_L = L;
   ctx->req.data = ctx;
   ctx->wrapper = wrapper;
   ctx->query = lunet_strdup_local(query);
@@ -908,7 +908,7 @@ int lunet_db_exec_params(lua_State* L) {
     return 2;
   }
   memset(ctx, 0, sizeof(*ctx));
-  ctx->L = L;
+  ctx->waiter_L = L;
   ctx->req.data = ctx;
   ctx->wrapper = wrapper;
   ctx->query = lunet_strdup_local(query);

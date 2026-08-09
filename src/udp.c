@@ -27,7 +27,7 @@
 typedef struct {
   uv_udp_t handle;
   queue_t *pending;
-  lua_State *co;
+  lua_State *owner_L;
   int recv_ref;
 #ifdef LUNET_TRACE
   int trace_tx;
@@ -216,10 +216,10 @@ static void udp_recv_cb(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
 
 #ifdef LUNET_TRACE
   lua_State *expected = default_luaL();
-  if (expected && ctx && ctx->co != expected) {
+  if (expected && ctx && ctx->owner_L != expected) {
     fprintf(stderr,
-            "[UDP_TRACE] BAD_LUA_STATE ctx=%p (ctx->co=%p expected=%p)\n",
-            (void *)ctx, (void *)ctx->co, (void *)expected);
+            "[UDP_TRACE] BAD_LUA_STATE ctx=%p (ctx->owner_L=%p expected=%p)\n",
+            (void *)ctx, (void *)ctx->owner_L, (void *)expected);
   }
 #endif
 
@@ -253,19 +253,19 @@ static void udp_recv_cb(uv_udp_t *handle, ssize_t nread, const uv_buf_t *buf,
   }
 
   if (ctx->recv_ref != LUA_NOREF) {
-    lua_rawgeti(ctx->co, LUA_REGISTRYINDEX, ctx->recv_ref);
-    lunet_coref_release(ctx->co, ctx->recv_ref);
+    lua_rawgeti(ctx->owner_L, LUA_REGISTRYINDEX, ctx->recv_ref);
+    lunet_coref_release(ctx->owner_L, ctx->recv_ref);
     ctx->recv_ref = LUA_NOREF;
     udp_bk_resume(ctx);
 
-    if (!lua_isthread(ctx->co, -1)) {
-      lua_pop(ctx->co, 1);
+    if (!lua_isthread(ctx->owner_L, -1)) {
+      lua_pop(ctx->owner_L, 1);
       udp_bk_cancel(ctx);
       return;
     }
 
-    lua_State *waiting_co = lua_tothread(ctx->co, -1);
-    lua_pop(ctx->co, 1);
+    lua_State *waiting_co = lua_tothread(ctx->owner_L, -1);
+    lua_pop(ctx->owner_L, 1);
     udp_msg_t *to_deliver = (udp_msg_t *)queue_dequeue(ctx->pending);
     if (to_deliver != NULL) {
       UDP_TRACE_RECV_RESUME(to_deliver->host, to_deliver->port, to_deliver->len);
@@ -327,7 +327,7 @@ int lunet_udp_bind(lua_State *co) {
   /* Use the main Lua state for registry operations; the bind coroutine may
    * finish synchronously and be GC'ed while the UDP handle is still alive. */
   lua_State *mainL = default_luaL();
-  ctx->co = mainL ? mainL : co;
+  ctx->owner_L = mainL ? mainL : co;
   ctx->recv_ref = LUA_NOREF;
 #ifdef LUNET_TRACE
   ctx->trace_tx = 0;
@@ -571,19 +571,19 @@ int lunet_udp_close(lua_State *L) {
   ctx->pending = NULL;
 
   if (ctx->recv_ref != LUA_NOREF) {
-    lua_rawgeti(ctx->co, LUA_REGISTRYINDEX, ctx->recv_ref);
-    lunet_coref_release(ctx->co, ctx->recv_ref);
+    lua_rawgeti(ctx->owner_L, LUA_REGISTRYINDEX, ctx->recv_ref);
+    lunet_coref_release(ctx->owner_L, ctx->recv_ref);
     ctx->recv_ref = LUA_NOREF;
     udp_bk_resume(ctx);
-    if (lua_isthread(ctx->co, -1)) {
-      lua_State *waiting_co = lua_tothread(ctx->co, -1);
-      lua_pop(ctx->co, 1);
+    if (lua_isthread(ctx->owner_L, -1)) {
+      lua_State *waiting_co = lua_tothread(ctx->owner_L, -1);
+      lua_pop(ctx->owner_L, 1);
       lua_pushnil(waiting_co);
       lua_pushnil(waiting_co);
       lua_pushstring(waiting_co, "udp closed");
       lunet_co_resume(waiting_co, 3);
     } else {
-      lua_pop(ctx->co, 1);
+      lua_pop(ctx->owner_L, 1);
       udp_bk_cancel(ctx);
     }
   }

@@ -64,6 +64,13 @@ workspace library 即可获得代码补全和签名提示：
 
 - `CONTRIBUTING-INTERNALS.md` / `CONTRIBUTING-INTERNALS-CN.md` —— 面向在
   运行时本身工作的贡献者的 C 代码约定与调试方法论。
+- `BADGES.md` / `BADGES-CN.md` —— 供下游项目 README 使用的徽标代码片段。
+- `EASY_MEMORY_REPORT.md` / `EASY_MEMORY_REPORT-CN.md` —— 面向运行时自身
+  构建的 EasyMem 集成与内存分析报告。
+- `WORKFLOW.md` / `WORKFLOW-CN.md` —— 面向从源码构建的贡献者的开发工作流
+  与 xmake 任务参考。
+- `XMAKE_INTEGRATION.md` / `XMAKE_INTEGRATION-CN.md` —— 从源码构建并嵌入
+  Lunet 的指南；二进制压缩包无需任何构建步骤。
 
 此规则不适用于 SDK 压缩包（`*-sdk.tar.gz` / `*-sdk.zip`），后者只随包携带
 `docs/EMBEDDING.md` / `docs/EMBEDDING-CN.md`，并重命名为

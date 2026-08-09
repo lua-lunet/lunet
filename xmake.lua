@@ -926,7 +926,7 @@ task("build-release")
         os.exec("xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n -y")
         os.exec("xmake build")
         -- SDK targets are set_default(false); build them explicitly so the
-        -- local release gate covers what CI packages (#117).
+        -- local release gate covers what CI packages.
         os.exec("xmake build lunet-static")
         os.exec("xmake build sdk-api-test")
     end)
@@ -1003,9 +1003,10 @@ task("stress")
         -- and accept+UDP heartbeat concurrency.
         os.execv(runner, {"test/socket_close_wakeup.lua"})
         os.execv(runner, {"test/accept_udp_concurrent.lua"})
-        -- Verify that accept() returns a valid uv_pipe_t handle when bound to a
-        -- pipe (not a uv_tcp_t disguised as a pipe, which causes dtype mismatch
-        -- crashes in uv_pipe_pending_instances and later win32-only pipe APIs).
+        -- accept() must reject a connected client handle passed where a
+        -- listener is expected: fail immediately instead of reading server-arm
+        -- fields through the client arm's read_ref/write_ref union overlay,
+        -- which would park the coroutine forever and corrupt client state.
         os.execv(runner, {"test/socket_accept_type_check.lua"})
         -- listen_cb error-path fault injection. Requires LUNET_TEST_FAULTS
         -- (debug/trace profile only); each mode below exercises a distinct

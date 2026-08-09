@@ -18,6 +18,8 @@
  *   lunet_ensure_coroutine(L, "func_name")  - Check we're in a yieldable coroutine
  *   lunet_coref_create(L, &ref)             - Create a coroutine reference
  *   lunet_coref_release(L, ref)             - Release a coroutine reference
+ *   lunet_valref_create_raw(L, &ref)        - Pin a non-coroutine value on stack top
+ *   lunet_valref_release(L, ref)            - Release a value reference
  * 
  * INTERNAL API (do not use directly):
  * -----------------------------------
@@ -29,6 +31,34 @@
  *   lunet_trace_dump()            - Print statistics
  *   lunet_trace_assert_balanced() - Assert all refs released (call at shutdown)
  */
+
+/*
+ * lunet_valref_create_raw - Pin an arbitrary Lua value (not a coroutine)
+ *
+ * Behaves exactly like lunet_coref_create_raw, but for values other than
+ * coroutines: the value to pin must already be at the top of stack L
+ * (e.g. a userdata pinned across a lua_cpcall boundary). It deliberately
+ * does NOT touch the coref trace counters, so coref_total_created /
+ * coref_peak count only actual coroutine references.
+ *
+ * Identical in traced and untraced builds, hence defined once here,
+ * outside the LUNET_TRACE split.
+ *
+ * Usage: lunet_valref_create_raw(L, payload->ref);
+ */
+#define lunet_valref_create_raw(L, ref_var) do { \
+    (ref_var) = luaL_ref(L, LUA_REGISTRYINDEX); \
+} while(0)
+
+/*
+ * lunet_valref_release - Release a value reference from the Lua registry
+ *
+ * Pairs with lunet_valref_create_raw. Also untracked, so ref accounting
+ * stays balanced without inflating the coroutine-ref trace counters.
+ */
+#define lunet_valref_release(L, ref) do { \
+    luaL_unref(L, LUA_REGISTRYINDEX, ref); \
+} while(0)
 
 #ifdef LUNET_TRACE
 

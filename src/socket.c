@@ -126,13 +126,14 @@ static void socket_handle_push_metatable(lua_State *L) {
 static socket_handle_t *socket_handle_new(lua_State *L, socket_ctx_t *ctx) {
   socket_handle_t *handle =
       (socket_handle_t *)lua_newuserdata(L, sizeof(socket_handle_t));
+  socket_handle_push_metatable(L);
+  lua_setmetatable(L, -2);
+  /* Link into ctx->handles only after all fallible setup has succeeded. */
   handle->ctx = ctx;
   handle->next = ctx ? ctx->handles : NULL;
   if (ctx) {
     ctx->handles = handle;
   }
-  socket_handle_push_metatable(L);
-  lua_setmetatable(L, -2);
   return handle;
 }
 
@@ -145,7 +146,7 @@ static int socket_handle_new_trampoline(lua_State *L) {
   socket_handle_new_payload_t *payload =
       (socket_handle_new_payload_t *)lua_touserdata(L, 1);
   socket_handle_new(L, payload->ctx);
-  lunet_coref_create_raw(L, payload->ref);
+  lunet_valref_create_raw(L, payload->ref);
   return 0;
 }
 
@@ -154,10 +155,13 @@ static int socket_handle_new_trampoline(lua_State *L) {
  * under lua_pcall, so a raised Lua error would longjmp through libuv's C
  * stack frames (undefined behavior). socket_handle_new() calls
  * lua_newuserdata(), which can raise LUA_ERRMEM on allocation failure.
- * Route the allocation through lua_pcall so an OOM there surfaces as a
- * normal error return instead of an unprotected longjmp. On success, the
- * new handle userdata is left on top of L's stack, exactly as if
- * socket_handle_new() had been called directly.
+ * Route the allocation through lua_cpcall, which takes a C function
+ * pointer directly, so no closure needs to be pushed before the
+ * protection boundary is established; an OOM inside surfaces as a normal
+ * error return instead of an unprotected longjmp. lua_cpcall discards
+ * any pushed results on success, so the new handle userdata is
+ * re-fetched through the registry ref (the lua_rawgeti()/
+ * lunet_valref_release() dance below) rather than taken off the stack.
  */
 static int socket_handle_new_protected(lua_State *L, socket_ctx_t *ctx) {
   socket_handle_new_payload_t payload = {ctx, LUA_NOREF};
@@ -167,7 +171,7 @@ static int socket_handle_new_protected(lua_State *L, socket_ctx_t *ctx) {
   }
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, payload.ref);
-  lunet_coref_release(L, payload.ref);
+  lunet_valref_release(L, payload.ref);
   return 0;
 }
 
@@ -1009,7 +1013,7 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
       if (socket_handle_new_protected(waiting_co, client_ctx) != 0) {
         /* OOM creating the handle userdata: the connection was already
          * accepted by libuv, but we cannot hand it to the waiter. Discard
-         * the pcall error message and close the orphaned connection rather
+         * the cpcall error message and close the orphaned connection rather
          * than leaving it (or the coroutine) stuck. */
         lua_pop(waiting_co, 1);
         fprintf(stderr, "[lunet] listen_cb: out of memory creating socket handle\n");
@@ -1017,7 +1021,13 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
         uv_close(&client_ctx->u.handle, lunet_close_cb);
         lua_pushnil(waiting_co);
         lua_pushstring(waiting_co, "out of memory");
-        lunet_co_resume(waiting_co, 2);
+        int resume_status = lunet_co_resume(waiting_co, 2);
+        if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
+          const char *err = lua_tostring(waiting_co, -1);
+          if (err) {
+            fprintf(stderr, "[lunet] resume error in listen_cb (OOM path): %s\n", err);
+          }
+        }
         return;
       }
       lua_pushnil(waiting_co);
@@ -1508,7 +1518,7 @@ static void lunet_connect_cb(uv_connect_t *req, int status) {
 
   if (status == 0) {
     if (socket_handle_new_protected(co, ctx->ctx) != 0) {
-      /* OOM creating the handle userdata: discard the pcall error message
+      /* OOM creating the handle userdata: discard the cpcall error message
        * and close the connected socket rather than leaving it unreachable. */
       lua_pop(co, 1);
       fprintf(stderr, "[lunet] connect_cb: out of memory creating socket handle\n");

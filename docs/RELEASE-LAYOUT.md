@@ -69,6 +69,15 @@ release):
 - `CONTRIBUTING-INTERNALS.md` / `CONTRIBUTING-INTERNALS-CN.md` — C code
   conventions and debugging methodology for contributors working on the
   runtime itself.
+- `BADGES.md` / `BADGES-CN.md` — README badge snippets for downstream
+  projects.
+- `EASY_MEMORY_REPORT.md` / `EASY_MEMORY_REPORT-CN.md` — EasyMem
+  integration and memory-profiling report for the runtime's own builds.
+- `WORKFLOW.md` / `WORKFLOW-CN.md` — developer workflow and xmake task
+  reference for contributors building from source.
+- `XMAKE_INTEGRATION.md` / `XMAKE_INTEGRATION-CN.md` — guide to building
+  and embedding Lunet from source; the binary archive needs no build
+  steps.
 
 This does not apply to the SDK archives (`*-sdk.tar.gz` / `*-sdk.zip`), which
 ship only `docs/EMBEDDING.md` / `docs/EMBEDDING-CN.md`, renamed to

@@ -193,11 +193,6 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: make test
 
-    - name: Socket regression suite (xmake stress)
-      if: matrix.os == 'ubuntu-latest'
-      timeout-minutes: 2
-      run: xmake stress
-
     - name: C SDK lifecycle test (Unix)
       if: runner.os != 'Windows'
       run: |
@@ -442,7 +437,7 @@ jobs:
 
     # Guard against shipping a broken archive: extract the just-built tarball
     # and exercise both Rust ext modules through the packaged binary, using
-    # exactly the layout downstream apps will consume (#115).
+    # exactly the layout downstream apps will consume.
     - name: Verify packaged ext modules (Unix)
       if: runner.os != 'Windows'
       run: |
@@ -623,6 +618,31 @@ jobs:
       with:
         name: release-sdk-windows
         path: lunet-windows-amd64-sdk.zip
+
+  # xmake stress runs xmake build-debug, a clean reconfigure to the
+  # debug/trace profile that leaves a second build tree under build/. It
+  # lives in its own job so the packaging job's tree stays release-only and
+  # the release archives can never pick up debug binaries.
+  stress:
+    name: Socket regression suite (xmake stress)
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
+
+    - name: Install xmake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: "3.0.8"
+
+    - name: Install Dependencies (Linux)
+      run: bash contributing/deps/debian.sh --ci
+
+    - name: Run socket regression suite
+      timeout-minutes: 5
+      run: xmake stress
 
   embed-scripts:
     name: Embed scripts smoke (${{ matrix.os }})
@@ -826,7 +846,7 @@ jobs:
   publish-release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))
-    needs: [build, embed-scripts, easy-memory, lua-qa]
+    needs: [build, embed-scripts, easy-memory, lua-qa, stress]
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
     - name: Checkout

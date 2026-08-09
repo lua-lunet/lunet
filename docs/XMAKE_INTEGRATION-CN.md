@@ -153,15 +153,17 @@ xmake test
 
 输出会被 tee 到 `.tmp/logs/<时间戳>/busted.txt`。
 
-### busted 解析规则（仅限 LuaJIT / 5.1 ABI）
+### busted 运行在 LuaJIT 下（仅限 5.1 ABI）
 
-运行时是 LuaJIT（Lua 5.1 ABI），因此测试套件必须运行在 5.1 树的 busted 下 —— Homebrew 的 `/opt/homebrew/bin/busted` 会执行 PUC Lua 5.5，加载 lunet 的 C 模块时会挂起。`xmake test` 按以下顺序解析 busted：
+lunet 的 C 模块链接 `libluajit-5.1`，因此把它们加载进 PUC Lua 进程会让两个互不兼容的 Lua 运行时共处同一地址空间：在 Linux 上会段错误，在 macOS 上会挂起。`PATH` 中的 `busted` 包装脚本无法避免这一点 —— luarocks 会把安装时探测到的解释器写死进包装脚本（在 Debian/Ubuntu 上即使用 `--lua-dir` 指向 LuaJIT，生成的仍是 `exec /usr/bin/lua5.1 … bin/busted`；Homebrew 上则是 `lua5.5`）。
 
-1. `$LUNET_BUSTED` —— 显式覆盖
-2. `$HOME/.luarocks/bin/busted` —— LuaJIT/5.1 用户树
-3. `PATH` 中的 `busted`
+因此 `xmake test` 忽略该包装脚本，自行启动 busted 的 Lua 入口：
 
-CI 通过 `contributing/deps/qa-luarocks.sh` 安装系统级 5.1 busted，因此 CI 中 PATH 回退生效。
+```
+luajit bin/busted_runner.lua spec/
+```
+
+`LUA_PATH` / `LUA_CPATH` 由 `luarocks --lua-version=5.1 path` 生成，因此无论解释器自身的默认搜索路径如何，都能在 5.1 的用户树与系统树中找到 busted。可用覆盖项：`$LUNET_LUAJIT`（解释器）与 `$LUNET_BUSTED`（busted 的 Lua 入口脚本路径）。
 
 ### pending 测试会导致失败
 

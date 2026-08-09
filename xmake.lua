@@ -794,25 +794,54 @@ task("test")
             local moddir = path.join(os.projectdir(), dirs[1], ext)
             cpath = parentdir .. ";" .. moddir .. ";;" .. cpath
         end
-        -- busted must run under the LuaJIT (5.1 ABI) tree: loading lunet's C
-        -- modules into PUC Lua 5.5 (Homebrew's default `lua`, whose busted
-        -- wrapper at /opt/homebrew/bin/busted execs lua5.5) hangs the suite.
-        -- Prefer the user-tree 5.1 busted; CI installs a system-wide 5.1
-        -- busted via contributing/deps/qa-luarocks.sh so PATH wins there.
-        -- Override explicitly with LUNET_BUSTED=/path/to/busted.
-        local busted = os.getenv("LUNET_BUSTED")
-        if not busted then
-            local user_tree = path.join(os.getenv("HOME") or "", ".luarocks", "bin", "busted")
-            busted = os.isfile(user_tree) and user_tree or "busted"
+        -- busted must run under LuaJIT (5.1 ABI): lunet's C modules link
+        -- libluajit-5.1, so loading one into a PUC Lua process puts two
+        -- incompatible Lua runtimes in one address space -- it segfaults on
+        -- Linux and hangs on macOS. The luarocks-generated `busted` wrapper
+        -- cannot be trusted here: it hardcodes whichever interpreter luarocks
+        -- detected at install time (`exec /usr/bin/lua5.1 ... bin/busted` on
+        -- Debian/Ubuntu even when installed with --lua-dir pointing at
+        -- luajit; lua5.5 with Homebrew). Drive busted's Lua entry point with
+        -- luajit ourselves instead. Overrides: LUNET_LUAJIT=/path/to/luajit,
+        -- LUNET_BUSTED=/path/to/busted-lua-entry.
+        local luajit = os.getenv("LUNET_LUAJIT") or "luajit"
+        assert(os.execv(luajit, {"-v"}, {try = true, stdout = os.nuldev(), stderr = os.nuldev()}) == 0,
+               "luajit not found (" .. luajit .. ") -- the busted suite must run under LuaJIT; " ..
+               "install it (Debian: apt-get install luajit, macOS: brew install luajit) " ..
+               "or set LUNET_LUAJIT")
+        local busted_entry = os.getenv("LUNET_BUSTED")
+            or path.join(os.projectdir(), "bin", "busted_runner.lua")
+        -- busted itself lives in the luarocks 5.1 trees, which are not on
+        -- luajit's default package.path everywhere (Homebrew's luajit resolves
+        -- relative to its Cellar prefix), so ask luarocks where they are.
+        local lua_path = os.getenv("LUA_PATH")
+        local lr_path = try { function ()
+            return os.iorunv("luarocks", {"--lua-version=5.1", "path", "--lr-path"})
+        end }
+        if lr_path and #lr_path:trim() > 0 then
+            lua_path = lr_path:trim() .. ";" .. (lua_path or ";")
+        end
+        local lr_cpath = try { function ()
+            return os.iorunv("luarocks", {"--lua-version=5.1", "path", "--lr-cpath"})
+        end }
+        if lr_cpath and #lr_cpath:trim() > 0 then
+            cpath = cpath .. ";" .. lr_cpath:trim()
         end
         local logdir = lunet_new_logdir(os)
         local logfile = path.join(logdir, "busted.txt")
         if is_host("windows") then
-            os.execv("cmd", {"/C", "set LUA_CPATH=" .. cpath .. "&& " .. busted .. " spec/"})
+            os.execv("cmd", {"/C", "set LUA_CPATH=" .. cpath .. "&& " ..
+                             luajit .. " " .. busted_entry .. " spec/"})
         else
             -- pipefail keeps busted's own nonzero exit (failures/errors)
             -- visible through the tee capture.
-            os.execv("bash", {"-lc", "set -o pipefail; LUA_CPATH=" .. lunet_quote(cpath) .. " " .. lunet_quote(busted) .. " spec/ 2>&1 | tee " .. lunet_quote(logfile)})
+            local prefix = "LUA_CPATH=" .. lunet_quote(cpath) .. " "
+            if lua_path then
+                prefix = prefix .. "LUA_PATH=" .. lunet_quote(lua_path) .. " "
+            end
+            os.execv("bash", {"-lc", "set -o pipefail; " .. prefix ..
+                              lunet_quote(luajit) .. " " .. lunet_quote(busted_entry) ..
+                              " spec/ 2>&1 | tee " .. lunet_quote(logfile)})
         end
         -- Anti-regression guard: pending tests report green and let 93 tests
         -- rot silently for ~6 months. Fail on ANY pending count unless

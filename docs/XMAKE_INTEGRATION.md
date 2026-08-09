@@ -154,15 +154,17 @@ This runs three steps in order:
 
 Output is teed to `.tmp/logs/<timestamp>/busted.txt`.
 
-### busted resolution (LuaJIT / 5.1 ABI only)
+### busted runs under LuaJIT (5.1 ABI only)
 
-The runtime is LuaJIT (Lua 5.1 ABI), so the suite must run under a 5.1-tree busted — Homebrew's `/opt/homebrew/bin/busted` execs PUC Lua 5.5, which hangs loading lunet's C modules. `xmake test` resolves busted in this order:
+lunet's C modules link `libluajit-5.1`, so loading one into a PUC Lua process puts two incompatible Lua runtimes in one address space: the suite segfaults on Linux and hangs on macOS. The `busted` wrapper on `PATH` cannot be trusted to avoid that — luarocks bakes whichever interpreter it detected at install time into the wrapper (`exec /usr/bin/lua5.1 … bin/busted` on Debian/Ubuntu even when installed with `--lua-dir` pointing at LuaJIT; `lua5.5` under Homebrew).
 
-1. `$LUNET_BUSTED` — explicit override
-2. `$HOME/.luarocks/bin/busted` — LuaJIT/5.1 user tree
-3. `busted` from `PATH`
+`xmake test` therefore ignores the wrapper and launches busted's Lua entry point itself:
 
-CI installs a system-wide 5.1 busted via `contributing/deps/qa-luarocks.sh`, so the PATH fallback wins there.
+```
+luajit bin/busted_runner.lua spec/
+```
+
+`LUA_PATH` / `LUA_CPATH` are seeded from `luarocks --lua-version=5.1 path`, so busted is found in the 5.1 user and system trees regardless of the interpreter's own default paths. Overrides: `$LUNET_LUAJIT` (interpreter) and `$LUNET_BUSTED` (path to busted's Lua entry script).
 
 ### Pending tests fail the run
 

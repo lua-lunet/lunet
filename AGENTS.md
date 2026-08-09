@@ -55,6 +55,11 @@ Before creating or announcing a release:
    - `lunet-linux-arm64-sdk.tar.gz`
    - `lunet-macos-sdk.tar.gz`
    - `lunet-windows-amd64-sdk.zip`
+   - plus `lunet_fetch_release_<tag>.lua`, rendered by the publish workflow from
+     `bin/lunet_fetch_release.lua` (the `@RELEASE_TAG@` placeholder becomes the
+     release tag). The fetcher installs the runtime into a project-local
+     `.lunet/<tag>/` with SHA-256 verification against the release metadata
+     (issue #143).
 3. **Readable release notes:** Notes must include at minimum:
    - `## Highlights`
    - `## Binaries`

@@ -827,6 +827,13 @@ jobs:
         xmake lua bin/generate_release_notes.lua
         cat release-notes.md
 
+    - name: Render fetch-release helper
+      env:
+        LUNET_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}
+      run: |
+        sed "s/@RELEASE_TAG@/${LUNET_RELEASE_TAG}/g" bin/lunet_fetch_release.lua > "release-assets/lunet_fetch_release_${LUNET_RELEASE_TAG}.lua"
+        ! grep -q '@RELEASE_TAG@' "release-assets/lunet_fetch_release_${LUNET_RELEASE_TAG}.lua"
+
     - name: Create or update GitHub release
       uses: softprops/action-gh-release@v2
       with:
@@ -841,3 +848,4 @@ jobs:
           release-assets/lunet-linux-arm64-sdk.tar.gz
           release-assets/lunet-macos-sdk.tar.gz
           release-assets/lunet-windows-amd64-sdk.zip
+          release-assets/lunet_fetch_release_${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}.lua

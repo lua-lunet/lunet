@@ -47,7 +47,9 @@ typedef enum {
 
 typedef struct {
   socket_domain_t domain;
-  lua_State *co;
+  /* Owning main Lua state (default_luaL()) for registry ops; this handle
+   * outlives any creating coroutine. Never store a calling coroutine here. */
+  lua_State *owner_L;
   socket_type_t type;
   int closing;
   int ref_count;
@@ -80,7 +82,7 @@ typedef struct {
   /*
    * IMPORTANT: Keep libuv handle memory at the end of the struct.
    * Some teardown paths may still touch handle fields after uv_close().
-   * If anything writes past the handle, it must NOT corrupt metadata like ctx->co.
+   * If anything writes past the handle, it must NOT corrupt metadata like ctx->owner_L.
    */
   union {
     uv_tcp_t tcp;
@@ -148,10 +150,10 @@ static int socket_ctx_check_canary(socket_ctx_t *ctx, const char *where) {
         return -1;
     }
     lua_State *expected = default_luaL();
-    if (expected && ctx->co != expected) {
+    if (expected && ctx->owner_L != expected) {
         fprintf(stderr,
-                "[SOCKET_TRACE] BAD_LUA_STATE ctx=%p in %s (ctx->co=%p expected=%p)\n",
-                (void *)ctx, where, (void *)ctx->co, (void *)expected);
+                "[SOCKET_TRACE] BAD_LUA_STATE ctx=%p in %s (ctx->owner_L=%p expected=%p)\n",
+                (void *)ctx, where, (void *)ctx->owner_L, (void *)expected);
         return -1;
     }
     return 0;
@@ -390,7 +392,7 @@ static void lunet_accept_wake(socket_ctx_t *ctx, const char *errmsg) {
   if (ctx->server.accept_ref == LUA_NOREF) {
     return;
   }
-  lua_State *co = ctx->co;
+  lua_State *co = ctx->owner_L;
   lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->server.accept_ref);
   lunet_coref_release(co, ctx->server.accept_ref);
   ctx->server.accept_ref = LUA_NOREF;
@@ -503,7 +505,7 @@ static void lunet_write_cb(uv_write_t *req, int status) {
   /* Handle is closing — free resources, release coref, release retain, skip Lua resume */
   if (ctx->closing) {
     if (ctx->client.write_ref != LUA_NOREF) {
-      lunet_coref_release(ctx->co, ctx->client.write_ref);
+      lunet_coref_release(ctx->owner_L, ctx->client.write_ref);
       ctx->client.write_ref = LUA_NOREF;
       SOCKET_BK_CANCEL(ctx, "write");
     }
@@ -516,7 +518,7 @@ static void lunet_write_cb(uv_write_t *req, int status) {
   }
 
   if (ctx->client.write_ref != LUA_NOREF) {
-    lua_State *co = ctx->co;
+    lua_State *co = ctx->owner_L;
     int write_ref = ctx->client.write_ref;
     ctx->client.write_ref = LUA_NOREF;
 
@@ -600,7 +602,7 @@ static void lunet_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
     }
     /* Release the read_ref if still held, so the coref count balances */
     if (ctx->type == SOCKET_CLIENT && ctx->client.read_ref != LUA_NOREF) {
-      lunet_coref_release(ctx->co, ctx->client.read_ref);
+      lunet_coref_release(ctx->owner_L, ctx->client.read_ref);
       ctx->client.read_ref = LUA_NOREF;
       SOCKET_BK_CANCEL(ctx, "read");
     }
@@ -611,7 +613,7 @@ static void lunet_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
   SOCKET_TRACE_READ(ctx, nread);
 
   if (ctx->client.read_ref != LUA_NOREF) {
-    lua_State *co = ctx->co;
+    lua_State *co = ctx->owner_L;
     int read_ref = ctx->client.read_ref;
     ctx->client.read_ref = LUA_NOREF;
 
@@ -697,7 +699,7 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
     return;
   }
 
-  client_ctx->co = ctx->co;
+  client_ctx->owner_L = ctx->owner_L;
   client_ctx->type = SOCKET_CLIENT;
   client_ctx->domain = ctx->domain;
   client_ctx->closing = 0;
@@ -738,7 +740,7 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
 
     if (ctx->server.accept_ref != LUA_NOREF) {
     // there is a coroutine waiting for accept, wake it up
-    lua_State *co = ctx->co;
+    lua_State *co = ctx->owner_L;
     lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->server.accept_ref);
     lunet_coref_release(co, ctx->server.accept_ref);
     ctx->server.accept_ref = LUA_NOREF;
@@ -821,7 +823,7 @@ int lunet_socket_listen(lua_State *co) {
   /* Use the main Lua state for registry operations; the calling coroutine may
    * finish synchronously and be GC'ed while sockets are still alive. */
   lua_State *mainL = default_luaL();
-  ctx->co = mainL ? mainL : co;
+  ctx->owner_L = mainL ? mainL : co;
   ctx->type = SOCKET_SERVER;
   ctx->domain = domain;
   ctx->closing = 0;
@@ -1031,7 +1033,7 @@ int lunet_socket_close(lua_State *L) {
          * still get their write_cb, so write_ref is deliberately left for
          * lunet_write_cb to resolve. */
         if (ctx->client.read_ref != LUA_NOREF) {
-          lua_State *co = ctx->co;
+          lua_State *co = ctx->owner_L;
           lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->client.read_ref);
           lunet_coref_release(co, ctx->client.read_ref);
           ctx->client.read_ref = LUA_NOREF;
@@ -1205,14 +1207,15 @@ int lunet_socket_write(lua_State *co) {
 typedef struct {
   uv_connect_t req;
   socket_ctx_t *ctx;
-  lua_State *co;
+  /* Calling coroutine state, valid for the op's lifetime via co_ref. */
+  lua_State *waiter_L;
   int co_ref;
   char err[256];
 } connect_ctx_t;
 
 static void lunet_connect_cb(uv_connect_t *req, int status) {
   connect_ctx_t *ctx = (connect_ctx_t *)req->data;
-  lua_State *co = ctx->co;
+  lua_State *co = ctx->waiter_L;
 
   // resume coroutine
   lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->co_ref);
@@ -1265,9 +1268,9 @@ int lunet_socket_connect(lua_State *L) {
   }
 
   /* Use the main Lua state for registry operations; the connect coroutine is
-   * tracked via connect_ctx->co_ref and resumed via connect_ctx->co. */
+   * tracked via connect_ctx->co_ref and resumed via connect_ctx->waiter_L. */
   lua_State *mainL = default_luaL();
-  ctx->co = mainL ? mainL : L;
+  ctx->owner_L = mainL ? mainL : L;
   ctx->type = SOCKET_CLIENT;
   ctx->domain = domain;
   ctx->closing = 0;
@@ -1301,7 +1304,7 @@ int lunet_socket_connect(lua_State *L) {
   }
 
   connect_ctx->ctx = ctx;
-  connect_ctx->co = L;
+  connect_ctx->waiter_L = L;
   connect_ctx->co_ref = LUA_NOREF;
   connect_ctx->req.data = connect_ctx;
 

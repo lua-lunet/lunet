@@ -86,7 +86,7 @@ static void lunet_mysql_conn_destroy(lunet_mysql_conn_t* wrapper) {
 
 typedef struct {
   uv_work_t req;
-  lua_State* L;
+  lua_State *waiter_L;
   int co_ref;
 
   MYSQL* conn;
@@ -124,7 +124,7 @@ static void db_open_work_cb(uv_work_t* req) {
 
 static void db_open_after_cb(uv_work_t* req, int status) {
   db_open_ctx_t* ctx = (db_open_ctx_t*)req->data;
-  lua_State* L = ctx->L;
+  lua_State* L = ctx->waiter_L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
@@ -341,7 +341,7 @@ int lunet_db_open(lua_State* L) {
     return lua_error(L);
   }
   memset(ctx->err, 0, sizeof(ctx->err));
-  ctx->L = L;
+  ctx->waiter_L = L;
   ctx->req.data = ctx;
 
   lua_getfield(L, 1, "host");
@@ -399,7 +399,7 @@ int lunet_db_close(lua_State* L) {
 
 typedef struct {
   uv_work_t req;
-  lua_State* L;
+  lua_State *waiter_L;
   int co_ref;
 
   lunet_mysql_conn_t* wrapper;
@@ -673,7 +673,7 @@ static void db_query_work_cb(uv_work_t* req) {
 
 static void db_query_after_cb(uv_work_t* req, int status) {
   db_query_ctx_t* ctx = (db_query_ctx_t*)req->data;
-  lua_State* L = ctx->L;
+  lua_State* L = ctx->waiter_L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
@@ -792,7 +792,7 @@ int lunet_db_query(lua_State* L) {
     return lua_error(L);
   }
   memset(ctx, 0, sizeof(*ctx));
-  ctx->L = L;
+  ctx->waiter_L = L;
   ctx->req.data = ctx;
   ctx->wrapper = wrapper;
   ctx->query = lunet_strdup_local(query);
@@ -830,7 +830,7 @@ int lunet_db_query(lua_State* L) {
 
 typedef struct {
   uv_work_t req;
-  lua_State* L;
+  lua_State *waiter_L;
   int co_ref;
 
   lunet_mysql_conn_t* wrapper;
@@ -924,7 +924,7 @@ static void db_exec_work_cb(uv_work_t* req) {
 
 static void db_exec_after_cb(uv_work_t* req, int status) {
   db_exec_ctx_t* ctx = (db_exec_ctx_t*)req->data;
-  lua_State* L = ctx->L;
+  lua_State* L = ctx->waiter_L;
 
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
@@ -1004,7 +1004,7 @@ int lunet_db_exec(lua_State* L) {
     return 2;
   }
   memset(ctx, 0, sizeof(*ctx));
-  ctx->L = L;
+  ctx->waiter_L = L;
   ctx->req.data = ctx;
   ctx->wrapper = wrapper;
   ctx->query = lunet_strdup_local(query);
@@ -1083,7 +1083,7 @@ int lunet_db_query_params(lua_State* L) {
     return lua_error(L);
   }
   memset(ctx, 0, sizeof(*ctx));
-  ctx->L = L;
+  ctx->waiter_L = L;
   ctx->req.data = ctx;
   ctx->wrapper = wrapper;
   ctx->query = lunet_strdup_local(query);
@@ -1153,7 +1153,7 @@ int lunet_db_exec_params(lua_State* L) {
     return lua_error(L);
   }
   memset(ctx, 0, sizeof(*ctx));
-  ctx->L = L;
+  ctx->waiter_L = L;
   ctx->req.data = ctx;
   ctx->wrapper = wrapper;
   ctx->query = lunet_strdup_local(query);

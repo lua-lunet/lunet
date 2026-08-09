@@ -6,6 +6,7 @@
 #include <uv.h>
 
 #include "co.h"
+#include "rt.h"
 #include "trace.h"
 #include "lunet_mem.h"
 
@@ -45,7 +46,9 @@ void lunet_signal_trace_summary(void) {
 
 typedef struct {
   uv_signal_t handle;
-  lua_State *L;
+  /* Owning main Lua state (default_luaL()) for registry ops; the handle can
+   * outlive the calling coroutine. Never store a calling coroutine here. */
+  lua_State *owner_L;
   int co_ref;
 } signal_ctx_t;
 
@@ -55,7 +58,7 @@ static void signal_close_cb(uv_handle_t *handle) {
 
 static void lunet_signal_cb(uv_signal_t *handle, int signo) {
   signal_ctx_t *ctx = (signal_ctx_t *)handle->data;
-  lua_State *L = ctx->L;
+  lua_State *L = ctx->owner_L;
 
   SIGNAL_TRACE_FIRE(signo);
 
@@ -125,7 +128,11 @@ int lunet_signal_wait(lua_State *L) {
     return 2;
   }
 
-  ctx->L = L;
+  /* Registry ops in the signal callback must go through the owning main
+   * state: the calling coroutine is only valid while parked (coref), and
+   * any earlier release path would leave a dangling pointer here. */
+  lua_State *mainL = default_luaL();
+  ctx->owner_L = mainL ? mainL : L;
   lunet_coref_create(L, ctx->co_ref);
 
   uv_signal_init(uv_default_loop(), &ctx->handle);

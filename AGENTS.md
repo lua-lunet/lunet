@@ -314,10 +314,9 @@ Logs go to `.tmp/repro-payload/.tmp-repro-logs/{dmz,echo,load}.log`.
 
 ### Known Pitfalls
 
-- **Dangling `lua_State*` in long-lived handles**: Never store the *calling coroutine* `lua_State*` in a socket/udp handle and later use it for registry ops. The setup coroutine can finish synchronously and be GC'ed, leaving a dangling pointer that crashes in callbacks (often inside `lua_rawgeti`). Store the owning main state (`default_luaL()` at creation time) and use corefs to track the waiting coroutine.
+- **Owning vs waiter `lua_State*` (enforced, not folklore)**: Async handle contexts carry either `owner_L` — long-lived libuv handles, sourced from `default_luaL()` at creation, inherited by accepted clients from their listener — or `waiter_L` — op-scoped contexts holding the calling state, valid only for the operation's lifetime via its coref. Enforced by `xmake lint` rules 4/5: no legacy `->L = L` / `->co = L` assignments, and `owner_L` may only be assigned `default_luaL()` or another `owner_L`.
 - **libuv handle adjacency**: Keep libuv handle memory away from critical metadata like `lua_State*`. If anything writes past the handle boundary (ABI mismatch, out-of-bounds, or teardown edge cases), it should not corrupt control pointers. Prefer placing the handle at the end of the struct and/or add a tail canary in trace builds.
 - **Coroutine GC**: Spawned coroutines must be anchored in the Lua registry (via `lunet_co_anchor()`) or they can be garbage collected between async operations.
-- **`ctx->co` is shared**: All accepted client sockets inherit `ctx->co` from the listener. This should be the owning **main** Lua state pointer (not the listener coroutine). If it becomes invalid, every socket callback that touches the registry will crash.
 - **Release vs debug divergence**: Some bugs only appear in release builds (e.g., duplicate `trace_summary` definitions caused by `static inline` in headers conflicting with definitions in `.c` files). Always test both `xmake f -m release` and `xmake f -m debug`.
 
 ## Scripting Guidelines

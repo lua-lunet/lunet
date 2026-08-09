@@ -773,22 +773,139 @@ task_end()
 task("test")
     set_menu {
         usage = "xmake test",
-        description = "Run Lua tests with busted"
+        description = "Run type checking then Lua tests with busted"
     }
     on_run(function ()
+        -- Type checking runs first; type errors abort before busted.
+        os.exec("xmake check-types")
+        -- Build the httpc C module up front so httpc_spec can always run.
+        -- A platform that cannot build it must surface red here, not skip.
+        os.exec("xmake build lunet-httpc")
         local mode = get_config("mode") or "release"
         local dirs = os.dirs("build/**/" .. mode .. "/lunet")
         local cpath = os.getenv("LUA_CPATH") or ""
         if #dirs > 0 then
             local ext = is_host("windows") and "?.dll" or "?.so"
+            -- require("lunet.httpc") expands "?" to "lunet/httpc", so the
+            -- cpath root must be the PARENT of the lunet/ dir; using the
+            -- lunet/ dir itself yields .../lunet/lunet/httpc.so and never
+            -- resolves. Keep the old entry too for bare module names.
+            local parentdir = path.join(os.projectdir(), path.directory(dirs[1]), ext)
             local moddir = path.join(os.projectdir(), dirs[1], ext)
-            cpath = moddir .. ";;" .. cpath
+            cpath = parentdir .. ";" .. moddir .. ";;" .. cpath
         end
+        -- busted must run under LuaJIT (5.1 ABI): lunet's C modules link
+        -- libluajit-5.1, so loading one into a PUC Lua process puts two
+        -- incompatible Lua runtimes in one address space -- it segfaults on
+        -- Linux and hangs on macOS. The luarocks-generated `busted` wrapper
+        -- cannot be trusted here: it hardcodes whichever interpreter luarocks
+        -- detected at install time (`exec /usr/bin/lua5.1 ... bin/busted` on
+        -- Debian/Ubuntu even when installed with --lua-dir pointing at
+        -- luajit; lua5.5 with Homebrew). Drive busted's Lua entry point with
+        -- luajit ourselves instead. Overrides: LUNET_LUAJIT=/path/to/luajit,
+        -- LUNET_BUSTED=/path/to/busted-lua-entry.
+        local luajit = os.getenv("LUNET_LUAJIT") or "luajit"
+        assert(os.execv(luajit, {"-v"}, {try = true, stdout = os.nuldev(), stderr = os.nuldev()}) == 0,
+               "luajit not found (" .. luajit .. ") -- the busted suite must run under LuaJIT; " ..
+               "install it (Debian: apt-get install luajit, macOS: brew install luajit) " ..
+               "or set LUNET_LUAJIT")
+        local busted_entry = os.getenv("LUNET_BUSTED")
+            or path.join(os.projectdir(), "bin", "busted_runner.lua")
+        -- busted itself lives in the luarocks 5.1 trees, which are not on
+        -- luajit's default package.path everywhere (Homebrew's luajit resolves
+        -- relative to its Cellar prefix), so ask luarocks where they are.
+        local lua_path = os.getenv("LUA_PATH")
+        local lr_path = try { function ()
+            return os.iorunv("luarocks", {"--lua-version=5.1", "path", "--lr-path"})
+        end }
+        if lr_path and #lr_path:trim() > 0 then
+            lua_path = lr_path:trim() .. ";" .. (lua_path or ";")
+        end
+        local lr_cpath = try { function ()
+            return os.iorunv("luarocks", {"--lua-version=5.1", "path", "--lr-cpath"})
+        end }
+        if lr_cpath and #lr_cpath:trim() > 0 then
+            cpath = cpath .. ";" .. lr_cpath:trim()
+        end
+        local logdir = lunet_new_logdir(os)
+        local logfile = path.join(logdir, "busted.txt")
         if is_host("windows") then
-            os.execv("cmd", {"/C", "set LUA_CPATH=" .. cpath .. "&& busted spec/"})
+            os.execv("cmd", {"/C", "set LUA_CPATH=" .. cpath .. "&& " ..
+                             luajit .. " " .. busted_entry .. " spec/"})
         else
-            os.execv("bash", {"-lc", "LUA_CPATH=" .. lunet_quote(cpath) .. " busted spec/"})
+            -- pipefail keeps busted's own nonzero exit (failures/errors)
+            -- visible through the tee capture.
+            local prefix = "LUA_CPATH=" .. lunet_quote(cpath) .. " "
+            if lua_path then
+                prefix = prefix .. "LUA_PATH=" .. lunet_quote(lua_path) .. " "
+            end
+            os.execv("bash", {"-lc", "set -o pipefail; " .. prefix ..
+                              lunet_quote(luajit) .. " " .. lunet_quote(busted_entry) ..
+                              " spec/ 2>&1 | tee " .. lunet_quote(logfile)})
         end
+        -- Anti-regression guard: pending tests report green and let 93 tests
+        -- rot silently for ~6 months. Fail on ANY pending count unless
+        -- LUNET_ALLOW_PENDING=1 is set. (Unix only: the windows cmd path
+        -- does not capture output, so the guard cannot parse a summary.)
+        local output = os.isfile(logfile) and io.readfile(logfile) or ""
+        local pending = tonumber(output:match("(%d+)%s+pending")) or 0
+        if pending > 0 and os.getenv("LUNET_ALLOW_PENDING") ~= "1" then
+            local summary = output:match("[^\r\n]*pending[^\r\n]*") or ""
+            raise("busted reported " .. pending .. " pending test(s) -- pending tests are forbidden (set LUNET_ALLOW_PENDING=1 to override): " .. summary)
+        end
+    end)
+task_end()
+
+task("check-types")
+    set_menu {
+        usage = "xmake check-types",
+        description = "Validate LuaCATS annotations with lua-language-server"
+    }
+    on_run(function ()
+        import("core.base.json")
+        local luals = "lua-language-server"
+        local ok = os.execv(luals, {"--version"}, {try = true})
+        assert(ok == 0, "lua-language-server not found on PATH. Install via contributing/deps/ (macOS: brew install lua-language-server, Debian: contributing/deps/debian.sh)")
+        local ts = os.date("%Y%m%d_%H%M%S")
+        local logdir = path.join(os.projectdir(), ".tmp", "logs", ts .. "-check-types")
+        os.mkdir(logdir)
+        local outfile = path.join(logdir, "check.json")
+        -- LuaLS generates its built-in meta definitions (string, number, table,
+        -- ...) into --metapath on first run, which defaults to a directory
+        -- inside the install tree. A system-wide install is root-owned, so a
+        -- non-root runner cannot write there: LuaLS logs the EACCES, carries on
+        -- without any builtins loaded and reports every stdlib type as
+        -- `Undefined type or alias`. Keep the cache project-local and writable.
+        local metadir = path.join(os.projectdir(), ".tmp", "luals-meta")
+        os.mkdir(metadir)
+        -- LuaLS 3.x always exits 0 for --check; the gate parses the JSON report
+        -- instead. Diagnostics are filtered to the checklevel (Warning = severity
+        -- 1..2), so any entry in the report is a gate failure.
+        os.execv(luals, {
+            "--check", path.join(os.projectdir(), "types"),
+            "--checklevel", "Warning",
+            "--check_format", "json",
+            "--check_out_path", outfile,
+            "--configpath", path.join(os.projectdir(), ".luarc.json"),
+            "--logpath", logdir,
+            "--metapath", metadir,
+        }, {try = true})
+        assert(os.isfile(outfile), "lua-language-server wrote no report to " .. outfile)
+        local report = json.loadfile(outfile)
+        local problems = 0
+        for uri, diags in pairs(report) do
+            local file = uri:gsub("^file://", "")
+            for _, d in ipairs(diags) do
+                problems = problems + 1
+                local line = (d.range and d.range.start and d.range.start.line or 0) + 1
+                local sev = d.severity == 1 and "Error" or "Warning"
+                cprint("${red}%s${clear}:%d: [%s] %s ${bright}(%s)${clear}", file, line, sev, tostring(d.message), tostring(d.code))
+            end
+        end
+        if problems > 0 then
+            raise(("check-types: %d problem(s) in types/ — full report: %s"):format(problems, outfile))
+        end
+        cprint("${green}check-types: types/ clean (0 problems)${clear} — report: " .. outfile)
     end)
 task_end()
 
@@ -997,10 +1114,11 @@ task_end()
 task("ci")
     set_menu {
         usage = "xmake ci",
-        description = "Run local CI parity sequence (lint, build, examples, sqlite3 smoke)"
+        description = "Run local CI parity sequence (lint, check-types, build, examples, sqlite3 smoke)"
     }
     on_run(function ()
         os.exec("xmake lint")
+        os.exec("xmake check-types")
         os.exec("xmake build-release")
         os.exec("xmake build lunet-sqlite3")
 

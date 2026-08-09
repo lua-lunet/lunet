@@ -28,6 +28,28 @@ lunet/                              # 扩展模块
   liblunet_jsonic.dylib             #   （macOS，Windows 不提供）
   jsonic.lua                        # jsonic Lua FFI 加载器 + 编码器
   dkjson-encode-v2.10.lua           # 有序 JSON 编码器（jsonic 依赖）
+types/                              # LuaCATS 类型注解（---@meta，纯文档，无运行时代码）
+  lunet.lua
+  lunet/
+    db.lua                          # 统一数据库后端
+    fs.lua                          # 文件系统操作
+    httpc.lua                       # HTTPS 客户端（libcurl）
+    jsonic.lua                      # 流式 JSON 编解码器
+    lnt_shared.lua                  # 共享字典（LntSharedDict）
+    mysql.lua                       # MySQL 驱动
+    postgres.lua                    # PostgreSQL 驱动
+    paxe.lua                        # AES-256-GCM 加密
+    signal.lua                      # 操作系统信号处理
+    socket.lua                      # TCP 套接字操作
+    udp.lua                         # UDP 套接字操作
+```
+
+`types/` 目录包含 LuaCATS `---@meta` 注解——纯文档，无运行时代码。这些文件声明了
+上述每个模块的参数类型、返回值、类结构和错误约定。将此目录放入编辑器的
+workspace library 即可获得代码补全和签名提示：
+
+```json
+{ "workspace.library": ["/path/to/lunet/types"] }
 ```
 
 ## 扩展加载机制

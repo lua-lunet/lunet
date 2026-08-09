@@ -1,0 +1,13 @@
+-- Busted entry point, launched with an explicit interpreter.
+--
+-- luarocks generates its `busted` wrapper around whichever interpreter it
+-- detected at install time -- on Debian/Ubuntu that is PUC `/usr/bin/lua5.1`,
+-- on Homebrew it is `lua5.5`. lunet's C modules link libluajit-5.1, and
+-- loading one of them into a PUC Lua process puts two incompatible Lua
+-- runtimes in one address space: the suite segfaults on Linux and hangs on
+-- macOS. `xmake test` therefore ignores the wrapper and runs this file under
+-- luajit, which is exactly what the rock's own bin/busted does:
+--
+--   require 'busted.runner'({ standalone = false })
+--
+require("busted.runner")({ standalone = false })

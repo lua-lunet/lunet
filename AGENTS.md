@@ -14,10 +14,14 @@ You MUST NOT do any git reset or stash or an git rm or rm or anything that might
 3.  **LOGGING:** All test runs must log stdout/stderr to `.tmp/logs/YYYYMMDD_HHMMSS/`.
 4.  **SECURE BINDING:** Never bind to `0.0.0.0` or public interfaces. Use Unix sockets (preferred) or `127.0.0.1` (development). Only bypass this rule if the user explicitly requests it via CLI flag `--dangerously-skip-loopback-restriction`.
 5.  **MANDATORY LOCAL CI PARITY BEFORE PUSH:** Before any push, agents MUST run locally all steps from `.github/workflows/build.yml` for their current OS matrix entry (Linux/macOS/Windows), including configure, build, and packaging commands. If any required step cannot be run locally or fails, do not push until fixed or explicitly approved by the user.
-    - Minimum local gate for this repo: `xmake lint`, `xmake test` (or CI-equivalent Lua test step), `xmake preflight-easy-memory`, and `xmake build-release` (which also builds the `lunet-static` and `sdk-api-test` SDK targets).
+    - Minimum local gate for this repo: `xmake lint`, `xmake check`, `xmake check-types`, `xmake test` (or CI-equivalent Lua test step), `xmake preflight-easy-memory`, and `xmake build-release` (which also builds the `lunet-static` and `sdk-api-test` SDK targets).
+    - Note: `xmake test` runs `xmake check-types` first and fails the run on any pending busted test; `LUNET_ALLOW_PENDING=1` is a local-iteration escape hatch only, never CI.
     - CI installs deps via `contributing/deps/*` (dev/CI parity, issue #123). The same scripts `make init` uses on developer machines drive the `build`, `embed-scripts`, `easy-memory`, and `lua-qa` jobs.
     - If the change affects examples, packaging, or specialized jobs, run the corresponding local equivalents for the current OS as well.
     - macOS local notes: Homebrew's `zlib`, `curl`, `libpq`, and `mysql-client` are keg-only — export `PKG_CONFIG_PATH` with each `$(brew --prefix <pkg>)/lib/pkgconfig` before building drivers or running preflight (same as CI). As of 2026-07-25, ASan-instrumented debug binaries hang in `__malloc_init` at dyld time on macOS 26 (observed on 26.5.2, even for hello-world scripts; release and non-ASan debug/trace builds are unaffected). This blocks the ASan legs of `xmake preflight-easy-memory` locally — environmental, CI is unaffected.
+
+6.  **LUAJIT / LUA 5.1 ABI ONLY FOR TOOLING:** The runtime is LuaJIT (ABI-compatible with Lua 5.1). Homebrew's default `lua` is now 5.5 and is NOT supported for any build/QA tooling. Rocks installed without a version pin land in the 5.5 tree and crash under LuaJIT (e.g. `luacheck` 1.2.0 on Lua 5.5 dies with `attempt to assign to const variable 'field_name'`). Always install rocks against the 5.1 tree: `luarocks --lua-version=5.1 --lua-dir=$(brew --prefix luajit) install <rock>` (the `contributing/deps/*` scripts already do this). Do not attempt to port or debug tooling under Lua 5.5; coerce 5.1 instead.
+7.  **WORKTREES ARE OFF-LIMITS:** `paxe/` at the repo root is a separate git worktree (owner's checkout — the intended path was `.worktrees/paxe`). The `.worktrees/` directory likewise holds other worktrees. Do not read, search, list, or modify anything under them unless the user explicitly directs it. They are not part of this checkout's working state.
 
 ## Internationalisation Parity (STRICT)
 
@@ -30,6 +34,12 @@ All user-facing documentation MUST be kept in sync between English and Chinese (
 | `docs/*.md` | `docs/*-CN.md` (same basename with `-CN` suffix) |
 
 This includes badges, links, examples, and section structure.  A missing or stale translation is a build-quality defect.
+
+## Type Annotation Parity (STRICT)
+
+Any change to a `types/*.lua` requires a matching change to the corresponding
+`types/*.d.tl`. The two are kept in step by inspection. Automated Teal checking
+is deliberately deferred.
 
 ## Release Quality Gate (STRICT)
 

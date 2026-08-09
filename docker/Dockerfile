@@ -39,6 +39,18 @@ ENV PATH="/root/.local/bin:${PATH}"
 # Containers run as root; xmake requires explicit opt-in for that.
 ENV XMAKE_ROOT=y
 
+# lua-language-server for type checking (xmake check-types).
+# The --metapath flag in xmake.lua ensures the meta cache is written to a
+# writable location (logdir), so the root-owned install dir is not a problem.
+ARG LUALS_VERSION=3.15.0
+RUN ARCH=$(dpkg --print-architecture | sed 's/amd64/x64/') && \
+    LUALS_TARBALL="lua-language-server-${LUALS_VERSION}-linux-${ARCH}.tar.gz" && \
+    LUALS_URL="https://github.com/LuaLS/lua-language-server/releases/download/${LUALS_VERSION}/${LUALS_TARBALL}" && \
+    mkdir -p /usr/local/lib/lua-language-server && \
+    curl -fsSL "$LUALS_URL" | tar -xzf - -C /usr/local/lib/lua-language-server && \
+    ln -sf /usr/local/lib/lua-language-server/bin/lua-language-server /usr/local/bin/lua-language-server && \
+    lua-language-server --version
+
 # busted for `xmake test`, forced to run under LuaJIT so the ABI matches the
 # lunet modules (PUC-Lua would crash loading luajit-linked .so files).
 RUN luarocks --lua-version=5.1 install busted \

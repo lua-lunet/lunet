@@ -28,6 +28,30 @@ lunet/                              # extension modules
   liblunet_jsonic.dylib             #   (macOS — not shipped on Windows)
   jsonic.lua                        # jsonic Lua FFI loader + encoder
   dkjson-encode-v2.10.lua           # ordered-JSON encoder (used by jsonic)
+types/                              # LuaCATS type annotations (---@meta, documentation only)
+  lunet.lua
+  lunet/
+    db.lua                          # unified DB backend
+    fs.lua                          # filesystem operations
+    httpc.lua                       # HTTPS client (libcurl)
+    jsonic.lua                      # streaming JSON codec
+    lnt_shared.lua                  # shared dictionary (LntSharedDict)
+    mysql.lua                       # MySQL driver
+    postgres.lua                    # PostgreSQL driver
+    paxe.lua                        # AES-256-GCM encryption
+    signal.lua                      # OS signal handling
+    socket.lua                      # TCP socket operations
+    udp.lua                         # UDP socket operations
+```
+
+The `types/` directory contains LuaCATS `---@meta` annotations — pure
+documentation with no runtime surface. These files declare parameter types,
+return values, class shapes, and error conventions for every module listed
+above. Place the directory in your editor's workspace library for completion
+and signature help:
+
+```json
+{ "workspace.library": ["/path/to/lunet/types"] }
 ```
 
 ## How extensions are loaded

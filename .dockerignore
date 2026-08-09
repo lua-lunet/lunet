@@ -10,3 +10,5 @@ ext/jsonic/target
 data
 opt
 rust
+paxe
+.worktrees

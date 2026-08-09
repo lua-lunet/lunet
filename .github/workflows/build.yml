@@ -181,6 +181,18 @@ jobs:
         xmake build lunet-postgres
         xmake build lunet-mysql
 
+    # Run the busted suite in CI — it previously ran nowhere, which is why
+    # spec rot stayed invisible for months. `xmake test` = check-types ->
+    # build lunet-httpc -> busted, and fails on ANY pending test unless
+    # LUNET_ALLOW_PENDING=1 (anti-regression guard, #item04). The toolchain,
+    # libcurl dev headers and a LuaJIT/5.1-tree busted are already installed
+    # in this job by contributing/deps/debian.sh --ci (which execs
+    # qa-luarocks.sh). One OS job proves the gate; macOS/Windows coverage
+    # is a follow-up.
+    - name: Lua test suite (make test)
+      if: matrix.os == 'ubuntu-latest'
+      run: make test
+
     - name: C SDK lifecycle test (Unix)
       if: runner.os != 'Windows'
       run: |
@@ -300,6 +312,8 @@ jobs:
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
         # Release layout documentation (#133)
         cp docs/RELEASE-LAYOUT.md docs/RELEASE-LAYOUT-CN.md "$DIST_DIR/"
+        # LuaCATS type annotations (#135)
+        cp -R types "$DIST_DIR/"
         tar -C "$DIST_DIR" -czf "lunet-linux-${{ matrix.arch }}.tar.gz" .
 
     - name: Package release archive (macOS)
@@ -325,6 +339,8 @@ jobs:
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
         # Release layout documentation (#133)
         cp docs/RELEASE-LAYOUT.md docs/RELEASE-LAYOUT-CN.md "$DIST_DIR/"
+        # LuaCATS type annotations (#135)
+        cp -R types "$DIST_DIR/"
         tar -C "$DIST_DIR" -czf lunet-macos.tar.gz .
 
     - name: Package release SDK (Linux)
@@ -375,6 +391,8 @@ jobs:
         Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
         # Release layout documentation (#133)
         Copy-Item docs\RELEASE-LAYOUT.md, docs\RELEASE-LAYOUT-CN.md $dist
+        # LuaCATS type annotations (#135)
+        Copy-Item -Recurse types (Join-Path $dist "types")
         Compress-Archive -Path (Join-Path $dist "*") -DestinationPath lunet-windows-amd64.zip -Force
 
     - name: Package release SDK (Windows)
@@ -774,6 +792,8 @@ jobs:
       run: xmake lint
     - name: xmake check
       run: xmake check
+    - name: xmake check-types
+      run: xmake check-types
 
   publish-release:
     name: Publish release

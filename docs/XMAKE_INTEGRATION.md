@@ -140,6 +140,54 @@ This catches most lifecycle and coroutine issues early.
 
 ---
 
+## Running Tests (`xmake test`)
+
+```bash
+xmake test
+```
+
+This runs three steps in order:
+
+1. **`xmake check-types`** — validates the LuaCATS annotations in `types/` with lua-language-server. Type errors abort the run before any test executes.
+2. **`xmake build lunet-httpc`** — builds the outbound HTTP client C module so `spec/httpc_spec.lua` always runs; a platform that cannot build it fails here instead of skipping.
+3. **`busted spec/`** — the Lua suite: `spec/httpc_spec.lua` (tests against the `lunet.httpc` C module) and `spec/lint_spec.lua` (runs `luajit bin/lint_c_safety.lua`).
+
+Output is teed to `.tmp/logs/<timestamp>/busted.txt`.
+
+### busted resolution (LuaJIT / 5.1 ABI only)
+
+The runtime is LuaJIT (Lua 5.1 ABI), so the suite must run under a 5.1-tree busted — Homebrew's `/opt/homebrew/bin/busted` execs PUC Lua 5.5, which hangs loading lunet's C modules. `xmake test` resolves busted in this order:
+
+1. `$LUNET_BUSTED` — explicit override
+2. `$HOME/.luarocks/bin/busted` — LuaJIT/5.1 user tree
+3. `busted` from `PATH`
+
+CI installs a system-wide 5.1 busted via `contributing/deps/qa-luarocks.sh`, so the PATH fallback wins there.
+
+### Pending tests fail the run
+
+Any test left in busted's `pending` state fails the whole run:
+
+```
+error: busted reported N pending test(s) -- pending tests are forbidden ...
+```
+
+For local iteration only, set `LUNET_ALLOW_PENDING=1` to bypass the guard — never set it in CI. (The guard parses the captured busted output, so it applies on the Unix path only.)
+
+### Standalone type checking
+
+```bash
+xmake check-types
+```
+
+Runs `lua-language-server --check` over `types/` with the project `.luarc.json` and parses the JSON report as the gate (LuaLS 3.15+ exits 0 even when it reports diagnostics). Its meta cache (`--metapath`) is pointed at a writable per-run directory under `.tmp/logs/`; without this LuaLS writes into its own install directory, which is root-owned in CI and silently drops all built-in types (hundreds of bogus `undefined-doc-name` errors).
+
+### CI
+
+The `ubuntu-latest` build job in `.github/workflows/build.yml` runs the suite via `make test` (the Makefile `test` target delegates to `xmake test`).
+
+---
+
 ## Local Preflight Safety Gate (run before pushing)
 
 Use the built-in EasyMem preflight task to run the same fast leak/smoke checks locally that CI uses for the EasyMem+ASan profile:

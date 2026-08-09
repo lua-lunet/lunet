@@ -2,7 +2,7 @@
 # after `make init`, use `xmake build-release`, `xmake test`, `xmake stress`
 # (see docs/XMAKE_INTEGRATION.md).
 
-.PHONY: init help
+.PHONY: init lint check check-types test help
 
 init:
 	@OS=$$(uname -s); \
@@ -35,5 +35,5 @@ help:
 	@echo "  lint         - Run C safety lint checks"
 	@echo "  check        - Run luacheck static analysis"
 	@echo "  check-types  - Validate LuaCATS annotations with lua-language-server"
-	@echo "  test         - Run Lua tests with busted"
+	@echo "  test         - Run check-types then the busted suite (xmake test)"
 	@echo "  help         - Show this message"

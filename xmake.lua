@@ -773,21 +773,56 @@ task_end()
 task("test")
     set_menu {
         usage = "xmake test",
-        description = "Run Lua tests with busted"
+        description = "Run type checking then Lua tests with busted"
     }
     on_run(function ()
+        -- Type checking runs first; type errors abort before busted.
+        os.exec("xmake check-types")
+        -- Build the httpc C module up front so httpc_spec can always run.
+        -- A platform that cannot build it must surface red here, not skip.
+        os.exec("xmake build lunet-httpc")
         local mode = get_config("mode") or "release"
         local dirs = os.dirs("build/**/" .. mode .. "/lunet")
         local cpath = os.getenv("LUA_CPATH") or ""
         if #dirs > 0 then
             local ext = is_host("windows") and "?.dll" or "?.so"
+            -- require("lunet.httpc") expands "?" to "lunet/httpc", so the
+            -- cpath root must be the PARENT of the lunet/ dir; using the
+            -- lunet/ dir itself yields .../lunet/lunet/httpc.so and never
+            -- resolves. Keep the old entry too for bare module names.
+            local parentdir = path.join(os.projectdir(), path.directory(dirs[1]), ext)
             local moddir = path.join(os.projectdir(), dirs[1], ext)
-            cpath = moddir .. ";;" .. cpath
+            cpath = parentdir .. ";" .. moddir .. ";;" .. cpath
         end
+        -- busted must run under the LuaJIT (5.1 ABI) tree: loading lunet's C
+        -- modules into PUC Lua 5.5 (Homebrew's default `lua`, whose busted
+        -- wrapper at /opt/homebrew/bin/busted execs lua5.5) hangs the suite.
+        -- Prefer the user-tree 5.1 busted; CI installs a system-wide 5.1
+        -- busted via contributing/deps/qa-luarocks.sh so PATH wins there.
+        -- Override explicitly with LUNET_BUSTED=/path/to/busted.
+        local busted = os.getenv("LUNET_BUSTED")
+        if not busted then
+            local user_tree = path.join(os.getenv("HOME") or "", ".luarocks", "bin", "busted")
+            busted = os.isfile(user_tree) and user_tree or "busted"
+        end
+        local logdir = lunet_new_logdir(os)
+        local logfile = path.join(logdir, "busted.txt")
         if is_host("windows") then
-            os.execv("cmd", {"/C", "set LUA_CPATH=" .. cpath .. "&& busted spec/"})
+            os.execv("cmd", {"/C", "set LUA_CPATH=" .. cpath .. "&& " .. busted .. " spec/"})
         else
-            os.execv("bash", {"-lc", "LUA_CPATH=" .. lunet_quote(cpath) .. " busted spec/"})
+            -- pipefail keeps busted's own nonzero exit (failures/errors)
+            -- visible through the tee capture.
+            os.execv("bash", {"-lc", "set -o pipefail; LUA_CPATH=" .. lunet_quote(cpath) .. " " .. lunet_quote(busted) .. " spec/ 2>&1 | tee " .. lunet_quote(logfile)})
+        end
+        -- Anti-regression guard: pending tests report green and let 93 tests
+        -- rot silently for ~6 months. Fail on ANY pending count unless
+        -- LUNET_ALLOW_PENDING=1 is set. (Unix only: the windows cmd path
+        -- does not capture output, so the guard cannot parse a summary.)
+        local output = os.isfile(logfile) and io.readfile(logfile) or ""
+        local pending = tonumber(output:match("(%d+)%s+pending")) or 0
+        if pending > 0 and os.getenv("LUNET_ALLOW_PENDING") ~= "1" then
+            local summary = output:match("[^\r\n]*pending[^\r\n]*") or ""
+            raise("busted reported " .. pending .. " pending test(s) -- pending tests are forbidden (set LUNET_ALLOW_PENDING=1 to override): " .. summary)
         end
     end)
 task_end()
@@ -1050,10 +1085,11 @@ task_end()
 task("ci")
     set_menu {
         usage = "xmake ci",
-        description = "Run local CI parity sequence (lint, build, examples, sqlite3 smoke)"
+        description = "Run local CI parity sequence (lint, check-types, build, examples, sqlite3 smoke)"
     }
     on_run(function ()
         os.exec("xmake lint")
+        os.exec("xmake check-types")
         os.exec("xmake build-release")
         os.exec("xmake build lunet-sqlite3")
 

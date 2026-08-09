@@ -139,6 +139,54 @@ Lunet 会继续输出用于 Lua `require` 的 `lunet.so`，并额外生成兼容
 
 ---
 
+## 运行测试（`xmake test`）
+
+```bash
+xmake test
+```
+
+该命令按顺序执行三个步骤：
+
+1. **`xmake check-types`** — 使用 lua-language-server 校验 `types/` 中的 LuaCATS 注解。类型错误会在任何测试执行前中止运行。
+2. **`xmake build lunet-httpc`** — 构建出站 HTTP 客户端 C 模块，确保 `spec/httpc_spec.lua` 始终运行；无法构建该模块的平台会在此失败，而不是跳过。
+3. **`busted spec/`** — Lua 测试套件：`spec/httpc_spec.lua`（针对 `lunet.httpc` C 模块的测试）和 `spec/lint_spec.lua`（运行 `luajit bin/lint_c_safety.lua`）。
+
+输出会被 tee 到 `.tmp/logs/<时间戳>/busted.txt`。
+
+### busted 解析规则（仅限 LuaJIT / 5.1 ABI）
+
+运行时是 LuaJIT（Lua 5.1 ABI），因此测试套件必须运行在 5.1 树的 busted 下 —— Homebrew 的 `/opt/homebrew/bin/busted` 会执行 PUC Lua 5.5，加载 lunet 的 C 模块时会挂起。`xmake test` 按以下顺序解析 busted：
+
+1. `$LUNET_BUSTED` —— 显式覆盖
+2. `$HOME/.luarocks/bin/busted` —— LuaJIT/5.1 用户树
+3. `PATH` 中的 `busted`
+
+CI 通过 `contributing/deps/qa-luarocks.sh` 安装系统级 5.1 busted，因此 CI 中 PATH 回退生效。
+
+### pending 测试会导致失败
+
+任何处于 busted `pending` 状态的测试都会导致整个运行失败：
+
+```
+error: busted reported N pending test(s) -- pending tests are forbidden ...
+```
+
+仅限本地迭代时，可设置 `LUNET_ALLOW_PENDING=1` 绕过该防护 —— 切勿在 CI 中设置。（该防护通过解析捕获的 busted 输出工作，因此仅适用于 Unix 路径。）
+
+### 独立运行类型检查
+
+```bash
+xmake check-types
+```
+
+使用项目 `.luarc.json` 对 `types/` 运行 `lua-language-server --check`，并解析 JSON 报告作为门禁（LuaLS 3.15+ 即使报告诊断信息也会以 0 退出）。其元数据缓存（`--metapath`）指向 `.tmp/logs/` 下每次运行独立可写的目录；否则 LuaLS 会写入自身的安装目录，而该目录在 CI 中归 root 所有，会静默丢失所有内置类型（产生数百个虚假的 `undefined-doc-name` 错误）。
+
+### CI
+
+`.github/workflows/build.yml` 中的 `ubuntu-latest` 构建任务通过 `make test` 运行测试套件（Makefile 的 `test` 目标委托给 `xmake test`）。
+
+---
+
 ## 本地预检安全门（推送前运行）
 
 使用内置的 EasyMem 预检任务在本地运行与 CI 的 EasyMem+ASan 配置相同的快速泄漏/冒烟检查：

@@ -181,6 +181,18 @@ jobs:
         xmake build lunet-postgres
         xmake build lunet-mysql
 
+    # Run the busted suite in CI — it previously ran nowhere, which is why
+    # spec rot stayed invisible for months. `xmake test` = check-types ->
+    # build lunet-httpc -> busted, and fails on ANY pending test unless
+    # LUNET_ALLOW_PENDING=1 (anti-regression guard, #item04). The toolchain,
+    # libcurl dev headers and a LuaJIT/5.1-tree busted are already installed
+    # in this job by contributing/deps/debian.sh --ci (which execs
+    # qa-luarocks.sh). One OS job proves the gate; macOS/Windows coverage
+    # is a follow-up.
+    - name: Lua test suite (make test)
+      if: matrix.os == 'ubuntu-latest'
+      run: make test
+
     - name: C SDK lifecycle test (Unix)
       if: runner.os != 'Windows'
       run: |

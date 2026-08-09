@@ -990,6 +990,10 @@ task("stress")
         os.exec("xmake build-debug")
         local runner = lunet_runner_path("debug")
         os.execv(runner, {"test/stress_test.lua"}, {envs = {STRESS_WORKERS = workers, STRESS_OPS = ops}})
+        -- issue #145 regressions: parked-acceptor wakeup on close, and
+        -- accept+UDP heartbeat concurrency
+        os.execv(runner, {"test/socket_close_wakeup.lua"})
+        os.execv(runner, {"test/accept_udp_concurrent.lua"})
     end)
 task_end()
 

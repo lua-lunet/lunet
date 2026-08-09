@@ -383,6 +383,90 @@ static void lunet_close_cb(uv_handle_t *handle) {
   }
 }
 
+/* Wake the coroutine parked in socket.accept (if any) with (nil, errmsg).
+ * Clears accept_ref; a no-op when nobody is waiting. Used by listen_cb
+ * error paths, socket.close, and the catastrophic accept-failure path. */
+static void lunet_accept_wake(socket_ctx_t *ctx, const char *errmsg) {
+  if (ctx->server.accept_ref == LUA_NOREF) {
+    return;
+  }
+  lua_State *co = ctx->co;
+  lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->server.accept_ref);
+  lunet_coref_release(co, ctx->server.accept_ref);
+  ctx->server.accept_ref = LUA_NOREF;
+  SOCKET_BK_CANCEL(ctx, "accept");
+
+  if (lua_isthread(co, -1)) {
+    lua_State *waiting_co = lua_tothread(co, -1);
+    lua_pop(co, 1);
+
+    lua_pushnil(waiting_co);
+    lua_pushstring(waiting_co, errmsg);
+
+    int resume_status = lunet_co_resume(waiting_co, 2);
+    if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
+      const char *err = lua_tostring(waiting_co, -1);
+      if (err) {
+        fprintf(stderr, "[lunet] resume error in accept wakeup: %s\n", err);
+      }
+    }
+  } else {
+    lua_pop(co, 1);
+    fprintf(stderr,
+            "[lunet] accept waiter's registry slot was not a coroutine\n");
+  }
+}
+
+static void lunet_drop_conn_cb(uv_handle_t *handle) {
+  lunet_free(handle);
+}
+
+/* Close every connection that was accepted but never delivered to Lua.
+ * queue_destroy (called later from socket_ctx_release) does NOT free
+ * payloads, so each ctx is closed here and freed by its own close_cb. */
+static void lunet_server_drain_pending(socket_ctx_t *ctx) {
+  socket_ctx_t *pending;
+  while ((pending = (socket_ctx_t *)queue_dequeue(ctx->server.pending_accepts)) != NULL) {
+    pending->closing = 1;
+    uv_close(&pending->u.handle, lunet_close_cb);
+  }
+}
+
+/* libuv has already accept(2)-ed a pending connection into the server and
+ * stops polling the listener until uv_accept() consumes it. When the real
+ * client ctx cannot be built (OOM / handle init failure), accept onto a
+ * throwaway handle and close it immediately so the listener is not wedged.
+ * Returns 0 if the pending connection was consumed. */
+static int lunet_listen_drop_conn(uv_stream_t *server, socket_domain_t domain) {
+  uv_handle_t *tmp = NULL;
+  int ret;
+
+  if (domain == SOCKET_DOMAIN_TCP) {
+    tmp = (uv_handle_t *)lunet_alloc(sizeof(uv_tcp_t));
+    if (!tmp) {
+      return -1;
+    }
+    ret = uv_tcp_init(uv_default_loop(), (uv_tcp_t *)tmp);
+  } else {
+    tmp = (uv_handle_t *)lunet_alloc(sizeof(uv_pipe_t));
+    if (!tmp) {
+      return -1;
+    }
+    ret = uv_pipe_init(uv_default_loop(), (uv_pipe_t *)tmp, 0);
+  }
+
+  if (ret < 0) {
+    lunet_free(tmp);
+    return -1;
+  }
+
+  if (uv_accept(server, (uv_stream_t *)tmp) < 0) {
+    /* No pending fd after all; still safe to close the inited handle. */
+  }
+  uv_close(tmp, lunet_drop_conn_cb);
+  return 0;
+}
+
 // write complete callback
 static void lunet_write_cb(uv_write_t *req, int status) {
   write_req_t *write_req = (write_req_t *)req;
@@ -594,37 +678,23 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
   socket_ctx_t *ctx = (socket_ctx_t *)server->data;
 
   if (status < 0) {
-    // there is a coroutine waiting for accept
-    if (ctx->server.accept_ref != LUA_NOREF) {
-      lua_State *co = ctx->co;
-      lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->server.accept_ref);
-      lunet_coref_release(co, ctx->server.accept_ref);
-      ctx->server.accept_ref = LUA_NOREF;
-      SOCKET_BK_RESUME(ctx, "accept");
-
-      if (lua_isthread(co, -1)) {
-        lua_State *waiting_co = lua_tothread(co, -1);
-        lua_pop(co, 1);
-
-        lua_pushnil(waiting_co);
-        lua_pushstring(waiting_co, uv_strerror(status));
-
-        int resume_status = lunet_co_resume(waiting_co, 2);
-        if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
-          const char *err = lua_tostring(waiting_co, -1);
-          if (err) {
-            fprintf(stderr, "[lunet] resume error in listen_cb: %s\n", err);
-          }
-        }
-      }
-    }
+    lunet_accept_wake(ctx, uv_strerror(status));
     return;
   }
 
   // create new client connection
   socket_ctx_t *client_ctx = lunet_alloc(sizeof(socket_ctx_t));
   if (!client_ctx) {
-    return;  // ignore this connection
+    /* libuv has already accepted a pending connection: consume it or the
+     * listener stops polling. If even that fails, close the listener and
+     * wake any parked acceptor instead of wedging silently. */
+    if (lunet_listen_drop_conn(server, ctx->domain) != 0) {
+      ctx->closing = 1;
+      lunet_accept_wake(ctx, "out of memory");
+      lunet_server_drain_pending(ctx);
+      uv_close(&ctx->u.handle, lunet_close_cb);
+    }
+    return;
   }
 
   client_ctx->co = ctx->co;
@@ -647,6 +717,15 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
 
   if (ret < 0) {
     lunet_free(client_ctx);
+    /* Same contract as the alloc-failure path above: the pending connection
+     * must be consumed, and if it cannot be, fail loudly instead of
+     * wedging the listener. */
+    if (lunet_listen_drop_conn(server, ctx->domain) != 0) {
+      ctx->closing = 1;
+      lunet_accept_wake(ctx, uv_strerror(ret));
+      lunet_server_drain_pending(ctx);
+      uv_close(&ctx->u.handle, lunet_close_cb);
+    }
     return;
   }
 
@@ -657,7 +736,7 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
     return;
   }
 
-  if (ctx->server.accept_ref != LUA_NOREF) {
+    if (ctx->server.accept_ref != LUA_NOREF) {
     // there is a coroutine waiting for accept, wake it up
     lua_State *co = ctx->co;
     lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->server.accept_ref);
@@ -678,6 +757,20 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
         if (err) {
           fprintf(stderr, "[lunet] resume error in listen_cb: %s\n", err);
         }
+      }
+    } else {
+      /* accept_ref was cleared above but the registry slot does not hold the
+       * waiting coroutine (ref aliasing, or a waiter that died without
+       * clearing accept_ref). The connection is fully accepted and must not
+       * be lost: park it on the pending queue so a later socket.accept
+       * delivers it, pop the non-thread value, and make the corruption
+       * visible instead of hanging silently. */
+      lua_pop(co, 1);
+      fprintf(stderr,
+              "[lunet] listen_cb: accept waiter's registry slot was not a "
+              "coroutine; connection queued for a later accept\n");
+      if (queue_enqueue(ctx->server.pending_accepts, client_ctx) != 0) {
+        uv_close(&client_ctx->u.handle, lunet_close_cb);
       }
     }
   } else {
@@ -823,6 +916,14 @@ int lunet_socket_accept(lua_State *co) {
     return 2;
   }
 
+  /* Refuse to park on a closing listener: no listen_cb can ever fire, so
+   * yielding here would hang the coroutine forever. */
+  if (listener_ctx->closing) {
+    lua_pushnil(co);
+    lua_pushstring(co, "listener closed");
+    return 2;
+  }
+
   // there is a coroutine waiting for accept
   if (listener_ctx->server.accept_ref != LUA_NOREF) {
     lua_pushnil(co);
@@ -913,9 +1014,50 @@ int lunet_socket_close(lua_State *L) {
   if (!ctx->closing) {
       ctx->closing = 1;
 
-      /* Stop reading immediately so libuv won't fire read_cb after close */
-      if (ctx->type == SOCKET_CLIENT) {
+      if (ctx->type == SOCKET_SERVER) {
+        /* Wake a coroutine parked in socket.accept: no listen_cb can fire
+         * after close, so without this it would hang forever with its coref
+         * leaked. */
+        lunet_accept_wake(ctx, "listener closed");
+
+        /* Drain connections that were accepted but never delivered to Lua. */
+        lunet_server_drain_pending(ctx);
+      } else {
+        /* Stop reading immediately so libuv won't fire read_cb after close */
         uv_read_stop(&ctx->u.stream);
+
+        /* A coroutine parked in socket.read can never be woken after close
+         * (read_cb is stopped); resume it with an error now. Pending writes
+         * still get their write_cb, so write_ref is deliberately left for
+         * lunet_write_cb to resolve. */
+        if (ctx->client.read_ref != LUA_NOREF) {
+          lua_State *co = ctx->co;
+          lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->client.read_ref);
+          lunet_coref_release(co, ctx->client.read_ref);
+          ctx->client.read_ref = LUA_NOREF;
+          SOCKET_BK_CANCEL(ctx, "read");
+
+          if (lua_isthread(co, -1)) {
+            lua_State *waiting_co = lua_tothread(co, -1);
+            lua_pop(co, 1);
+
+            lua_pushnil(waiting_co);
+            lua_pushstring(waiting_co, "socket closed");
+
+            int resume_status = lunet_co_resume(waiting_co, 2);
+            if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
+              const char *err = lua_tostring(waiting_co, -1);
+              if (err) {
+                fprintf(stderr, "[lunet] resume error in socket_close: %s\n", err);
+              }
+            }
+          } else {
+            lua_pop(co, 1);
+            fprintf(stderr,
+                    "[lunet] socket_close: read waiter's registry slot was "
+                    "not a coroutine\n");
+          }
+        }
       }
 
       uv_close(&ctx->u.handle, lunet_close_cb);
@@ -940,6 +1082,14 @@ int lunet_socket_read(lua_State *co) {
   if (!ctx || ctx->type != SOCKET_CLIENT) {
     lua_pushnil(co);
     lua_pushstring(co, "invalid client socket handle");
+    return 2;
+  }
+
+  /* Refuse to park on a closing socket: read_cb is stopped at close, so
+   * yielding here would hang the coroutine forever. */
+  if (ctx->closing) {
+    lua_pushnil(co);
+    lua_pushstring(co, "socket closed");
     return 2;
   }
 

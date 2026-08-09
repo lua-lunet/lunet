@@ -195,35 +195,6 @@ jobs:
         xmake build lunet-postgres
         xmake build lunet-mysql
 
-    # Run the busted suite in CI — it previously ran nowhere, which is why
-    # spec rot stayed invisible for months. `xmake test` = check-types ->
-    # build lunet-httpc -> busted, and fails on ANY pending test unless
-    # LUNET_ALLOW_PENDING=1 (local escape hatch only). The toolchain,
-    # libcurl dev headers and a LuaJIT/5.1-tree busted are already installed
-    # in this job by contributing/deps/debian.sh --ci (which execs
-    # qa-luarocks.sh). One OS job proves the gate; macOS/Windows coverage
-    # is a follow-up.
-    - name: Lua test suite (make test)
-      if: matrix.os == 'ubuntu-latest'
-      run: make test
-
-    - name: C SDK lifecycle test (Unix)
-      if: runner.os != 'Windows'
-      run: |
-        SDK_API_TEST=$(find build -type f -name sdk-api-test | head -n 1)
-        if [ -z "$SDK_API_TEST" ]; then echo "sdk-api-test not found" >&2; exit 1; fi
-        if command -v gtimeout &>/dev/null; then TMO=gtimeout; else TMO=timeout; fi
-        $TMO 10 "$SDK_API_TEST"
-
-    - name: C SDK lifecycle test (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        $test = Get-ChildItem -Path build -Recurse -Filter "sdk-api-test.exe" | Select-Object -First 1
-        if (-not $test) { throw "sdk-api-test.exe not found" }
-        & $test.FullName
-        if ($LASTEXITCODE -ne 0) { throw "sdk-api-test failed" }
-
     # Rust ext modules (lnt_shared, jsonic) — built on Unix only:
     # lnt_shared is POSIX-only by design (mmap/clock_gettime), and the
     # jsonic Lua loader has no .dll suffix handling yet.
@@ -289,6 +260,41 @@ jobs:
         esac
         if [ ! -f "$ART" ]; then echo "missing artefact: $ART" >&2; exit 1; fi
         echo "PAXE cdylib OK: $ART"
+
+    # Run the busted suite in CI — it previously ran nowhere, which is why
+    # spec rot stayed invisible for months. `xmake test` = check-types ->
+    # build lunet-httpc -> busted, and fails on ANY pending test unless
+    # LUNET_ALLOW_PENDING=1 (local escape hatch only). The toolchain,
+    # libcurl dev headers and a LuaJIT/5.1-tree busted are already installed
+    # in this job by contributing/deps/debian.sh --ci (which execs
+    # qa-luarocks.sh). One OS job proves the gate; macOS/Windows coverage
+    # is a follow-up.
+    #
+    # ORDERING IS LOAD-BEARING: this runs AFTER the Rust ext steps above.
+    # spec/paxe_spec.lua goes pending when the PAXE cdylib is absent, and
+    # the no-pending gate turns that into a hard failure — so building the
+    # crate after this step fails the job on a test that never ran.
+    - name: Lua test suite (make test)
+      if: matrix.os == 'ubuntu-latest'
+      run: make test
+
+    - name: C SDK lifecycle test (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        SDK_API_TEST=$(find build -type f -name sdk-api-test | head -n 1)
+        if [ -z "$SDK_API_TEST" ]; then echo "sdk-api-test not found" >&2; exit 1; fi
+        if command -v gtimeout &>/dev/null; then TMO=gtimeout; else TMO=timeout; fi
+        $TMO 10 "$SDK_API_TEST"
+
+    - name: C SDK lifecycle test (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $test = Get-ChildItem -Path build -Recurse -Filter "sdk-api-test.exe" | Select-Object -First 1
+        if (-not $test) { throw "sdk-api-test.exe not found" }
+        & $test.FullName
+        if ($LASTEXITCODE -ne 0) { throw "sdk-api-test failed" }
+
 
     - name: Examples compile check (Unix)
       if: runner.os != 'Windows'

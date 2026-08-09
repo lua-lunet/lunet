@@ -12,8 +12,10 @@
 --     else vX.Y.0 on GitHub, else the earliest published vX.Y.* release --
 --     then list the fixes in this patch range.
 --
--- The generated "## Highlights" is followed by the static sections from
--- .github/release-template.md (Binaries / Embeddable SDKs / Quick Start).
+-- The generated "## Highlights" is followed by the sections from
+-- .github/release-template.md (Binaries / Embeddable SDKs / Quick Start),
+-- with the @RELEASE_TAG@ placeholder substituted (same convention as
+-- bin/lunet_fetch_release.lua).
 --
 -- Runs under `xmake lua`. Requires git tags (fetch-depth: 0) and, for the
 -- patch path, the GitHub CLI with GH_TOKEN set.
@@ -232,6 +234,7 @@ end
 
 local highlights = compute_highlights()
 local static_body = io.readfile(path.join(".github", "release-template.md"))
+static_body = static_body:gsub("@RELEASE_TAG@", TAG)
 
 local notes = table.concat({ "## Highlights", "", highlights, "", static_body }, "\n")
 
@@ -239,7 +242,11 @@ local notes = table.concat({ "## Highlights", "", highlights, "", static_body },
 -- "{ }" when the chunk returns nothing, so stdout cannot be redirected into
 -- the release body (v0.5.0 shipped with that trailing "{ }"). The script
 -- writes the file itself; stdout is for the CI log only.
+--
+-- Do NOT use print() here: xmake's sandboxed print expands "$(shell ...)"
+-- sequences by executing them, so any notes content showing Makefile-style
+-- $(shell ...) examples aborts the whole run. io.stdout:write is raw.
 local out_path = os.getenv("LUNET_RELEASE_NOTES_OUT") or "release-notes.md"
 io.writefile(out_path, notes)
 io.stderr:write("[release-notes] wrote " .. out_path .. "\n")
-print(notes)
+io.stdout:write(notes, "\n")

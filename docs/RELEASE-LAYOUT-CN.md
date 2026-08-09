@@ -28,6 +28,10 @@ lunet/                              # 扩展模块
   liblunet_jsonic.dylib             #   （macOS，Windows 不提供）
   jsonic.lua                        # jsonic Lua FFI 加载器 + 编码器
   dkjson-encode-v2.10.lua           # 有序 JSON 编码器（jsonic 依赖）
+  liblunet_paxe.so                  # PAXE 数据报加密（Linux）
+  liblunet_paxe.dylib               #   （macOS）
+  lunet_paxe.dll                    #   （Windows）
+  paxe.lua                          # PAXE Lua FFI 加载器
 types/                              # LuaCATS 类型注解（---@meta，纯文档，无运行时代码）
   lunet.lua
   lunet/

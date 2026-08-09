@@ -336,6 +336,11 @@ jobs:
         cp ext/lnt_shared/target/release/liblnt_shared.so "$DIST_DIR/lunet/"
         cp ext/jsonic/jsonic.lua ext/jsonic/dkjson-encode-v2.10.lua "$DIST_DIR/lunet/"
         cp ext/jsonic/target/release/liblunet_jsonic.so "$DIST_DIR/lunet/"
+        # PAXE replaced the C lunet-paxe target, whose paxe.so the glob above
+        # used to sweep in. libsodium is linked statically into the cdylib, so
+        # the archive stays self-contained.
+        cp ext/paxe/paxe.lua "$DIST_DIR/lunet/"
+        cp ext/paxe/target/release/liblunet_paxe.so "$DIST_DIR/lunet/"
         # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
@@ -372,6 +377,11 @@ jobs:
         cp ext/lnt_shared/target/release/liblnt_shared.dylib "$DIST_DIR/lunet/"
         cp ext/jsonic/jsonic.lua ext/jsonic/dkjson-encode-v2.10.lua "$DIST_DIR/lunet/"
         cp ext/jsonic/target/release/liblunet_jsonic.dylib "$DIST_DIR/lunet/"
+        # PAXE replaced the C lunet-paxe target, whose paxe.so the glob above
+        # used to sweep in. libsodium is linked statically into the cdylib, so
+        # the archive stays self-contained.
+        cp ext/paxe/paxe.lua "$DIST_DIR/lunet/"
+        cp ext/paxe/target/release/liblunet_paxe.dylib "$DIST_DIR/lunet/"
         # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
@@ -434,6 +444,11 @@ jobs:
         Get-ChildItem -Path build -Recurse -Filter *.dll | Where-Object { $_.FullName -match '\\lunet\\' } | ForEach-Object {
           Copy-Item $_.FullName (Join-Path $dist "lunet")
         }
+        # PAXE replaced the C lunet-paxe target, whose paxe.dll the glob above
+        # used to sweep in. libsodium is linked statically into the cdylib, so
+        # the archive stays self-contained.
+        Copy-Item ext\paxe\paxe.lua (Join-Path $dist "lunet")
+        Copy-Item ext\paxe\target\release\lunet_paxe.dll (Join-Path $dist "lunet")
         # DB transaction wrappers: one per driver, deliberately not shared.
         Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
         # Documentation: copy every docs\*.md (and its -CN.md counterpart)

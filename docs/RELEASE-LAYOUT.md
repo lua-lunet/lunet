@@ -28,6 +28,10 @@ lunet/                              # extension modules
   liblunet_jsonic.dylib             #   (macOS — not shipped on Windows)
   jsonic.lua                        # jsonic Lua FFI loader + encoder
   dkjson-encode-v2.10.lua           # ordered-JSON encoder (used by jsonic)
+  liblunet_paxe.so                  # PAXE datagram encryption (Linux)
+  liblunet_paxe.dylib               #   (macOS)
+  lunet_paxe.dll                    #   (Windows)
+  paxe.lua                          # PAXE Lua FFI loader
 types/                              # LuaCATS type annotations (---@meta, documentation only)
   lunet.lua
   lunet/

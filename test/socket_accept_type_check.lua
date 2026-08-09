@@ -78,8 +78,8 @@ lunet.spawn(function()
     socket.close(listener)
     pcall(os.remove, SOCK)
 
-    local deadline = os.clock() + 1
-    while not read_done and os.clock() < deadline do
+    local deadline = os.time() + 1
+    while not read_done and os.time() < deadline do
         lunet.sleep(1)
     end
     if not read_done then

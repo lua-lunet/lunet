@@ -184,7 +184,7 @@ jobs:
     # Run the busted suite in CI — it previously ran nowhere, which is why
     # spec rot stayed invisible for months. `xmake test` = check-types ->
     # build lunet-httpc -> busted, and fails on ANY pending test unless
-    # LUNET_ALLOW_PENDING=1 (anti-regression guard, #item04). The toolchain,
+    # LUNET_ALLOW_PENDING=1 (local escape hatch only). The toolchain,
     # libcurl dev headers and a LuaJIT/5.1-tree busted are already installed
     # in this job by contributing/deps/debian.sh --ci (which execs
     # qa-luarocks.sh). One OS job proves the gate; macOS/Windows coverage
@@ -192,6 +192,11 @@ jobs:
     - name: Lua test suite (make test)
       if: matrix.os == 'ubuntu-latest'
       run: make test
+
+    - name: Socket regression suite (xmake stress)
+      if: matrix.os == 'ubuntu-latest'
+      timeout-minutes: 2
+      run: xmake stress
 
     - name: C SDK lifecycle test (Unix)
       if: runner.os != 'Windows'
@@ -212,7 +217,7 @@ jobs:
 
     # Rust ext modules (lnt_shared, jsonic) — built on Unix only:
     # lnt_shared is POSIX-only by design (mmap/clock_gettime), and the
-    # jsonic Lua loader has no .dll suffix handling yet.  See #115.
+    # jsonic Lua loader has no .dll suffix handling yet.
     - name: Setup Rust toolchain (Unix)
       if: runner.os != 'Windows'
       uses: dtolnay/rust-toolchain@stable
@@ -300,7 +305,7 @@ jobs:
         while IFS= read -r mod; do
           cp "$mod" "$DIST_DIR/lunet/"
         done < <(find build -type f -path '*/lunet/*.so')
-        # Rust ext modules (#115): each Lua loader resolves its compiled
+        # Rust ext modules: each Lua loader resolves its compiled
         # library relative to its own directory, so co-locate loaders and
         # cdylibs under lunet/.
         cp ext/lnt_shared/lnt_shared.lua "$DIST_DIR/lunet/"
@@ -310,10 +315,10 @@ jobs:
         # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
-        # Documentation (#133): copy every docs/*.md (and its -CN.md
-        # counterpart) into the archive by default, excluding internal-only
-        # docs that are not meant for end users (item37).
-        DOC_EXCLUDES=" CONTRIBUTING-INTERNALS.md CONTRIBUTING-INTERNALS-CN.md "
+        # Documentation: copy every docs/*.md (and its -CN.md counterpart)
+        # into the archive by default, excluding internal-only and
+        # maintainer-only docs that are not meant for end users.
+        DOC_EXCLUDES=" CONTRIBUTING-INTERNALS.md CONTRIBUTING-INTERNALS-CN.md BADGES.md BADGES-CN.md EASY_MEMORY_REPORT.md EASY_MEMORY_REPORT-CN.md WORKFLOW.md WORKFLOW-CN.md XMAKE_INTEGRATION.md XMAKE_INTEGRATION-CN.md "
         for doc in docs/*.md; do
           base="$(basename "$doc")"
           case "$DOC_EXCLUDES" in
@@ -321,7 +326,7 @@ jobs:
           esac
           cp "$doc" "$DIST_DIR/"
         done
-        # LuaCATS type annotations (#135)
+        # LuaCATS type annotations
         cp -R types "$DIST_DIR/"
         tar -C "$DIST_DIR" -czf "lunet-linux-${{ matrix.arch }}.tar.gz" .
 
@@ -336,7 +341,7 @@ jobs:
         while IFS= read -r mod; do
           cp "$mod" "$DIST_DIR/lunet/"
         done < <(find build -type f -path '*/lunet/*.so')
-        # Rust ext modules (#115): each Lua loader resolves its compiled
+        # Rust ext modules: each Lua loader resolves its compiled
         # library relative to its own directory, so co-locate loaders and
         # cdylibs under lunet/.
         cp ext/lnt_shared/lnt_shared.lua "$DIST_DIR/lunet/"
@@ -346,10 +351,10 @@ jobs:
         # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
-        # Documentation (#133): copy every docs/*.md (and its -CN.md
-        # counterpart) into the archive by default, excluding internal-only
-        # docs that are not meant for end users (item37).
-        DOC_EXCLUDES=" CONTRIBUTING-INTERNALS.md CONTRIBUTING-INTERNALS-CN.md "
+        # Documentation: copy every docs/*.md (and its -CN.md counterpart)
+        # into the archive by default, excluding internal-only and
+        # maintainer-only docs that are not meant for end users.
+        DOC_EXCLUDES=" CONTRIBUTING-INTERNALS.md CONTRIBUTING-INTERNALS-CN.md BADGES.md BADGES-CN.md EASY_MEMORY_REPORT.md EASY_MEMORY_REPORT-CN.md WORKFLOW.md WORKFLOW-CN.md XMAKE_INTEGRATION.md XMAKE_INTEGRATION-CN.md "
         for doc in docs/*.md; do
           base="$(basename "$doc")"
           case "$DOC_EXCLUDES" in
@@ -357,7 +362,7 @@ jobs:
           esac
           cp "$doc" "$DIST_DIR/"
         done
-        # LuaCATS type annotations (#135)
+        # LuaCATS type annotations
         cp -R types "$DIST_DIR/"
         tar -C "$DIST_DIR" -czf lunet-macos.tar.gz .
 
@@ -407,14 +412,14 @@ jobs:
         }
         # DB transaction wrappers: one per driver, deliberately not shared.
         Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
-        # Documentation (#133): copy every docs\*.md (and its -CN.md
-        # counterpart) into the archive by default, excluding internal-only
-        # docs that are not meant for end users (item37).
-        $DocExcludes = @("CONTRIBUTING-INTERNALS.md", "CONTRIBUTING-INTERNALS-CN.md")
+        # Documentation: copy every docs\*.md (and its -CN.md counterpart)
+        # into the archive by default, excluding internal-only and
+        # maintainer-only docs that are not meant for end users.
+        $DocExcludes = @("CONTRIBUTING-INTERNALS.md", "CONTRIBUTING-INTERNALS-CN.md", "BADGES.md", "BADGES-CN.md", "EASY_MEMORY_REPORT.md", "EASY_MEMORY_REPORT-CN.md", "WORKFLOW.md", "WORKFLOW-CN.md", "XMAKE_INTEGRATION.md", "XMAKE_INTEGRATION-CN.md")
         Get-ChildItem -Path docs -Filter *.md | Where-Object { $DocExcludes -notcontains $_.Name } | ForEach-Object {
           Copy-Item $_.FullName $dist
         }
-        # LuaCATS type annotations (#135)
+        # LuaCATS type annotations
         Copy-Item -Recurse types (Join-Path $dist "types")
         Compress-Archive -Path (Join-Path $dist "*") -DestinationPath lunet-windows-amd64.zip -Force
 

@@ -136,10 +136,17 @@ static socket_handle_t *socket_handle_new(lua_State *L, socket_ctx_t *ctx) {
   return handle;
 }
 
+typedef struct {
+  socket_ctx_t *ctx;
+  int ref;
+} socket_handle_new_payload_t;
+
 static int socket_handle_new_trampoline(lua_State *L) {
-  socket_ctx_t *ctx = (socket_ctx_t *)lua_touserdata(L, 1);
-  socket_handle_new(L, ctx);
-  return 1;
+  socket_handle_new_payload_t *payload =
+      (socket_handle_new_payload_t *)lua_touserdata(L, 1);
+  socket_handle_new(L, payload->ctx);
+  lunet_coref_create_raw(L, payload->ref);
+  return 0;
 }
 
 /*
@@ -153,9 +160,15 @@ static int socket_handle_new_trampoline(lua_State *L) {
  * socket_handle_new() had been called directly.
  */
 static int socket_handle_new_protected(lua_State *L, socket_ctx_t *ctx) {
-  lua_pushcfunction(L, socket_handle_new_trampoline);
-  lua_pushlightuserdata(L, ctx);
-  return lua_pcall(L, 1, 1, 0);
+  socket_handle_new_payload_t payload = {ctx, LUA_NOREF};
+  int status = lua_cpcall(L, socket_handle_new_trampoline, &payload);
+  if (status != 0) {
+    return status;
+  }
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, payload.ref);
+  lunet_coref_release(L, payload.ref);
+  return 0;
 }
 
 static socket_handle_t *socket_handle_check(lua_State *L, int index) {
@@ -219,8 +232,8 @@ static void socket_handle_invalidate(socket_ctx_t *ctx) {
 
 /* Fault-injection test harness: gated entirely behind LUNET_TEST_FAULTS so
  * neither the LUNET_TEST_SOCKET_LISTEN_FAULT env var string nor the getenv()
- * check reach release binaries (v0.8.0 item40). Only defined for
- * debug/trace build profiles; see xmake.lua. */
+ * check reach release binaries. Only defined for debug/trace build profiles;
+ * see xmake.lua. */
 #ifdef LUNET_TEST_FAULTS
 
 /* getenv() + parse happens once (lazy-static) rather than on every accepted
@@ -718,7 +731,7 @@ static void lunet_write_cb(uv_write_t *req, int status) {
           (void *)write_req, (void *)ctx, status);
 #endif
 
-  /* ---- UAF guard (Issue #50) ----
+  /* ---- UAF guard ----
    * If close_cb already ran and socket_ctx_release freed ctx, write_req->ctx
    * may be stale. With refcount, ctx stays alive until we release. But if
    * something went very wrong, guard against NULL. */
@@ -810,7 +823,7 @@ static void lunet_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
 
   uv_read_stop(stream);
 
-  /* ---- UAF guard (Issue #50) ----
+  /* ---- UAF guard ----
    * If close_cb already ran, handle->data is NULL. Free the buffer and bail.
    * No socket_ctx_release here because the ctx is already gone. */
   if (!ctx) {
@@ -1002,6 +1015,9 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
         fprintf(stderr, "[lunet] listen_cb: out of memory creating socket handle\n");
         client_ctx->closing = 1;
         uv_close(&client_ctx->u.handle, lunet_close_cb);
+        lua_pushnil(waiting_co);
+        lua_pushstring(waiting_co, "out of memory");
+        lunet_co_resume(waiting_co, 2);
         return;
       }
       lua_pushnil(waiting_co);
@@ -1316,6 +1332,8 @@ int lunet_socket_close(lua_State *L) {
                     "[lunet] socket_close: read waiter's registry slot was "
                     "not a coroutine\n");
           }
+
+          socket_ctx_release(ctx);
         }
 
         lunet_write_wake(ctx, "socket closed");
@@ -1491,9 +1509,11 @@ static void lunet_connect_cb(uv_connect_t *req, int status) {
   if (status == 0) {
     if (socket_handle_new_protected(co, ctx->ctx) != 0) {
       /* OOM creating the handle userdata: discard the pcall error message
-       * and report failure to the caller instead of leaving the connected
-       * socket unreachable. */
+       * and close the connected socket rather than leaving it unreachable. */
       lua_pop(co, 1);
+      fprintf(stderr, "[lunet] connect_cb: out of memory creating socket handle\n");
+      ctx->ctx->closing = 1;
+      uv_close(&ctx->ctx->u.handle, lunet_close_cb);
       lua_pushnil(co);
       lua_pushstring(co, "out of memory");
     } else {

@@ -1003,6 +1003,10 @@ task("stress")
         -- and accept+UDP heartbeat concurrency.
         os.execv(runner, {"test/socket_close_wakeup.lua"})
         os.execv(runner, {"test/accept_udp_concurrent.lua"})
+        -- Verify that accept() returns a valid uv_pipe_t handle when bound to a
+        -- pipe (not a uv_tcp_t disguised as a pipe, which causes dtype mismatch
+        -- crashes in uv_pipe_pending_instances and later win32-only pipe APIs).
+        os.execv(runner, {"test/socket_accept_type_check.lua"})
         -- listen_cb error-path fault injection. Requires LUNET_TEST_FAULTS
         -- (debug/trace profile only); each mode below exercises a distinct
         -- branch in lunet_socket_test_fault_take.
@@ -1012,9 +1016,9 @@ task("stress")
             {envs = {LUNET_TEST_SOCKET_LISTEN_FAULT = "queue_fail"}})
         os.execv(runner, {"test/socket_listen_error_paths.lua"},
             {envs = {LUNET_TEST_SOCKET_LISTEN_FAULT = "alloc_fail+drop_fail"}})
-        -- item24: listener handle must not dangle after the catastrophic
-        -- self-close path. Lua has no os.setenv, so the fault mode that
-        -- drives lunet_listen_cb into self-close must be supplied here.
+        -- Listener handle must not dangle after the catastrophic self-close
+        -- path. Lua has no os.setenv, so the fault mode that drives
+        -- lunet_listen_cb into self-close must be supplied here.
         os.execv(runner, {"test/socket_listener_self_close.lua"},
             {envs = {LUNET_TEST_SOCKET_LISTEN_FAULT = "alloc_fail,drop_fail"}})
     end)

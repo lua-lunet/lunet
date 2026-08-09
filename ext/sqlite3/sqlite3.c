@@ -26,7 +26,7 @@ typedef struct {
   int closed;
 } lunet_sqlite_conn_t;
 
-// Close the SQLite connection but don't destroy the mutex (caller may still hold it)
+/* Close the SQLite connection but don't destroy the mutex (caller may still hold it). */
 static void lunet_sqlite_conn_close(lunet_sqlite_conn_t* wrapper) {
   if (!wrapper || wrapper->closed) return;
   wrapper->closed = 1;
@@ -36,7 +36,7 @@ static void lunet_sqlite_conn_close(lunet_sqlite_conn_t* wrapper) {
   }
 }
 
-// Full cleanup including mutex - only call when mutex is NOT held (e.g., from GC)
+/* Full cleanup including mutex; only call when mutex is not held (for example, from GC). */
 static void lunet_sqlite_conn_destroy(lunet_sqlite_conn_t* wrapper) {
   lunet_sqlite_conn_close(wrapper);
   if (wrapper) {
@@ -196,7 +196,7 @@ static int bind_params(sqlite3_stmt* stmt, param_t* params, int nparams, char* e
 
 typedef struct {
   uv_work_t req;
-  lua_State *waiter_L;
+  lua_State* waiter_L;
   int co_ref;
 
   sqlite3* conn;
@@ -310,7 +310,7 @@ int lunet_db_close(lua_State* L) {
   }
 
   uv_mutex_lock(&wrapper->mutex);
-  lunet_sqlite_conn_close(wrapper);  // Close connection but don't destroy mutex
+  lunet_sqlite_conn_close(wrapper); /* Keep mutex intact until after unlock. */
   uv_mutex_unlock(&wrapper->mutex);
   // Mutex will be destroyed by GC via lunet_sqlite_conn_destroy
 
@@ -320,7 +320,7 @@ int lunet_db_close(lua_State* L) {
 
 typedef struct {
   uv_work_t req;
-  lua_State *waiter_L;
+  lua_State* waiter_L;
   int co_ref;
 
   lunet_sqlite_conn_t* wrapper;
@@ -628,7 +628,7 @@ int lunet_db_query(lua_State* L) {
 
 typedef struct {
   uv_work_t req;
-  lua_State *waiter_L;
+  lua_State* waiter_L;
   int co_ref;
 
   lunet_sqlite_conn_t* wrapper;

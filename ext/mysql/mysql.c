@@ -63,7 +63,7 @@ typedef struct {
   int library_ref_held;
 } lunet_mysql_conn_t;
 
-// Close connection but keep mutex intact (for explicit db.close())
+/* Close connection but keep mutex intact (for explicit db.close()). */
 static void lunet_mysql_conn_close(lunet_mysql_conn_t* wrapper) {
   if (!wrapper || wrapper->closed) return;
   wrapper->closed = 1;
@@ -77,7 +77,7 @@ static void lunet_mysql_conn_close(lunet_mysql_conn_t* wrapper) {
   }
 }
 
-// Full cleanup including mutex (only called from GC)
+/* Full cleanup including mutex (only called from GC). */
 static void lunet_mysql_conn_destroy(lunet_mysql_conn_t* wrapper) {
   if (!wrapper) return;
   lunet_mysql_conn_close(wrapper);
@@ -86,7 +86,7 @@ static void lunet_mysql_conn_destroy(lunet_mysql_conn_t* wrapper) {
 
 typedef struct {
   uv_work_t req;
-  lua_State *waiter_L;
+  lua_State* waiter_L;
   int co_ref;
 
   MYSQL* conn;
@@ -390,7 +390,7 @@ int lunet_db_close(lua_State* L) {
   }
 
   uv_mutex_lock(&wrapper->mutex);
-  lunet_mysql_conn_close(wrapper);  // Close connection but keep mutex for unlock
+  lunet_mysql_conn_close(wrapper); /* Keep mutex intact until after unlock. */
   uv_mutex_unlock(&wrapper->mutex);
 
   lua_pushnil(L);
@@ -399,7 +399,7 @@ int lunet_db_close(lua_State* L) {
 
 typedef struct {
   uv_work_t req;
-  lua_State *waiter_L;
+  lua_State* waiter_L;
   int co_ref;
 
   lunet_mysql_conn_t* wrapper;
@@ -830,7 +830,7 @@ int lunet_db_query(lua_State* L) {
 
 typedef struct {
   uv_work_t req;
-  lua_State *waiter_L;
+  lua_State* waiter_L;
   int co_ref;
 
   lunet_mysql_conn_t* wrapper;

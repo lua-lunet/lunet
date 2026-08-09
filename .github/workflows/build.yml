@@ -310,8 +310,17 @@ jobs:
         # DB transaction wrappers (#119): one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
-        # Release layout documentation (#133)
-        cp docs/RELEASE-LAYOUT.md docs/RELEASE-LAYOUT-CN.md "$DIST_DIR/"
+        # Documentation (#133): copy every docs/*.md (and its -CN.md
+        # counterpart) into the archive by default, excluding internal-only
+        # docs that are not meant for end users (item37).
+        DOC_EXCLUDES=" CONTRIBUTING-INTERNALS.md CONTRIBUTING-INTERNALS-CN.md "
+        for doc in docs/*.md; do
+          base="$(basename "$doc")"
+          case "$DOC_EXCLUDES" in
+            *" $base "*) continue ;;
+          esac
+          cp "$doc" "$DIST_DIR/"
+        done
         # LuaCATS type annotations (#135)
         cp -R types "$DIST_DIR/"
         tar -C "$DIST_DIR" -czf "lunet-linux-${{ matrix.arch }}.tar.gz" .
@@ -337,8 +346,17 @@ jobs:
         # DB transaction wrappers (#119): one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
-        # Release layout documentation (#133)
-        cp docs/RELEASE-LAYOUT.md docs/RELEASE-LAYOUT-CN.md "$DIST_DIR/"
+        # Documentation (#133): copy every docs/*.md (and its -CN.md
+        # counterpart) into the archive by default, excluding internal-only
+        # docs that are not meant for end users (item37).
+        DOC_EXCLUDES=" CONTRIBUTING-INTERNALS.md CONTRIBUTING-INTERNALS-CN.md "
+        for doc in docs/*.md; do
+          base="$(basename "$doc")"
+          case "$DOC_EXCLUDES" in
+            *" $base "*) continue ;;
+          esac
+          cp "$doc" "$DIST_DIR/"
+        done
         # LuaCATS type annotations (#135)
         cp -R types "$DIST_DIR/"
         tar -C "$DIST_DIR" -czf lunet-macos.tar.gz .
@@ -389,8 +407,13 @@ jobs:
         }
         # DB transaction wrappers (#119): one per driver, deliberately not shared.
         Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
-        # Release layout documentation (#133)
-        Copy-Item docs\RELEASE-LAYOUT.md, docs\RELEASE-LAYOUT-CN.md $dist
+        # Documentation (#133): copy every docs\*.md (and its -CN.md
+        # counterpart) into the archive by default, excluding internal-only
+        # docs that are not meant for end users (item37).
+        $DocExcludes = @("CONTRIBUTING-INTERNALS.md", "CONTRIBUTING-INTERNALS-CN.md")
+        Get-ChildItem -Path docs -Filter *.md | Where-Object { $DocExcludes -notcontains $_.Name } | ForEach-Object {
+          Copy-Item $_.FullName $dist
+        }
         # LuaCATS type annotations (#135)
         Copy-Item -Recurse types (Join-Path $dist "types")
         Compress-Archive -Path (Join-Path $dist "*") -DestinationPath lunet-windows-amd64.zip -Force

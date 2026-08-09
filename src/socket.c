@@ -40,6 +40,8 @@ typedef enum {
   SOCKET_CLIENT,
 } socket_type_t;
 
+typedef struct socket_handle_s socket_handle_t;
+
 /* Canary value for socket contexts - ASCII "SOCK" */
 #define SOCKET_CTX_CANARY 0x534F434BU
 /* Tail canary to detect writes past libuv handle memory - ASCII "UVTL" */
@@ -53,6 +55,7 @@ typedef struct {
   socket_type_t type;
   int closing;
   int ref_count;
+  socket_handle_t *handles;
 
 #ifdef LUNET_TRACE
   uint32_t canary;
@@ -103,6 +106,201 @@ typedef struct {
   socket_ctx_t *ctx;
   char *data;
 } write_req_t;
+
+struct socket_handle_s {
+  socket_ctx_t *ctx;
+  socket_handle_t *next;
+};
+
+static const char *LUNET_SOCKET_HANDLE_MT = "lunet.socket.handle";
+
+static int lunet_socket_handle_gc(lua_State *L);
+
+static void socket_handle_push_metatable(lua_State *L) {
+  if (luaL_newmetatable(L, LUNET_SOCKET_HANDLE_MT)) {
+    lua_pushcfunction(L, lunet_socket_handle_gc);
+    lua_setfield(L, -2, "__gc");
+  }
+}
+
+static socket_handle_t *socket_handle_new(lua_State *L, socket_ctx_t *ctx) {
+  socket_handle_t *handle =
+      (socket_handle_t *)lua_newuserdata(L, sizeof(socket_handle_t));
+  handle->ctx = ctx;
+  handle->next = ctx ? ctx->handles : NULL;
+  if (ctx) {
+    ctx->handles = handle;
+  }
+  socket_handle_push_metatable(L);
+  lua_setmetatable(L, -2);
+  return handle;
+}
+
+static int socket_handle_new_trampoline(lua_State *L) {
+  socket_ctx_t *ctx = (socket_ctx_t *)lua_touserdata(L, 1);
+  socket_handle_new(L, ctx);
+  return 1;
+}
+
+/*
+ * listen_cb/connect_cb are unprotected libuv callbacks: they do not run
+ * under lua_pcall, so a raised Lua error would longjmp through libuv's C
+ * stack frames (undefined behavior). socket_handle_new() calls
+ * lua_newuserdata(), which can raise LUA_ERRMEM on allocation failure.
+ * Route the allocation through lua_pcall so an OOM there surfaces as a
+ * normal error return instead of an unprotected longjmp. On success, the
+ * new handle userdata is left on top of L's stack, exactly as if
+ * socket_handle_new() had been called directly.
+ */
+static int socket_handle_new_protected(lua_State *L, socket_ctx_t *ctx) {
+  lua_pushcfunction(L, socket_handle_new_trampoline);
+  lua_pushlightuserdata(L, ctx);
+  return lua_pcall(L, 1, 1, 0);
+}
+
+static socket_handle_t *socket_handle_check(lua_State *L, int index) {
+  socket_handle_t *handle =
+      (socket_handle_t *)luaL_testudata(L, index, LUNET_SOCKET_HANDLE_MT);
+  if (!handle) {
+    return NULL;
+  }
+  return handle;
+}
+
+static socket_ctx_t *socket_handle_get(socket_handle_t *handle) {
+  if (!handle) {
+    return NULL;
+  }
+  return handle->ctx;
+}
+
+/*
+ * NOTE: This __gc metamethod deliberately does NOT close the underlying
+ * socket/fd. It only unlinks the handle from its owning ctx's handle list
+ * so the ctx doesn't retain a dangling pointer to freed userdata. Callers
+ * MUST call socket.close() explicitly to release the fd; relying on GC to
+ * close sockets will leak file descriptors.
+ */
+static int lunet_socket_handle_gc(lua_State *L) {
+  socket_handle_t *handle = socket_handle_check(L, 1);
+  if (!handle || !handle->ctx) {
+    return 0;
+  }
+
+  socket_ctx_t *ctx = handle->ctx;
+  socket_handle_t **slot = &ctx->handles;
+  while (*slot) {
+    if (*slot == handle) {
+      *slot = handle->next;
+      break;
+    }
+    slot = &(*slot)->next;
+  }
+
+  handle->ctx = NULL;
+  handle->next = NULL;
+  return 0;
+}
+
+static void socket_handle_invalidate(socket_ctx_t *ctx) {
+  if (!ctx) {
+    return;
+  }
+
+  socket_handle_t *handle = ctx->handles;
+  while (handle) {
+    socket_handle_t *next = handle->next;
+    handle->ctx = NULL;
+    handle->next = NULL;
+    handle = next;
+  }
+  ctx->handles = NULL;
+}
+
+/* Fault-injection test harness: gated entirely behind LUNET_TEST_FAULTS so
+ * neither the LUNET_TEST_SOCKET_LISTEN_FAULT env var string nor the getenv()
+ * check reach release binaries (v0.8.0 item40). Only defined for
+ * debug/trace build profiles; see xmake.lua. */
+#ifdef LUNET_TEST_FAULTS
+
+/* getenv() + parse happens once (lazy-static) rather than on every accepted
+ * connection. */
+static const char *lunet_socket_test_fault_env(void) {
+  static const char *fault = NULL;
+  static int initialized = 0;
+
+  if (!initialized) {
+    fault = getenv("LUNET_TEST_SOCKET_LISTEN_FAULT");
+    initialized = 1;
+  }
+
+  return fault;
+}
+
+static int lunet_socket_test_fault_active(const char *name) {
+  const char *fault = lunet_socket_test_fault_env();
+  size_t name_len;
+  const char *p;
+
+  if (!fault || !name) {
+    return 0;
+  }
+
+  name_len = strlen(name);
+  p = fault;
+  while (*p) {
+    const char *end = p;
+    while (*end && *end != ',' && *end != '+') {
+      end++;
+    }
+    if ((size_t)(end - p) == name_len && strncmp(p, name, name_len) == 0) {
+      return 1;
+    }
+    p = *end ? end + 1 : end;
+  }
+
+  return 0;
+}
+
+static int lunet_socket_test_fault_take(const char *name) {
+  static unsigned int taken_bits = 0;
+  unsigned int bit = 0;
+
+  if (strcmp(name, "queue_fail") == 0) {
+    bit = 1u << 0;
+  } else if (strcmp(name, "drop_fail") == 0) {
+    bit = 1u << 1;
+  } else if (strcmp(name, "alloc_fail") == 0) {
+    bit = 1u << 2;
+  } else if (strcmp(name, "nonthread_waiter") == 0) {
+    bit = 1u << 3;
+  }
+
+  if (!bit || !lunet_socket_test_fault_active(name) || (taken_bits & bit)) {
+    return 0;
+  }
+
+  taken_bits |= bit;
+  return 1;
+}
+
+#else /* !LUNET_TEST_FAULTS */
+
+static int lunet_socket_test_fault_take(const char *name) {
+  (void)name;
+  return 0;
+}
+
+#endif /* LUNET_TEST_FAULTS */
+
+static int lunet_pending_accept_enqueue(socket_ctx_t *ctx,
+                                        socket_ctx_t *client_ctx) {
+  if (lunet_socket_test_fault_take("queue_fail")) {
+    return -1;
+  }
+
+  return queue_enqueue(ctx->server.pending_accepts, client_ctx);
+}
 
 /*
  * Socket domain tracing
@@ -380,6 +578,7 @@ static void lunet_close_cb(uv_handle_t *handle) {
   /* Null out handle->data FIRST so any straggler callback sees NULL */
   handle->data = NULL;
   if (ctx) {
+    socket_handle_invalidate(ctx);
     /* Release the handle's reference. Pending ops (read/write) keep ctx alive. */
     socket_ctx_release(ctx);
   }
@@ -396,7 +595,7 @@ static void lunet_accept_wake(socket_ctx_t *ctx, const char *errmsg) {
   lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->server.accept_ref);
   lunet_coref_release(co, ctx->server.accept_ref);
   ctx->server.accept_ref = LUA_NOREF;
-  SOCKET_BK_CANCEL(ctx, "accept");
+  SOCKET_BK_RESUME(ctx, "accept");
 
   if (lua_isthread(co, -1)) {
     lua_State *waiting_co = lua_tothread(co, -1);
@@ -419,8 +618,42 @@ static void lunet_accept_wake(socket_ctx_t *ctx, const char *errmsg) {
   }
 }
 
+/* Wake the coroutine parked in socket.write (if any) with errmsg.
+ * Clears write_ref; a no-op when nobody is waiting. Used by socket.close
+ * and write_cb's close path so write waiters are never stranded. */
+static void lunet_write_wake(socket_ctx_t *ctx, const char *errmsg) {
+  if (ctx->client.write_ref == LUA_NOREF) {
+    return;
+  }
+
+  lua_State *co = ctx->owner_L;
+  lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->client.write_ref);
+  lunet_coref_release(co, ctx->client.write_ref);
+  ctx->client.write_ref = LUA_NOREF;
+  SOCKET_BK_RESUME(ctx, "write");
+
+  if (lua_isthread(co, -1)) {
+    lua_State *waiting_co = lua_tothread(co, -1);
+    lua_pop(co, 1);
+
+    lua_pushstring(waiting_co, errmsg);
+
+    int resume_status = lunet_co_resume(waiting_co, 1);
+    if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
+      const char *err = lua_tostring(waiting_co, -1);
+      if (err) {
+        fprintf(stderr, "[lunet] resume error in write wakeup: %s\n", err);
+      }
+    }
+  } else {
+    lua_pop(co, 1);
+    fprintf(stderr,
+            "[lunet] write waiter's registry slot was not a coroutine\n");
+  }
+}
+
 static void lunet_drop_conn_cb(uv_handle_t *handle) {
-  lunet_free(handle);
+  free(handle);
 }
 
 /* Close every connection that was accepted but never delivered to Lua.
@@ -438,19 +671,26 @@ static void lunet_server_drain_pending(socket_ctx_t *ctx) {
  * stops polling the listener until uv_accept() consumes it. When the real
  * client ctx cannot be built (OOM / handle init failure), accept onto a
  * throwaway handle and close it immediately so the listener is not wedged.
- * Returns 0 if the pending connection was consumed. */
+ * Returns 0 once the temporary handle is initialized and scheduled for close;
+ * allocation/init failure returns -1. */
 static int lunet_listen_drop_conn(uv_stream_t *server, socket_domain_t domain) {
   uv_handle_t *tmp = NULL;
   int ret;
 
+  if (lunet_socket_test_fault_take("drop_fail")) {
+    return -1;
+  }
+
   if (domain == SOCKET_DOMAIN_TCP) {
-    tmp = (uv_handle_t *)lunet_alloc(sizeof(uv_tcp_t));
+    /* Emergency recovery path: avoid lunet_alloc here because this helper is
+     * entered after the real client ctx allocation already failed. */
+    tmp = (uv_handle_t *)malloc(sizeof(uv_tcp_t));
     if (!tmp) {
       return -1;
     }
     ret = uv_tcp_init(uv_default_loop(), (uv_tcp_t *)tmp);
   } else {
-    tmp = (uv_handle_t *)lunet_alloc(sizeof(uv_pipe_t));
+    tmp = (uv_handle_t *)malloc(sizeof(uv_pipe_t));
     if (!tmp) {
       return -1;
     }
@@ -458,13 +698,12 @@ static int lunet_listen_drop_conn(uv_stream_t *server, socket_domain_t domain) {
   }
 
   if (ret < 0) {
-    lunet_free(tmp);
+    free(tmp);
     return -1;
   }
 
-  if (uv_accept(server, (uv_stream_t *)tmp) < 0) {
-    /* No pending fd after all; still safe to close the inited handle. */
-  }
+  tmp->data = NULL;
+  (void)uv_accept(server, (uv_stream_t *)tmp);
   uv_close(tmp, lunet_drop_conn_cb);
   return 0;
 }
@@ -502,13 +741,9 @@ static void lunet_write_cb(uv_write_t *req, int status) {
   SOCKET_TRACE_WRITE_CB(ctx, status);
 #endif
 
-  /* Handle is closing — free resources, release coref, release retain, skip Lua resume */
+  /* Handle is closing — wake the waiter with the close error and release. */
   if (ctx->closing) {
-    if (ctx->client.write_ref != LUA_NOREF) {
-      lunet_coref_release(ctx->owner_L, ctx->client.write_ref);
-      ctx->client.write_ref = LUA_NOREF;
-      SOCKET_BK_CANCEL(ctx, "write");
-    }
+    lunet_write_wake(ctx, "socket closed");
     if (write_req->data) {
       lunet_free(write_req->data);
     }
@@ -678,6 +913,7 @@ static void lunet_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
 
 static void lunet_listen_cb(uv_stream_t *server, int status) {
   socket_ctx_t *ctx = (socket_ctx_t *)server->data;
+  socket_ctx_t *client_ctx = NULL;
 
   if (status < 0) {
     lunet_accept_wake(ctx, uv_strerror(status));
@@ -685,7 +921,9 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
   }
 
   // create new client connection
-  socket_ctx_t *client_ctx = lunet_alloc(sizeof(socket_ctx_t));
+  if (!lunet_socket_test_fault_take("alloc_fail")) {
+    client_ctx = lunet_alloc(sizeof(socket_ctx_t));
+  }
   if (!client_ctx) {
     /* libuv has already accepted a pending connection: consume it or the
      * listener stops polling. If even that fails, close the listener and
@@ -704,6 +942,7 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
   client_ctx->domain = ctx->domain;
   client_ctx->closing = 0;
   client_ctx->ref_count = 1;
+  client_ctx->handles = NULL;
   client_ctx->client.read_ref = LUA_NOREF;
   client_ctx->client.write_ref = LUA_NOREF;
   socket_ctx_init_canary(client_ctx);
@@ -738,10 +977,14 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
     return;
   }
 
-    if (ctx->server.accept_ref != LUA_NOREF) {
+  if (ctx->server.accept_ref != LUA_NOREF) {
     // there is a coroutine waiting for accept, wake it up
     lua_State *co = ctx->owner_L;
     lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->server.accept_ref);
+    if (lunet_socket_test_fault_take("nonthread_waiter")) {
+      lua_pop(co, 1);
+      lua_pushboolean(co, 0);
+    }
     lunet_coref_release(co, ctx->server.accept_ref);
     ctx->server.accept_ref = LUA_NOREF;
     SOCKET_BK_RESUME(ctx, "accept");
@@ -750,7 +993,17 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
       lua_State *waiting_co = lua_tothread(co, -1);
       lua_pop(co, 1);
 
-      lua_pushlightuserdata(waiting_co, client_ctx);
+      if (socket_handle_new_protected(waiting_co, client_ctx) != 0) {
+        /* OOM creating the handle userdata: the connection was already
+         * accepted by libuv, but we cannot hand it to the waiter. Discard
+         * the pcall error message and close the orphaned connection rather
+         * than leaving it (or the coroutine) stuck. */
+        lua_pop(waiting_co, 1);
+        fprintf(stderr, "[lunet] listen_cb: out of memory creating socket handle\n");
+        client_ctx->closing = 1;
+        uv_close(&client_ctx->u.handle, lunet_close_cb);
+        return;
+      }
       lua_pushnil(waiting_co);
 
       int resume_status = lunet_co_resume(waiting_co, 2);
@@ -771,14 +1024,16 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
       fprintf(stderr,
               "[lunet] listen_cb: accept waiter's registry slot was not a "
               "coroutine; connection queued for a later accept\n");
-      if (queue_enqueue(ctx->server.pending_accepts, client_ctx) != 0) {
+      if (lunet_pending_accept_enqueue(ctx, client_ctx) != 0) {
+        client_ctx->closing = 1;
         uv_close(&client_ctx->u.handle, lunet_close_cb);
       }
     }
   } else {
     // there is no coroutine waiting for accept, put the connection into the queue
-    if (queue_enqueue(ctx->server.pending_accepts, client_ctx) != 0) {
+    if (lunet_pending_accept_enqueue(ctx, client_ctx) != 0) {
       // queue is full or error, close the connection
+      client_ctx->closing = 1;
       uv_close(&client_ctx->u.handle, lunet_close_cb);
     }
   }
@@ -828,6 +1083,7 @@ int lunet_socket_listen(lua_State *co) {
   ctx->domain = domain;
   ctx->closing = 0;
   ctx->ref_count = 1;
+  ctx->handles = NULL;
   ctx->server.accept_ref = LUA_NOREF;
   ctx->server.pending_accepts = queue_init();
   socket_ctx_init_canary(ctx);
@@ -895,7 +1151,7 @@ int lunet_socket_listen(lua_State *co) {
 
   SOCKET_TRACE_LISTEN(ctx, domain, host, port);
   
-  lua_pushlightuserdata(co, ctx);
+  socket_handle_new(co, ctx);
   lua_pushnil(co);
   return 2;
 }
@@ -905,16 +1161,17 @@ int lunet_socket_accept(lua_State *co) {
     return lua_error(co);
   }
 
-  if (!lua_islightuserdata(co, 1)) {
+  socket_handle_t *listener_handle = socket_handle_check(co, 1);
+  if (!listener_handle) {
     lua_pushnil(co);
     lua_pushstring(co, "invalid listener handle");
     return 2;
   }
 
-  socket_ctx_t *listener_ctx = (socket_ctx_t *)lua_touserdata(co, 1);
-  if (!listener_ctx) {
+  socket_ctx_t *listener_ctx = socket_handle_get(listener_handle);
+  if (!listener_ctx || listener_ctx->type != SOCKET_SERVER) {
     lua_pushnil(co);
-    lua_pushstring(co, "invalid listener handle");
+    lua_pushstring(co, listener_ctx ? "not a listening socket" : "listener closed");
     return 2;
   }
 
@@ -937,7 +1194,7 @@ int lunet_socket_accept(lua_State *co) {
   if (!queue_is_empty(listener_ctx->server.pending_accepts)) {
     socket_ctx_t *client_ctx = (socket_ctx_t *)queue_dequeue(listener_ctx->server.pending_accepts);
     if (client_ctx) {
-      lua_pushlightuserdata(co, client_ctx);
+      socket_handle_new(co, client_ctx);
       lua_pushnil(co);
       return 2;
     }
@@ -957,16 +1214,17 @@ int lunet_socket_getpeername(lua_State *L) {
     return lua_error(L);
   }
 
-  if (!lua_islightuserdata(L, 1)) {
+  socket_handle_t *handle = socket_handle_check(L, 1);
+  if (!handle) {
     lua_pushnil(L);
     lua_pushstring(L, "invalid socket handle");
     return 2;
   }
 
-  socket_ctx_t *ctx = (socket_ctx_t *)lua_touserdata(L, 1);
+  socket_ctx_t *ctx = socket_handle_get(handle);
   if (!ctx) {
     lua_pushnil(L);
-    lua_pushstring(L, "invalid socket handle");
+    lua_pushstring(L, "socket closed");
     return 2;
   }
 
@@ -1000,14 +1258,15 @@ int lunet_socket_getpeername(lua_State *L) {
 }
 
 int lunet_socket_close(lua_State *L) {
-  if (!lua_islightuserdata(L, 1)) {
+  socket_handle_t *handle = socket_handle_check(L, 1);
+  if (!handle) {
     lua_pushstring(L, "invalid socket handle");
     return 1;
   }
 
-  socket_ctx_t *ctx = (socket_ctx_t *)lua_touserdata(L, 1);
+  socket_ctx_t *ctx = socket_handle_get(handle);
   if (!ctx) {
-    lua_pushstring(L, "invalid socket handle");
+    lua_pushnil(L);
     return 1;
   }
 
@@ -1028,10 +1287,8 @@ int lunet_socket_close(lua_State *L) {
         /* Stop reading immediately so libuv won't fire read_cb after close */
         uv_read_stop(&ctx->u.stream);
 
-        /* A coroutine parked in socket.read can never be woken after close
-         * (read_cb is stopped); resume it with an error now. Pending writes
-         * still get their write_cb, so write_ref is deliberately left for
-         * lunet_write_cb to resolve. */
+        /* Coroutines parked in socket.read/write can never make forward
+         * progress after close; resume them with an error now. */
         if (ctx->client.read_ref != LUA_NOREF) {
           lua_State *co = ctx->owner_L;
           lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->client.read_ref);
@@ -1060,6 +1317,8 @@ int lunet_socket_close(lua_State *L) {
                     "not a coroutine\n");
           }
         }
+
+        lunet_write_wake(ctx, "socket closed");
       }
 
       uv_close(&ctx->u.handle, lunet_close_cb);
@@ -1074,16 +1333,17 @@ int lunet_socket_read(lua_State *co) {
     return lua_error(co);
   }
 
-  if (!lua_islightuserdata(co, 1)) {
+  socket_handle_t *handle = socket_handle_check(co, 1);
+  if (!handle) {
     lua_pushnil(co);
     lua_pushstring(co, "invalid socket handle");
     return 2;
   }
 
-  socket_ctx_t *ctx = (socket_ctx_t *)lua_touserdata(co, 1);
+  socket_ctx_t *ctx = socket_handle_get(handle);
   if (!ctx || ctx->type != SOCKET_CLIENT) {
     lua_pushnil(co);
-    lua_pushstring(co, "invalid client socket handle");
+    lua_pushstring(co, ctx ? "invalid client socket handle" : "socket closed");
     return 2;
   }
 
@@ -1129,7 +1389,8 @@ int lunet_socket_write(lua_State *co) {
     return lua_error(co);
   }
 
-  if (!lua_islightuserdata(co, 1)) {
+  socket_handle_t *handle = socket_handle_check(co, 1);
+  if (!handle) {
     lua_pushstring(co, "invalid socket handle");
     return 1;
   }
@@ -1139,9 +1400,14 @@ int lunet_socket_write(lua_State *co) {
     return 1;
   }
 
-  socket_ctx_t *ctx = (socket_ctx_t *)lua_touserdata(co, 1);
+  socket_ctx_t *ctx = socket_handle_get(handle);
   if (!ctx || ctx->type != SOCKET_CLIENT) {
-    lua_pushstring(co, "invalid client socket handle");
+    lua_pushstring(co, ctx ? "invalid client socket handle" : "socket closed");
+    return 1;
+  }
+
+  if (ctx->closing) {
+    lua_pushstring(co, "socket closed");
     return 1;
   }
 
@@ -1223,8 +1489,16 @@ static void lunet_connect_cb(uv_connect_t *req, int status) {
   ctx->co_ref = LUA_NOREF;
 
   if (status == 0) {
-    lua_pushlightuserdata(co, ctx->ctx);
-    lua_pushnil(co);
+    if (socket_handle_new_protected(co, ctx->ctx) != 0) {
+      /* OOM creating the handle userdata: discard the pcall error message
+       * and report failure to the caller instead of leaving the connected
+       * socket unreachable. */
+      lua_pop(co, 1);
+      lua_pushnil(co);
+      lua_pushstring(co, "out of memory");
+    } else {
+      lua_pushnil(co);
+    }
   } else {
     lua_pushnil(co);
     lua_pushstring(co, uv_strerror(status));
@@ -1275,6 +1549,7 @@ int lunet_socket_connect(lua_State *L) {
   ctx->domain = domain;
   ctx->closing = 0;
   ctx->ref_count = 1;
+  ctx->handles = NULL;
   ctx->client.read_ref = LUA_NOREF;
   ctx->client.write_ref = LUA_NOREF;
   socket_ctx_init_canary(ctx);

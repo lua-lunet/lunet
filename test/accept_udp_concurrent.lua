@@ -18,11 +18,12 @@ local socket = require("lunet.socket")
 local udp = require("lunet.udp")
 
 local HOST = "127.0.0.1"
-local TCP_PORT = tonumber(os.getenv("TEST_TCP_PORT")) or 19181
-local UDP_PORT = tonumber(os.getenv("TEST_UDP_PORT")) or 19182
+local TCP_PORT = tonumber(os.getenv("TEST_TCP_PORT"))
+local UDP_PORT = tonumber(os.getenv("TEST_UDP_PORT"))
 local CLIENTS = tonumber(os.getenv("TEST_CLIENTS")) or 32
 local HBS = tonumber(os.getenv("TEST_HBS")) or 200
 local WATCHDOG_MS = tonumber(os.getenv("TEST_WATCHDOG_MS")) or 5000
+local HEARTBEAT_WINDOW = math.min(32, HBS)
 
 local accepts = 0
 local client_errors = 0
@@ -40,6 +41,59 @@ local function fail(msg)
     os.exit(1)
 end
 
+local function port_seed()
+    -- os.clock() measures CPU time, which is close to zero at process
+    -- startup and adds almost no entropy. Use os.time() (wall clock) so the
+    -- seed actually varies across runs.
+    local addr = tostring({}):match("0x(%x+)")
+    local entropy = tonumber(addr, 16) or 0
+    return 20000 + ((entropy + os.time()) % 30000)
+end
+
+local function bind_server_sockets()
+    local function bind_udp(listener)
+        local hb, herr = udp.bind(HOST, UDP_PORT or 0)
+        if not hb then
+            socket.close(listener)
+            return nil, nil, nil, herr
+        end
+        local _, bound_udp_port, serr = udp.getsockname(hb)
+        if not bound_udp_port then
+            udp.close(hb)
+            socket.close(listener)
+            return nil, nil, nil, serr
+        end
+        return listener, hb, bound_udp_port, nil
+    end
+
+    if TCP_PORT then
+        local listener, lerr = socket.listen("tcp", HOST, TCP_PORT)
+        if not listener then
+            return nil, nil, nil, nil, "listen failed: " .. tostring(lerr)
+        end
+        local bound_listener, hb, bound_udp_port, berr = bind_udp(listener)
+        if not bound_listener then
+            return nil, nil, nil, nil, "udp.bind failed: " .. tostring(berr)
+        end
+        return bound_listener, hb, TCP_PORT, bound_udp_port, nil
+    end
+
+    local start = port_seed()
+    for attempt = 0, 127 do
+        local tcp_port = 20000 + ((start + (attempt * 97)) % 30000)
+        local listener = socket.listen("tcp", HOST, tcp_port)
+        if listener then
+            local bound_listener, hb, bound_udp_port, berr = bind_udp(listener)
+            if bound_listener then
+                return bound_listener, hb, tcp_port, bound_udp_port, nil
+            end
+            return nil, nil, nil, nil, "udp.bind failed: " .. tostring(berr)
+        end
+    end
+
+    return nil, nil, nil, nil, "listen failed: unable to reserve a loopback TCP port"
+end
+
 local function maybe_pass()
     if tcp_done == CLIENTS and udp_acked == HBS and not failed then
         print(string.format("[ACCEPT_UDP] PASSED clients=%d accepts=%d udp_acked=%d client_errors=%d",
@@ -50,16 +104,14 @@ local function maybe_pass()
 end
 
 lunet.spawn(function()
-    local listener, lerr = socket.listen("tcp", HOST, TCP_PORT)
+    local listener, hb, tcp_port, udp_port, berr = bind_server_sockets()
     if not listener then
-        fail("listen failed: " .. tostring(lerr))
+        fail(tostring(berr))
     end
-    local hb, herr = udp.bind(HOST, UDP_PORT)
-    if not hb then
-        fail("udp.bind failed: " .. tostring(herr))
-    end
+    TCP_PORT = tcp_port
+    UDP_PORT = udp_port
 
-    -- Accept loop
+    -- Accept loop.
     lunet.spawn(function()
         while true do
             local client, aerr = socket.accept(listener)
@@ -79,7 +131,7 @@ lunet.spawn(function()
         end
     end)
 
-    -- UDP heartbeat responder
+    -- UDP heartbeat responder.
     lunet.spawn(function()
         while true do
             local data, peer_host, peer_port = udp.recv(hb)
@@ -89,7 +141,7 @@ lunet.spawn(function()
         end
     end)
 
-    -- TCP clients
+    -- TCP clients.
     for i = 1, CLIENTS do
         lunet.spawn(function()
             local conn, cerr = socket.connect(HOST, TCP_PORT)
@@ -97,8 +149,9 @@ lunet.spawn(function()
                 fail("connect failed for client " .. i .. ": " .. tostring(cerr))
             end
             local payload = "ping-" .. i
-            if socket.write(conn, payload) then
-                fail("write failed for client " .. i)
+            local werr = socket.write(conn, payload)
+            if werr then
+                fail("write failed for client " .. i .. ": " .. tostring(werr))
             end
             local resp, rerr = socket.read(conn)
             if resp ~= "pong:" .. payload then
@@ -110,24 +163,35 @@ lunet.spawn(function()
         end)
     end
 
-    -- UDP heartbeat sender
+    -- UDP heartbeat sender.
     lunet.spawn(function()
         local h, err = udp.bind(HOST, 0)
         if not h then
             fail("udp.bind (sender) failed: " .. tostring(err))
+        end
+        local hb_sent = 0
+        local function send_next_heartbeat()
+            if hb_sent >= HBS then
+                return
+            end
+            hb_sent = hb_sent + 1
+            local ok, serr = udp.send(h, HOST, UDP_PORT, "hb-" .. hb_sent)
+            if not ok then
+                fail("udp.send failed for heartbeat " .. hb_sent .. ": " .. tostring(serr))
+            end
         end
         lunet.spawn(function()
             while udp_acked < HBS do
                 local data = udp.recv(h)
                 if data then
                     udp_acked = udp_acked + 1
+                    send_next_heartbeat()
                 end
             end
             maybe_pass()
         end)
-        for i = 1, HBS do
-            udp.send(h, HOST, UDP_PORT, "hb-" .. i)
-            lunet.sleep(1)
+        for _ = 1, HEARTBEAT_WINDOW do
+            send_next_heartbeat()
         end
     end)
 

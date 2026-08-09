@@ -42,6 +42,7 @@ types/                              # LuaCATS 类型注解（---@meta，纯文�
     signal.lua                      # 操作系统信号处理
     socket.lua                      # TCP 套接字操作
     udp.lua                         # UDP 套接字操作
+*.md                                # 随包文档（见下文"随包文档"一节）
 ```
 
 `types/` 目录包含 LuaCATS `---@meta` 注解——纯文档，无运行时代码。这些文件声明了
@@ -51,6 +52,23 @@ workspace library 即可获得代码补全和签名提示：
 ```json
 { "workspace.library": ["/path/to/lunet/types"] }
 ```
+
+## 随包文档
+
+压缩包顶层默认包含仓库中每一个 `docs/*.md` 文件（以及对应的 `-CN.md` 中文
+版本），由发布工作流自动复制。这是一条"默认全部复制、按需排除"的规则，而
+不是白名单：在 `docs/` 下新增的任何文档都会被自动打包，除非将其加入
+`.github/workflows/build.yml` 中的 `DOC_EXCLUDES` 列表。
+
+当前已排除的文档（仅供内部贡献者使用，对二进制发布包的最终用户没有价值）：
+
+- `CONTRIBUTING-INTERNALS.md` / `CONTRIBUTING-INTERNALS-CN.md` —— 面向在
+  运行时本身工作的贡献者的 C 代码约定与调试方法论。
+
+此规则不适用于 SDK 压缩包（`*-sdk.tar.gz` / `*-sdk.zip`），后者只随包携带
+`docs/EMBEDDING.md` / `docs/EMBEDDING-CN.md`，并重命名为
+`README.md` / `README-CN.md`——SDK 布局详见
+[`docs/EMBEDDING-CN.md`](EMBEDDING-CN.md)。
 
 ## 扩展加载机制
 

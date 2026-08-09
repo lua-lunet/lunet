@@ -18,17 +18,39 @@ local socket = require("lunet.socket")
 local SOCK1 = ".tmp/socket_close_wakeup.sock"
 local SOCK2 = ".tmp/socket_close_wakeup2.sock"
 local SOCK3 = ".tmp/socket_close_wakeup3.sock"
+local SOCK4 = ".tmp/socket_close_wakeup4.sock"
 pcall(os.remove, SOCK1)
 pcall(os.remove, SOCK2)
 pcall(os.remove, SOCK3)
+pcall(os.remove, SOCK4)
 
 local woke_with = nil
 local queued_clients_eof = false
+local write_woke_done = false
+local write_woke_err = nil
+local write_fast_fail = nil
+local accept_after_close_cb = nil
 local failures = 0
+local accept_attempted = false
+local write_in_progress = false
 
 local function fail(msg)
     failures = failures + 1
     io.stderr:write("[CLOSE_WAKEUP] FAIL: " .. msg .. "\n")
+end
+
+local function wait_until(predicate, timeout_ms)
+    -- os.clock() measures CPU time, which barely advances in an event-loop
+    -- process that spends most of its time sleeping/yielding. Use os.time()
+    -- (wall clock, second resolution) so the watchdog is actually bounded.
+    local deadline = os.time() + (timeout_ms / 1000)
+    while not predicate() do
+        if os.time() >= deadline then
+            return false
+        end
+        lunet.sleep(1)
+    end
+    return true
 end
 
 -- Case 1: a coroutine parked in socket.accept is woken by socket.close.
@@ -40,6 +62,7 @@ lunet.spawn(function()
     end
 
     lunet.spawn(function()
+        accept_attempted = true
         local client, aerr = socket.accept(listener)
         if client then
             fail("accept unexpectedly returned a client after listener close")
@@ -47,7 +70,11 @@ lunet.spawn(function()
         woke_with = aerr
     end)
 
-    lunet.sleep(50) -- let the acceptor park
+    if not wait_until(function()
+        return accept_attempted
+    end, 250) then
+        fail("acceptor did not reach socket.accept before close")
+    end
     socket.close(listener)
     pcall(os.remove, SOCK1)
 end)
@@ -67,7 +94,6 @@ lunet.spawn(function()
         return
     end
 
-    lunet.sleep(50) -- let both connections queue on the listener (never accepted)
     socket.close(listener)
 
     -- The queued server-side handles were closed, so the clients see EOF.
@@ -84,7 +110,7 @@ lunet.spawn(function()
     pcall(os.remove, SOCK2)
 end)
 
--- Case 3: accept/read on a closing handle refuse instead of parking forever.
+-- Case 3: post-close reuse after the close callback still fails safely.
 lunet.spawn(function()
     local listener, err = socket.listen("unix", SOCK3, 0)
     if not listener then
@@ -92,22 +118,101 @@ lunet.spawn(function()
         return
     end
     socket.close(listener)
+    lunet.sleep(50)
 
     local client, aerr = socket.accept(listener)
+    accept_after_close_cb = aerr
     if client ~= nil or aerr ~= "listener closed" then
-        fail("accept on closed listener: client=" .. tostring(client) .. " err=" .. tostring(aerr))
+        fail("accept on closed listener after close callback: client=" .. tostring(client) .. " err=" .. tostring(aerr))
     end
     pcall(os.remove, SOCK3)
 end)
 
+-- Case 4: write on a closing socket wakes the parked writer and fails fast.
 lunet.spawn(function()
-    lunet.sleep(300)
+    local listener, err = socket.listen("unix", SOCK4, 0)
+    if not listener then
+        fail("listen failed: " .. tostring(err))
+        return
+    end
+
+    local client, cerr = socket.connect(SOCK4, 0)
+    if not client then
+        fail("connect failed: " .. tostring(cerr))
+        socket.close(listener)
+        pcall(os.remove, SOCK4)
+        return
+    end
+
+    local server, aerr = socket.accept(listener)
+    if not server then
+        fail("accept failed: " .. tostring(aerr))
+        socket.close(client)
+        socket.close(listener)
+        pcall(os.remove, SOCK4)
+        return
+    end
+
+    lunet.spawn(function()
+        local werr = socket.write(client, string.rep("x", 64 * 1024 * 1024))
+        write_woke_done = true
+        write_woke_err = werr
+    end)
+
+    lunet.spawn(function()
+        while not write_woke_done and not write_in_progress do
+            local err2 = socket.write(client, "probe")
+            if err2 == "another write already in progress" then
+                write_in_progress = true
+                return
+            end
+            if err2 ~= nil and err2 ~= "socket closed" then
+                fail("unexpected probe write result: " .. tostring(err2))
+                return
+            end
+            lunet.sleep(1)
+        end
+    end)
+
+    if not wait_until(function()
+        return write_in_progress or write_woke_done
+    end, 1000) then
+        fail("writer did not enter in-progress state before close")
+    end
+
+    socket.close(client)
+    write_fast_fail = socket.write(client, "late write")
+
+    socket.close(server)
+    socket.close(listener)
+    pcall(os.remove, SOCK4)
+end)
+
+lunet.spawn(function()
+    if not wait_until(function()
+        return woke_with ~= nil
+            and queued_clients_eof
+            and accept_after_close_cb ~= nil
+            and write_woke_done
+            and write_fast_fail ~= nil
+    end, 1000) then
+        fail("timed out waiting for close wakeup assertions")
+    end
 
     if woke_with ~= "listener closed" then
         fail("parked acceptor was not woken by listener close (got " .. tostring(woke_with) .. ")")
     end
     if not queued_clients_eof then
         fail("queued-clients case did not complete as expected")
+    end
+    if accept_after_close_cb ~= "listener closed" then
+        fail("post-close accept did not report listener closed (got " .. tostring(accept_after_close_cb) .. ")")
+    end
+    if write_woke_err ~= "socket closed" then
+        fail("parked writer was not woken by socket close (got " .. tostring(write_woke_err) .. ")")
+    end
+    if write_fast_fail ~= "socket closed" then
+        fail("write on closed socket did not fail fast (got " .. tostring(write_fast_fail) .. ")")
     end
 
     if failures > 0 then

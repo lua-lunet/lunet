@@ -286,6 +286,7 @@ target("lunet")
     -- Enable tracing if requested
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -356,6 +357,7 @@ target("lunet-bin")
     -- Enable tracing if requested
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -384,6 +386,7 @@ target("lunet-static")
     end
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -454,6 +457,7 @@ target("lunet-sqlite3")
     end
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -512,6 +516,7 @@ target("lunet-mysql")
     end
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -557,6 +562,7 @@ target("lunet-postgres")
     end
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -609,6 +615,7 @@ target("lunet-paxe")
     end
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -655,6 +662,7 @@ target("lunet-httpc")
     end
     if has_config("lunet_trace") then
         add_defines("LUNET_TRACE")
+        add_defines("LUNET_TEST_FAULTS")
     end
     if has_config("lunet_verbose_trace") then
         add_defines("LUNET_TRACE_VERBOSE")
@@ -985,6 +993,7 @@ task("stress")
         description = "Run stress test with debug trace profile"
     }
     on_run(function ()
+        os.mkdir(path.join(os.projectdir(), ".tmp"))
         local workers = os.getenv("STRESS_WORKERS") or "50"
         local ops = os.getenv("STRESS_OPS") or "100"
         os.exec("xmake build-debug")
@@ -994,6 +1003,20 @@ task("stress")
         -- accept+UDP heartbeat concurrency
         os.execv(runner, {"test/socket_close_wakeup.lua"})
         os.execv(runner, {"test/accept_udp_concurrent.lua"})
+        -- issue #145 / item25: listen_cb error-path fault injection. Requires
+        -- LUNET_TEST_FAULTS (debug/trace profile only, see item40); each mode
+        -- below exercises a distinct branch in lunet_socket_test_fault_take.
+        os.execv(runner, {"test/socket_listen_error_paths.lua"},
+            {envs = {LUNET_TEST_SOCKET_LISTEN_FAULT = "nonthread_waiter"}})
+        os.execv(runner, {"test/socket_listen_error_paths.lua"},
+            {envs = {LUNET_TEST_SOCKET_LISTEN_FAULT = "queue_fail"}})
+        os.execv(runner, {"test/socket_listen_error_paths.lua"},
+            {envs = {LUNET_TEST_SOCKET_LISTEN_FAULT = "alloc_fail+drop_fail"}})
+        -- item24: listener handle must not dangle after the catastrophic
+        -- self-close path. Lua has no os.setenv, so the fault mode that
+        -- drives lunet_listen_cb into self-close must be supplied here.
+        os.execv(runner, {"test/socket_listener_self_close.lua"},
+            {envs = {LUNET_TEST_SOCKET_LISTEN_FAULT = "alloc_fail,drop_fail"}})
     end)
 task_end()
 

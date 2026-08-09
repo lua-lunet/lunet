@@ -307,7 +307,7 @@ jobs:
         cp ext/lnt_shared/target/release/liblnt_shared.so "$DIST_DIR/lunet/"
         cp ext/jsonic/jsonic.lua ext/jsonic/dkjson-encode-v2.10.lua "$DIST_DIR/lunet/"
         cp ext/jsonic/target/release/liblunet_jsonic.so "$DIST_DIR/lunet/"
-        # DB transaction wrappers (#119): one per driver, deliberately not shared.
+        # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
         # Documentation (#133): copy every docs/*.md (and its -CN.md
@@ -343,7 +343,7 @@ jobs:
         cp ext/lnt_shared/target/release/liblnt_shared.dylib "$DIST_DIR/lunet/"
         cp ext/jsonic/jsonic.lua ext/jsonic/dkjson-encode-v2.10.lua "$DIST_DIR/lunet/"
         cp ext/jsonic/target/release/liblunet_jsonic.dylib "$DIST_DIR/lunet/"
-        # DB transaction wrappers (#119): one per driver, deliberately not shared.
+        # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
         # Documentation (#133): copy every docs/*.md (and its -CN.md
@@ -405,7 +405,7 @@ jobs:
         Get-ChildItem -Path build -Recurse -Filter *.dll | Where-Object { $_.FullName -match '\\lunet\\' } | ForEach-Object {
           Copy-Item $_.FullName (Join-Path $dist "lunet")
         }
-        # DB transaction wrappers (#119): one per driver, deliberately not shared.
+        # DB transaction wrappers: one per driver, deliberately not shared.
         Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
         # Documentation (#133): copy every docs\*.md (and its -CN.md
         # counterpart) into the archive by default, excluding internal-only

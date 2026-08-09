@@ -8,7 +8,7 @@ This document describes the canonical developer workflow for Lunet and lists eve
 
 **xmake is the sole, canonical build system for Lunet.** There is no Makefile.
 
-This decision was made after PR #62 (linting pipeline improvements) established xmake lint tasks and CI gates. All developer workflows, CI pipelines, and documentation use xmake commands exclusively.
+This decision was made after the linting pipeline improvements that established xmake lint tasks and CI gates. All developer workflows, CI pipelines, and documentation use xmake commands exclusively.
 
 ### Why xmake?
 
@@ -66,7 +66,7 @@ Every task below is defined in `xmake.lua` and can be run with `xmake <task>`.
 |------|-------------|
 | `xmake luajit-asan` | Build macOS LuaJIT with ASan into `.tmp` (macOS only) |
 | `xmake build-debug-asan-luajit` | Build lunet-bin with ASan + custom LuaJIT ASan (macOS only) |
-| `xmake repro-50-asan-luajit` | Run issue #50 repro with LuaJIT + Lunet ASan (macOS only) |
+| `xmake repro-50-asan-luajit` | Run the socket stress repro with LuaJIT + Lunet ASan (macOS only) |
 
 ## Recommended Workflows
 

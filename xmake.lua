@@ -999,13 +999,13 @@ task("stress")
         os.exec("xmake build-debug")
         local runner = lunet_runner_path("debug")
         os.execv(runner, {"test/stress_test.lua"}, {envs = {STRESS_WORKERS = workers, STRESS_OPS = ops}})
-        -- issue #145 regressions: parked-acceptor wakeup on close, and
-        -- accept+UDP heartbeat concurrency
+        -- Accept/UDP concurrency regressions: parked-acceptor wakeup on close,
+        -- and accept+UDP heartbeat concurrency.
         os.execv(runner, {"test/socket_close_wakeup.lua"})
         os.execv(runner, {"test/accept_udp_concurrent.lua"})
-        -- issue #145 / item25: listen_cb error-path fault injection. Requires
-        -- LUNET_TEST_FAULTS (debug/trace profile only, see item40); each mode
-        -- below exercises a distinct branch in lunet_socket_test_fault_take.
+        -- listen_cb error-path fault injection. Requires LUNET_TEST_FAULTS
+        -- (debug/trace profile only); each mode below exercises a distinct
+        -- branch in lunet_socket_test_fault_take.
         os.execv(runner, {"test/socket_listen_error_paths.lua"},
             {envs = {LUNET_TEST_SOCKET_LISTEN_FAULT = "nonthread_waiter"}})
         os.execv(runner, {"test/socket_listen_error_paths.lua"},
@@ -1099,7 +1099,7 @@ task_end()
 task("repro-50-asan-luajit")
     set_menu {
         usage = "xmake repro-50-asan-luajit",
-        description = "Run issue #50 repro with LuaJIT+Lunet ASan (macOS)"
+        description = "Run the socket stress repro with LuaJIT+Lunet ASan (macOS)"
     }
     on_run(function ()
         if not is_host("macosx") then

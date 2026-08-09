@@ -163,7 +163,7 @@ xmake build lunet-bin
 
 **二分法技巧：** 如果已知崩溃发生在 A 行和 B 行之间，可在中点添加
 `fprintf(stderr, ...)`，重新构建并运行，重复此过程直到定位到确切的 C 代码行。
-以 Issue #50 为例：
+举例：
 1. 打印了 `SOCKET_TRACE_READ` → 崩溃发生在 READ 宏之后
 2. 添加了 `READ_CB_RESOLVE`（在 `lua_rawgeti` 之前）和 `READ_CB_GOT_REF`
    （之后）→ `READ_CB_RESOLVE` 打印了但 `READ_CB_GOT_REF` 没有 → 崩溃发生在

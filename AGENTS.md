@@ -17,7 +17,7 @@ You MUST NOT do any git reset or stash or an git rm or rm or anything that might
 5.  **MANDATORY LOCAL CI PARITY BEFORE PUSH:** Before any push, agents MUST run locally all steps from `.github/workflows/build.yml` for their current OS matrix entry (Linux/macOS/Windows), including configure, build, and packaging commands. If any required step cannot be run locally or fails, do not push until fixed or explicitly approved by the user.
     - Minimum local gate for this repo: `xmake lint`, `xmake check`, `xmake check-types`, `xmake test` (or CI-equivalent Lua test step), `xmake preflight-easy-memory`, and `xmake build-release` (which also builds the `lunet-static` and `sdk-api-test` SDK targets).
     - Note: `xmake test` runs `xmake check-types` first and fails the run on any pending busted test; `LUNET_ALLOW_PENDING=1` is a local-iteration escape hatch only, never CI.
-    - CI installs deps via `contributing/deps/*` (dev/CI parity, issue #123). The same scripts `make init` uses on developer machines drive the `build`, `embed-scripts`, `easy-memory`, and `lua-qa` jobs.
+    - CI installs deps via `contributing/deps/*` for dev/CI parity. The same scripts `make init` uses on developer machines drive the `build`, `embed-scripts`, `easy-memory`, and `lua-qa` jobs.
     - If the change affects examples, packaging, or specialized jobs, run the corresponding local equivalents for the current OS as well.
     - macOS local notes: Homebrew's `zlib`, `curl`, `libpq`, and `mysql-client` are keg-only — export `PKG_CONFIG_PATH` with each `$(brew --prefix <pkg>)/lib/pkgconfig` before building drivers or running preflight (same as CI). As of 2026-07-25, ASan-instrumented debug binaries hang in `__malloc_init` at dyld time on macOS 26 (observed on 26.5.2, even for hello-world scripts; release and non-ASan debug/trace builds are unaffected). This blocks the ASan legs of `xmake preflight-easy-memory` locally — environmental, CI is unaffected.
 
@@ -59,8 +59,7 @@ Before creating or announcing a release:
    - plus `lunet_fetch_release_<tag>.lua`, rendered by the publish workflow from
      `bin/lunet_fetch_release.lua` (the `@RELEASE_TAG@` placeholder becomes the
      release tag). The fetcher installs the runtime into a project-local
-     `.lunet/<tag>/` with SHA-256 verification against the release metadata
-     (issue #143).
+     `.lunet/<tag>/` with SHA-256 verification against the release metadata.
 3. **Readable release notes:** Notes must include at minimum:
    - `## Highlights`
    - `## Binaries`
@@ -80,8 +79,8 @@ branch must be up to date before it merges. `Publish release` is deliberately
 *not* required, because it is skipped on non-tag pushes and a skipped required
 check would deadlock every merge. Without these, a PR with auto-merge enabled
 merges instantly and its CI jobs die at checkout with
-`couldn't find remote ref refs/pull/<n>/merge` — which is how #120 landed with
-no CI signal at all.
+`couldn't find remote ref refs/pull/<n>/merge`, which is how a merge can land
+with no CI signal at all.
 
 ## Example Application
 

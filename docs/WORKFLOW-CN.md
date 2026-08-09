@@ -8,7 +8,7 @@
 
 **xmake 是 Lunet 唯一的标准构建系统。** 没有 Makefile。
 
-此决定在 PR #62（代码检查流水线改进）建立 xmake lint 任务和 CI 门控之后做出。所有开发者工作流、CI 流水线和文档均使用 xmake 命令。
+此决定在代码检查流水线改进建立 xmake lint 任务和 CI 门控之后做出。所有开发者工作流、CI 流水线和文档均使用 xmake 命令。
 
 ### 为什么选择 xmake？
 
@@ -66,7 +66,7 @@
 |------|------|
 | `xmake luajit-asan` | 在 `.tmp` 中构建 macOS LuaJIT ASan（仅 macOS） |
 | `xmake build-debug-asan-luajit` | 使用 ASan + 自定义 LuaJIT ASan 构建 lunet-bin（仅 macOS） |
-| `xmake repro-50-asan-luajit` | 使用 LuaJIT + Lunet ASan 运行 issue #50 复现（仅 macOS） |
+| `xmake repro-50-asan-luajit` | 使用 LuaJIT + Lunet ASan 运行 socket 压力复现（仅 macOS） |
 
 ## 推荐工作流
 

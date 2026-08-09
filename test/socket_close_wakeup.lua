@@ -1,5 +1,5 @@
 --[[
-  Regression test for issue #145 defect D:
+  Regression test:
 
   Closing a listener must wake a coroutine parked in socket.accept
   (previously it hung forever with its coref leaked), and must close

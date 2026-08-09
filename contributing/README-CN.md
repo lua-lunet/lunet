@@ -55,8 +55,8 @@ Homebrew 的 `zlib`、`curl`、`libpq`、`mysql-client` 是 keg-only。
 
 ## CI 复用
 
-同一套 `contributing/deps/*` 脚本将在后续工作中被 CI 调用（详见 issue #123）。
-脚本是幂等的，可以安全重复运行。
+同一套 `contributing/deps/*` 脚本也会被 CI 调用，因此开发者本地运行的内容
+与构建运行器运行的内容一致。脚本是幂等的，可以安全重复运行。
 
 ## 故障排查
 

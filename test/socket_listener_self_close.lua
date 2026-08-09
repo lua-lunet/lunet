@@ -1,5 +1,5 @@
 --[[
-  Regression test for item24 / issue #145 class bug.
+  Regression test:
 
   If listen_cb hits the catastrophic self-close path, the listener handle that
   Lua still holds must become invalid instead of dangling. A later

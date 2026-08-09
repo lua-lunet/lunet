@@ -58,8 +58,9 @@ and `xmake preflight-easy-memory`.
 
 ## CI reuse
 
-The same `contributing/deps/*` scripts will be called from CI in a follow-up
-work item (see issue #123). The scripts are idempotent and safe to re-run.
+The same `contributing/deps/*` scripts are also called from CI, so what a
+developer runs locally is what the build runners run. The scripts are
+idempotent and safe to re-run.
 
 ## Troubleshooting
 

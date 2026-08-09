@@ -1,5 +1,5 @@
 --[[
-  Regression test for Issue #50 class bug:
+  Regression test:
 
   If a socket listener is created inside a short-lived coroutine that returns
   synchronously (never yields), that coroutine can be garbage collected.

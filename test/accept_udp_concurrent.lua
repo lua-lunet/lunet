@@ -1,7 +1,7 @@
 --[[
-  Regression test for issue #145: a coroutine looping on socket.accept must
-  be resumed for every established TCP client while the same process runs
-  concurrent UDP receive/heartbeat traffic.
+  Regression test: a coroutine looping on socket.accept must be resumed for
+  every established TCP client while the same process runs concurrent UDP
+  receive/heartbeat traffic.
 
   Single process, documented APIs only:
     - TCP listener with an accept loop spawning an echo handler per client

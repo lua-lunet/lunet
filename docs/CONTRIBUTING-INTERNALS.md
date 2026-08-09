@@ -156,7 +156,7 @@ xmake build lunet-bin
 
 Then run your repro and inspect stderr. The trace shows every socket/timer/fs/udp/signal operation with pointer values. When the log cuts off abruptly, the crash is between the last printed line and the next operation.
 
-**Bisection technique:** If you know the crash is between line A and line B, add `fprintf(stderr, ...)` prints at the midpoint, rebuild, and re-run. Repeat until you identify the exact C line. Example from Issue #50:
+**Bisection technique:** If you know the crash is between line A and line B, add `fprintf(stderr, ...)` prints at the midpoint, rebuild, and re-run. Repeat until you identify the exact C line. Example:
 1. `SOCKET_TRACE_READ` printed → crash is after the READ macro
 2. Added `READ_CB_RESOLVE` (before `lua_rawgeti`) and `READ_CB_GOT_REF` (after) → `READ_CB_RESOLVE` printed but `READ_CB_GOT_REF` did not → crash is inside `lua_rawgeti`
 

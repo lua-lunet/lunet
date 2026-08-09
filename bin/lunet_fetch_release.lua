@@ -17,7 +17,7 @@
 --   All progress/diagnostics go to stderr so Makefiles can capture stdout:
 --     LUNET_RUN := $(shell lua lunet_fetch_release_<tag>.lua)
 --
--- Guarantees (per lua-lunet/lunet#143):
+-- Guarantees:
 --   * host OS/arch detection; fails clearly on unsupported hosts
 --   * downloads only from the official lua-lunet/lunet GitHub release
 --   * SHA-256 of the archive verified against the release metadata digest

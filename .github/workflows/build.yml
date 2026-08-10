@@ -520,8 +520,11 @@ jobs:
         "$VERIFY_DIR/lunet-run" "$VERIFY_DIR/verify_ext.lua"
         # The archive must also carry the PAXE protocol/integration doc (it
         # lives under docs/ precisely so the default-copy rule bundles it).
-        tar -tzf "$ARCHIVE" | grep -q '^./PAXE.md$'
-        tar -tzf "$ARCHIVE" | grep -q '^./PAXE-CN.md$'
+        # Herestring, not a pipe: grep -q closing a pipeline early SIGPIPEs
+        # tar, and pipefail would then fail the step on a successful match.
+        ARCHIVE_LIST="$(tar -tzf "$ARCHIVE")"
+        grep -q '^./PAXE.md$' <<<"$ARCHIVE_LIST"
+        grep -q '^./PAXE-CN.md$' <<<"$ARCHIVE_LIST"
         echo "VERIFY OK: PAXE.md and PAXE-CN.md are bundled"
 
     # Keep these steps byte-identical to the documented commands in

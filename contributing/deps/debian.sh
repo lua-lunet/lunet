@@ -28,9 +28,13 @@ if [[ "$QA_ONLY" -eq 1 ]]; then
 else
     $SUDO apt-get install -y $EXTRA \
         pkg-config libuv1-dev luajit libluajit-5.1-dev \
-        zlib1g-dev libsqlite3-dev libsodium-dev libcurl4-openssl-dev \
+        zlib1g-dev libsqlite3-dev libcurl4-openssl-dev \
         libpq-dev default-libmysqlclient-dev luarocks lua5.1 \
         build-essential git curl ca-certificates libasan8
+    # PAXE (ext/paxe) links libsodium STATICALLY and requires the hardware
+    # AES-256-GCM path: the distro libsodium-dev is too old on some targets
+    # (notably arm64), so install a source-built one to /tmp/libsodium.
+    bash "$(dirname "$0")/sodium-src.sh"
 fi
 
 # lua-language-server is not in apt; download a pinned release binary.

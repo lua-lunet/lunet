@@ -163,7 +163,6 @@ jobs:
         xmake build lunet-static
         xmake build sdk-api-test
         xmake build lunet-sqlite3
-        xmake build lunet-paxe
         xmake build lunet-httpc
         xmake build lunet-postgres
         xmake build lunet-mysql
@@ -176,39 +175,9 @@ jobs:
         xmake build lunet-static
         xmake build sdk-api-test
         xmake build lunet-sqlite3
-        xmake build lunet-paxe
         xmake build lunet-httpc
         xmake build lunet-postgres
         xmake build lunet-mysql
-
-    # Run the busted suite in CI — it previously ran nowhere, which is why
-    # spec rot stayed invisible for months. `xmake test` = check-types ->
-    # build lunet-httpc -> busted, and fails on ANY pending test unless
-    # LUNET_ALLOW_PENDING=1 (local escape hatch only). The toolchain,
-    # libcurl dev headers and a LuaJIT/5.1-tree busted are already installed
-    # in this job by contributing/deps/debian.sh --ci (which execs
-    # qa-luarocks.sh). One OS job proves the gate; macOS/Windows coverage
-    # is a follow-up.
-    - name: Lua test suite (make test)
-      if: matrix.os == 'ubuntu-latest'
-      run: make test
-
-    - name: C SDK lifecycle test (Unix)
-      if: runner.os != 'Windows'
-      run: |
-        SDK_API_TEST=$(find build -type f -name sdk-api-test | head -n 1)
-        if [ -z "$SDK_API_TEST" ]; then echo "sdk-api-test not found" >&2; exit 1; fi
-        if command -v gtimeout &>/dev/null; then TMO=gtimeout; else TMO=timeout; fi
-        $TMO 10 "$SDK_API_TEST"
-
-    - name: C SDK lifecycle test (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        $test = Get-ChildItem -Path build -Recurse -Filter "sdk-api-test.exe" | Select-Object -First 1
-        if (-not $test) { throw "sdk-api-test.exe not found" }
-        & $test.FullName
-        if ($LASTEXITCODE -ne 0) { throw "sdk-api-test failed" }
 
     # Rust ext modules (lnt_shared, jsonic) — built on Unix only:
     # lnt_shared is POSIX-only by design (mmap/clock_gettime), and the
@@ -229,6 +198,113 @@ jobs:
         set -euo pipefail
         cargo build --release --manifest-path ext/lnt_shared/Cargo.toml
         cargo build --release --manifest-path ext/jsonic/Cargo.toml
+
+    # paxe-core is a PRIVATE repository in the same org, fetched by cargo
+    # over ssh (ext/paxe/Cargo.toml). The runner has no ssh keys, so rewrite
+    # the ssh URL to an https one authenticated by this workflow's
+    # GITHUB_TOKEN (paxe-core grants read access to this org's Actions
+    # tokens). ext/paxe/.cargo/config.toml sets net.git-fetch-with-cli, and
+    # the git CLI honours insteadOf; the --global entry lives only for the
+    # job's lifetime on the ephemeral runner.
+    - name: Authorize cargo's paxe-core fetch
+      shell: bash
+      env:
+        PAXE_FETCH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        git config --global \
+          url."https://x-access-token:${PAXE_FETCH_TOKEN}@github.com/lua-lunet/paxe-core.git".insteadOf \
+          "ssh://git@github.com/lua-lunet/paxe-core.git"
+
+    # On Linux, contributing/deps/sodium-src.sh installs a source-built
+    # libsodium (1.0.22) to /tmp/libsodium so the PAXE cdylib gets
+    # AES-256-GCM on ARM64 (libsodium <1.0.20 lacks ARM Crypto Extensions
+    # support, and 1.0.21 does not compile on aarch64 with GCC). macOS gets
+    # Homebrew 1.0.22; Windows gets vcpkg's. The env var is the priority-1
+    # path in paxe-core's build.rs, which is where the static-libsodium
+    # staging lives; ext/paxe has no build script of its own and inherits
+    # the core's link directives.
+    - name: Set PAXE libsodium path (Linux)
+      if: runner.os == 'Linux'
+      run: echo "PAXE_SODIUM_LIB_DIR=/tmp/libsodium/lib" >> "$GITHUB_ENV"
+
+    # PAXE (ext/paxe): the C ABI cdylib. The protocol lives in paxe-core,
+    # pinned by tag in ext/paxe/Cargo.toml, so this step fetches one git
+    # dependency — the only network access in the Rust build.
+    #
+    # The three-platform claim is tested here, not asserted — this step runs
+    # on Windows too, unlike the ext modules above. ext/paxe/
+    # rust-toolchain.toml pins the toolchain and rustup auto-installs the
+    # pinned version on first use. Cargo must run with ext/paxe as the
+    # working directory: rustup resolves rust-toolchain.toml from the cwd,
+    # not from --manifest-path.
+    - name: Build PAXE Rust crate
+      working-directory: ext/paxe
+      run: cargo build --release
+
+    # This crate's tests — the FFI boundary ones — run here, after the
+    # toolchain and dependencies are in place and before the artefact is
+    # verified, so a failure stops the job before a bad cdylib is packaged.
+    # Same working-directory requirement as the build step above (rustup
+    # resolves rust-toolchain.toml from the cwd).
+    #
+    # SCOPE, stated plainly: the protocol tests and the known-answer
+    # vectors — the primary defence against a wrong wire format — live in
+    # paxe-core and run in ITS suite, not here. What guards lunet against a
+    # bad core is the pinned tag: it cannot change without a reviewed edit
+    # to ext/paxe/Cargo.toml. The Lua-side spec still exercises the real
+    # cdylib on every run.
+    - name: Test PAXE Rust crate
+      working-directory: ext/paxe
+      run: cargo test
+
+    # Windows cdylib naming differs from Unix (.dll, no "lib" prefix), so
+    # confirm the artefact under the expected per-platform name rather than
+    # assuming it.
+    - name: Verify PAXE cdylib artefact
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ runner.os }}" in
+          Windows) ART=ext/paxe/target/release/lunet_paxe.dll ;;
+          macOS)   ART=ext/paxe/target/release/liblunet_paxe.dylib ;;
+          *)       ART=ext/paxe/target/release/liblunet_paxe.so ;;
+        esac
+        if [ ! -f "$ART" ]; then echo "missing artefact: $ART" >&2; exit 1; fi
+        echo "PAXE cdylib OK: $ART"
+
+    # Run the busted suite in CI — it previously ran nowhere, which is why
+    # spec rot stayed invisible for months. `xmake test` = check-types ->
+    # build lunet-httpc -> busted, and fails on ANY pending test unless
+    # LUNET_ALLOW_PENDING=1 (local escape hatch only). The toolchain,
+    # libcurl dev headers and a LuaJIT/5.1-tree busted are already installed
+    # in this job by contributing/deps/debian.sh --ci (which execs
+    # qa-luarocks.sh). One OS job proves the gate; macOS/Windows coverage
+    # is a follow-up.
+    #
+    # ORDERING IS LOAD-BEARING: this runs AFTER the Rust ext steps above.
+    # spec/paxe_spec.lua goes pending when the PAXE cdylib is absent, and
+    # the no-pending gate turns that into a hard failure — so building the
+    # crate after this step fails the job on a test that never ran.
+    - name: Lua test suite (make test)
+      if: matrix.os == 'ubuntu-latest'
+      run: make test
+
+    - name: C SDK lifecycle test (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        SDK_API_TEST=$(find build -type f -name sdk-api-test | head -n 1)
+        if [ -z "$SDK_API_TEST" ]; then echo "sdk-api-test not found" >&2; exit 1; fi
+        if command -v gtimeout &>/dev/null; then TMO=gtimeout; else TMO=timeout; fi
+        $TMO 10 "$SDK_API_TEST"
+
+    - name: C SDK lifecycle test (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $test = Get-ChildItem -Path build -Recurse -Filter "sdk-api-test.exe" | Select-Object -First 1
+        if (-not $test) { throw "sdk-api-test.exe not found" }
+        & $test.FullName
+        if ($LASTEXITCODE -ne 0) { throw "sdk-api-test failed" }
 
     - name: Examples compile check (Unix)
       if: runner.os != 'Windows'
@@ -258,36 +334,10 @@ jobs:
         if (-not $lunet) { throw "lunet-run.exe not found" }
         & $lunet.FullName examples/03_db_sqlite3.lua
 
-    - name: PAXE example smoke (Unix)
-      if: runner.os != 'Windows'
-      run: |
-        set -euo pipefail
-        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
-        # AES-256-GCM requires hardware crypto extensions (AES-NI on x86,
-        # ARMv8 CE on arm64). Check availability before running the example.
-        cat > /tmp/check_aes.lua <<'LUA'
-        local ok, err = pcall(function()
-          local paxe = require("lunet.paxe")
-          local init_ok = paxe.init()
-          print(init_ok and "AES_SUPPORTED" or "AES_UNSUPPORTED")
-        end)
-        if not ok then print("AES_UNSUPPORTED") end
-        LUA
-        RESULT=$("$LUNET_BIN" /tmp/check_aes.lua)
-        echo "AES check: $RESULT"
-        if echo "$RESULT" | grep -q "AES_SUPPORTED"; then
-          "$LUNET_BIN" examples/06_paxe_encryption.lua
-        else
-          echo "SKIP: AES-256-GCM not available on this hardware"
-        fi
-
-    - name: PAXE example smoke (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
-        if (-not $lunet) { throw "lunet-run.exe not found" }
-        & $lunet.FullName examples/06_paxe_encryption.lua
+    # PAXE example smoke: the old C-module smoke steps were retired with the
+    # C implementation. The Rust crate's own suite ran above; the Lua-side
+    # behavioural suite (spec/paxe_spec.lua) runs under `make test` on Linux,
+    # and examples/06/07 stay runnable locally (xmake build-paxe first).
 
     - name: Package release archive (Linux)
       if: matrix.platform == 'linux'
@@ -307,6 +357,10 @@ jobs:
         cp ext/lnt_shared/target/release/liblnt_shared.so "$DIST_DIR/lunet/"
         cp ext/jsonic/jsonic.lua ext/jsonic/dkjson-encode-v2.10.lua "$DIST_DIR/lunet/"
         cp ext/jsonic/target/release/liblunet_jsonic.so "$DIST_DIR/lunet/"
+        # PAXE: Lua FFI loader plus its Rust cdylib. libsodium is linked
+        # statically into the cdylib, so the archive stays self-contained.
+        cp ext/paxe/paxe.lua "$DIST_DIR/lunet/"
+        cp ext/paxe/target/release/liblunet_paxe.so "$DIST_DIR/lunet/"
         # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
@@ -343,6 +397,10 @@ jobs:
         cp ext/lnt_shared/target/release/liblnt_shared.dylib "$DIST_DIR/lunet/"
         cp ext/jsonic/jsonic.lua ext/jsonic/dkjson-encode-v2.10.lua "$DIST_DIR/lunet/"
         cp ext/jsonic/target/release/liblunet_jsonic.dylib "$DIST_DIR/lunet/"
+        # PAXE: Lua FFI loader plus its Rust cdylib. libsodium is linked
+        # statically into the cdylib, so the archive stays self-contained.
+        cp ext/paxe/paxe.lua "$DIST_DIR/lunet/"
+        cp ext/paxe/target/release/liblunet_paxe.dylib "$DIST_DIR/lunet/"
         # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
@@ -405,6 +463,10 @@ jobs:
         Get-ChildItem -Path build -Recurse -Filter *.dll | Where-Object { $_.FullName -match '\\lunet\\' } | ForEach-Object {
           Copy-Item $_.FullName (Join-Path $dist "lunet")
         }
+        # PAXE: Lua FFI loader plus its Rust cdylib. libsodium is linked
+        # statically into the cdylib, so the archive stays self-contained.
+        Copy-Item ext\paxe\paxe.lua (Join-Path $dist "lunet")
+        Copy-Item ext\paxe\target\release\lunet_paxe.dll (Join-Path $dist "lunet")
         # DB transaction wrappers: one per driver, deliberately not shared.
         Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
         # Documentation: copy every docs\*.md (and its -CN.md counterpart)
@@ -436,7 +498,7 @@ jobs:
         Compress-Archive -Path (Join-Path $sdk "*") -DestinationPath lunet-windows-amd64-sdk.zip -Force
 
     # Guard against shipping a broken archive: extract the just-built tarball
-    # and exercise both Rust ext modules through the packaged binary, using
+    # and exercise the Rust ext modules through the packaged binary, using
     # exactly the layout downstream apps will consume.
     - name: Verify packaged ext modules (Unix)
       if: runner.os != 'Windows'
@@ -459,9 +521,24 @@ jobs:
         local v = json.decode('{"a":1,"s":"ok"}')
         assert(v.a == 1 and v.s == "ok")
         assert(json.encode({ a = 1 }, { keyorder = { "a" } }) == '{"a":1}')
-        print("VERIFY OK: lunet.lnt_shared + lunet.jsonic work from packaged archive")
+        local paxe = require("lunet.paxe")
+        assert(paxe.init())
+        assert(paxe.set_local_id(1))
+        assert(paxe.keystore_set(2, 0, string.rep("\x42", 32)))
+        local msg = "archive check"
+        local frame = assert(paxe.seal(msg, 2, 100))
+        assert(#frame == #msg + paxe.OVERHEAD_STANDARD)
+        local s = paxe.stats()
+        assert(type(s.rx_total) == "number" and type(s.tx_oversize) == "number")
+        paxe.shutdown()
+        print("VERIFY OK: lunet.lnt_shared + lunet.jsonic + lunet.paxe work from packaged archive")
         LUA
         "$VERIFY_DIR/lunet-run" "$VERIFY_DIR/verify_ext.lua"
+        # The archive must also carry the PAXE protocol/integration doc (it
+        # lives under docs/ precisely so the default-copy rule bundles it).
+        tar -tzf "$ARCHIVE" | grep -q '^./PAXE.md$'
+        tar -tzf "$ARCHIVE" | grep -q '^./PAXE-CN.md$'
+        echo "VERIFY OK: PAXE.md and PAXE-CN.md are bundled"
 
     # Keep these steps byte-identical to the documented commands in
     # docs/EMBEDDING.md so CI verifies exactly what users are told to run.

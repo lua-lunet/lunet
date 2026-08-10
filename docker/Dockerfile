@@ -17,12 +17,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 #  - easy-memory job: + libpq-dev default-libmysqlclient-dev
 #  - embed job:       + zlib1g-dev
 #  - local gates:     + busted (xmake test), libasan8 (ASAN), rustc/cargo (ext)
+# (No libsodium: PAXE's Rust crate links a source-built static libsodium via
+# paxe-core's build.rs, and paxe is not exercised in this container at all —
+# see docker/gate.sh.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential pkg-config \
       luajit libluajit-5.1-dev \
       libuv1-dev libsqlite3-dev zlib1g-dev \
       libpq-dev default-libmysqlclient-dev \
-      libsodium-dev libcurl4-openssl-dev \
+      libcurl4-openssl-dev \
       libasan8 \
       rustc cargo \
       luarocks lua5.1 \

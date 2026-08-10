@@ -1,0 +1,36 @@
+# Documentation NOT shipped in the binary release archives.
+#
+# Policy is include by default: every docs/*.md goes into the archive's docs/
+# directory unless its basename is listed here. Adding a new user-facing doc
+# therefore needs no packaging change; only a deliberate exclusion does.
+#
+# List basenames only, one per line. Both the English and Chinese files must be
+# listed. Give a reason for each.
+
+# Shipped at the archive root instead, so it is the first thing seen.
+RELEASE-LAYOUT.md
+RELEASE-LAYOUT-CN.md
+
+# Building or embedding Lunet from source. Irrelevant to a binary consumer, and
+# actively misleading in an archive that contains no source.
+XMAKE_INTEGRATION.md
+XMAKE_INTEGRATION-CN.md
+EMBEDDING.md
+EMBEDDING-CN.md
+
+# Contributor workflow, not user documentation.
+WORKFLOW.md
+WORKFLOW-CN.md
+
+# C conventions, debugging methodology and testing protocol for people working
+# on the runtime itself. Not user documentation.
+CONTRIBUTING-INTERNALS.md
+CONTRIBUTING-INTERNALS-CN.md
+
+# Repository metadata: how downstream projects display Lunet badges.
+BADGES.md
+BADGES-CN.md
+
+# Internal engineering report on a past integration. Historical, not reference.
+EASY_MEMORY_REPORT.md
+EASY_MEMORY_REPORT-CN.md

@@ -348,19 +348,19 @@ jobs:
         # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
-        # Documentation: copy every docs/*.md (and its -CN.md counterpart)
-        # into the archive by default, excluding internal-only and
-        # maintainer-only docs that are not meant for end users.
-        DOC_EXCLUDES=" CONTRIBUTING-INTERNALS.md CONTRIBUTING-INTERNALS-CN.md BADGES.md BADGES-CN.md EASY_MEMORY_REPORT.md EASY_MEMORY_REPORT-CN.md WORKFLOW.md WORKFLOW-CN.md XMAKE_INTEGRATION.md XMAKE_INTEGRATION-CN.md "
-        for doc in docs/*.md; do
-          base="$(basename "$doc")"
-          case "$DOC_EXCLUDES" in
-            *" $base "*) continue ;;
-          esac
-          cp "$doc" "$DIST_DIR/"
-        done
+        # Archive layout guide, at the root so it is the first thing seen.
+        cp docs/RELEASE-LAYOUT.md docs/RELEASE-LAYOUT-CN.md "$DIST_DIR/"
         # LuaCATS type annotations
         cp -R types "$DIST_DIR/"
+        # User documentation. Include by default, exclude by name via
+        # docs/.dist-exclude, so a new user-facing doc ships with no
+        # packaging change.
+        mkdir -p "$DIST_DIR/docs"
+        cp docs/*.md "$DIST_DIR/docs/"
+        while IFS= read -r doc; do
+          case "$doc" in ''|\#*) continue ;; esac
+          rm -f "$DIST_DIR/docs/$doc"
+        done < docs/.dist-exclude
         tar -C "$DIST_DIR" -czf "lunet-linux-${{ matrix.arch }}.tar.gz" .
 
     - name: Package release archive (macOS)
@@ -388,19 +388,19 @@ jobs:
         # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
-        # Documentation: copy every docs/*.md (and its -CN.md counterpart)
-        # into the archive by default, excluding internal-only and
-        # maintainer-only docs that are not meant for end users.
-        DOC_EXCLUDES=" CONTRIBUTING-INTERNALS.md CONTRIBUTING-INTERNALS-CN.md BADGES.md BADGES-CN.md EASY_MEMORY_REPORT.md EASY_MEMORY_REPORT-CN.md WORKFLOW.md WORKFLOW-CN.md XMAKE_INTEGRATION.md XMAKE_INTEGRATION-CN.md "
-        for doc in docs/*.md; do
-          base="$(basename "$doc")"
-          case "$DOC_EXCLUDES" in
-            *" $base "*) continue ;;
-          esac
-          cp "$doc" "$DIST_DIR/"
-        done
+        # Archive layout guide, at the root so it is the first thing seen.
+        cp docs/RELEASE-LAYOUT.md docs/RELEASE-LAYOUT-CN.md "$DIST_DIR/"
         # LuaCATS type annotations
         cp -R types "$DIST_DIR/"
+        # User documentation. Include by default, exclude by name via
+        # docs/.dist-exclude, so a new user-facing doc ships with no
+        # packaging change.
+        mkdir -p "$DIST_DIR/docs"
+        cp docs/*.md "$DIST_DIR/docs/"
+        while IFS= read -r doc; do
+          case "$doc" in ''|\#*) continue ;; esac
+          rm -f "$DIST_DIR/docs/$doc"
+        done < docs/.dist-exclude
         tar -C "$DIST_DIR" -czf lunet-macos.tar.gz .
 
     - name: Package release SDK (Linux)
@@ -453,15 +453,22 @@ jobs:
         Copy-Item ext\paxe\target\release\lunet_paxe.dll (Join-Path $dist "lunet")
         # DB transaction wrappers: one per driver, deliberately not shared.
         Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
-        # Documentation: copy every docs\*.md (and its -CN.md counterpart)
-        # into the archive by default, excluding internal-only and
-        # maintainer-only docs that are not meant for end users.
-        $DocExcludes = @("CONTRIBUTING-INTERNALS.md", "CONTRIBUTING-INTERNALS-CN.md", "BADGES.md", "BADGES-CN.md", "EASY_MEMORY_REPORT.md", "EASY_MEMORY_REPORT-CN.md", "WORKFLOW.md", "WORKFLOW-CN.md", "XMAKE_INTEGRATION.md", "XMAKE_INTEGRATION-CN.md")
-        Get-ChildItem -Path docs -Filter *.md | Where-Object { $DocExcludes -notcontains $_.Name } | ForEach-Object {
-          Copy-Item $_.FullName $dist
-        }
+        # Archive layout guide, at the root so it is the first thing seen.
+        Copy-Item docs\RELEASE-LAYOUT.md, docs\RELEASE-LAYOUT-CN.md $dist
         # LuaCATS type annotations
         Copy-Item -Recurse types (Join-Path $dist "types")
+        # User documentation. Include by default, exclude by name via
+        # docs/.dist-exclude, so a new user-facing doc ships with no
+        # packaging change.
+        $docsOut = Join-Path $dist "docs"
+        New-Item -ItemType Directory -Force -Path $docsOut | Out-Null
+        Copy-Item docs\*.md $docsOut
+        Get-Content docs\.dist-exclude | ForEach-Object {
+          $line = $_.Trim()
+          if ($line -and -not $line.StartsWith("#")) {
+            Remove-Item (Join-Path $docsOut $line) -ErrorAction SilentlyContinue
+          }
+        }
         Compress-Archive -Path (Join-Path $dist "*") -DestinationPath lunet-windows-amd64.zip -Force
 
     - name: Package release SDK (Windows)
@@ -523,9 +530,9 @@ jobs:
         # Herestring, not a pipe: grep -q closing a pipeline early SIGPIPEs
         # tar, and pipefail would then fail the step on a successful match.
         ARCHIVE_LIST="$(tar -tzf "$ARCHIVE")"
-        grep -q '^./PAXE.md$' <<<"$ARCHIVE_LIST"
-        grep -q '^./PAXE-CN.md$' <<<"$ARCHIVE_LIST"
-        echo "VERIFY OK: PAXE.md and PAXE-CN.md are bundled"
+        grep -q '^\./docs/PAXE\.md$' <<<"$ARCHIVE_LIST"
+        grep -q '^\./docs/PAXE-CN\.md$' <<<"$ARCHIVE_LIST"
+        echo "VERIFY OK: docs/PAXE.md and docs/PAXE-CN.md are bundled"
 
     # Keep these steps byte-identical to the documented commands in
     # docs/EMBEDDING.md so CI verifies exactly what users are told to run.

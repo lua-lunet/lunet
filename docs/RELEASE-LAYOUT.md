@@ -46,7 +46,12 @@ types/                              # LuaCATS type annotations (---@meta, docume
     signal.lua                      # OS signal handling
     socket.lua                      # TCP socket operations
     udp.lua                         # UDP socket operations
-*.md                                # bundled docs (see "Bundled documentation" below)
+docs/                               # user documentation (see below)
+  HTTPC.md / HTTPC-CN.md
+  PAXE.md / PAXE-CN.md
+  PHILOSOPHY.md / PHILOSOPHY-CN.md
+  SECURITY_ARCHITECTURE.md / SECURITY_ARCHITECTURE-CN.md
+  TYPE_OVERRIDES.md / TYPE_OVERRIDES-CN.md
 ```
 
 The `types/` directory contains LuaCATS `---@meta` annotations — pure
@@ -59,36 +64,38 @@ and signature help:
 { "workspace.library": ["/path/to/lunet/types"] }
 ```
 
-## Bundled documentation
+## Documentation in the archive
 
-The archive's top level includes every `docs/*.md` file (and its `-CN.md`
-Chinese counterpart) from the repository, copied in by the release workflow
-by default. This is a default-copy-with-exclusions rule, not an allow-list:
-any new doc added under `docs/` is automatically bundled unless it is added
-to the `DOC_EXCLUDES` list in `.github/workflows/build.yml`. The PAXE
-protocol and Lua integration reference (`PAXE.md` / `PAXE-CN.md`) lives
-under `docs/` precisely so it rides this rule.
+The archive carries its own documentation so that a binary consumer, who has no
+checkout, is not left reading the repository to learn the API.
 
-Currently excluded (internal-only, not useful to end users of the binary
-release):
+Packaging is **include by default, exclude by name**: every `docs/*.md` (and its
+`-CN.md` Chinese counterpart) is copied into the archive's `docs/` directory
+unless its basename appears in `docs/.dist-exclude`. Adding a new user-facing
+document therefore needs no change to the release workflow; only a deliberate
+exclusion does. The PAXE protocol and Lua integration reference
+(`PAXE.md` / `PAXE-CN.md`) lives under `docs/` precisely so it rides this rule.
 
-- `CONTRIBUTING-INTERNALS.md` / `CONTRIBUTING-INTERNALS-CN.md` — C code
-  conventions and debugging methodology for contributors working on the
-  runtime itself.
-- `BADGES.md` / `BADGES-CN.md` — README badge snippets for downstream
-  projects.
-- `EASY_MEMORY_REPORT.md` / `EASY_MEMORY_REPORT-CN.md` — EasyMem
-  integration and memory-profiling report for the runtime's own builds.
-- `WORKFLOW.md` / `WORKFLOW-CN.md` — developer workflow and xmake task
-  reference for contributors building from source.
-- `XMAKE_INTEGRATION.md` / `XMAKE_INTEGRATION-CN.md` — guide to building
-  and embedding Lunet from source; the binary archive needs no build
-  steps.
+Excluded today, none of which apply to someone consuming a prebuilt binary:
+
+- `XMAKE_INTEGRATION.md` / `-CN.md` and `EMBEDDING.md` / `-CN.md`: building and
+  embedding Lunet from source, misleading in an archive that contains no source.
+- `CONTRIBUTING-INTERNALS.md` / `-CN.md`: C code conventions, debugging
+  methodology and testing protocol for contributors working on the runtime.
+- `WORKFLOW.md` / `-CN.md`: developer workflow and xmake task reference.
+- `BADGES.md` / `-CN.md`: README badge snippets for downstream projects.
+- `EASY_MEMORY_REPORT.md` / `-CN.md`: an internal engineering report on a past
+  integration. Historical, not reference.
+- `RELEASE-LAYOUT.md` / `-CN.md`: excluded from `docs/` only because they are
+  shipped at the archive root instead.
 
 This does not apply to the SDK archives (`*-sdk.tar.gz` / `*-sdk.zip`), which
-ship only `docs/EMBEDDING.md` / `docs/EMBEDDING-CN.md`, renamed to
-`README.md` / `README-CN.md` — see [`docs/EMBEDDING.md`](EMBEDDING.md) for
-the SDK layout.
+ship only `docs/EMBEDDING.md` / `docs/EMBEDDING-CN.md`, renamed to `README.md` /
+`README-CN.md`. See [`docs/EMBEDDING.md`](EMBEDDING.md) for the SDK layout.
+
+Because these files ship, they are part of the release: see the release quality
+gate in `AGENTS.md`, which requires a documentation review before a version tag
+is pushed.
 
 ## How extensions are loaded
 

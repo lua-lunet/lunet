@@ -46,7 +46,12 @@ types/                              # LuaCATS 类型注解（---@meta，纯文�
     signal.lua                      # 操作系统信号处理
     socket.lua                      # TCP 套接字操作
     udp.lua                         # UDP 套接字操作
-*.md                                # 随包文档（见下文"随包文档"一节）
+docs/                               # 用户文档（见下文）
+  HTTPC.md / HTTPC-CN.md
+  PAXE.md / PAXE-CN.md
+  PHILOSOPHY.md / PHILOSOPHY-CN.md
+  SECURITY_ARCHITECTURE.md / SECURITY_ARCHITECTURE-CN.md
+  TYPE_OVERRIDES.md / TYPE_OVERRIDES-CN.md
 ```
 
 `types/` 目录包含 LuaCATS `---@meta` 注解——纯文档，无运行时代码。这些文件声明了
@@ -57,30 +62,37 @@ workspace library 即可获得代码补全和签名提示：
 { "workspace.library": ["/path/to/lunet/types"] }
 ```
 
-## 随包文档
+## 压缩包中的文档
 
-压缩包顶层默认包含仓库中每一个 `docs/*.md` 文件（以及对应的 `-CN.md` 中文
-版本），由发布工作流自动复制。这是一条"默认全部复制、按需排除"的规则，而
-不是白名单：在 `docs/` 下新增的任何文档都会被自动打包，除非将其加入
-`.github/workflows/build.yml` 中的 `DOC_EXCLUDES` 列表。PAXE 协议与 Lua 集成
-参考（`PAXE.md` / `PAXE-CN.md`）正是为此放在 `docs/` 下，随该规则一并打包。
+压缩包自带文档，这样使用二进制发布版、手中没有源码检出的用户，
+不必回到仓库去查阅 API。
 
-当前已排除的文档（仅供内部贡献者使用，对二进制发布包的最终用户没有价值）：
+打包策略是**默认包含、按名排除**：每个 `docs/*.md`（以及对应的 `-CN.md` 中文
+版本）都会被复制到压缩包的 `docs/` 目录，除非其文件名出现在
+`docs/.dist-exclude` 中。因此新增一篇面向用户的文档无需改动发布流程，
+只有刻意的排除才需要。PAXE 协议与 Lua 集成参考（`PAXE.md` / `PAXE-CN.md`）
+正是为此放在 `docs/` 下，随该规则一并打包。
 
-- `CONTRIBUTING-INTERNALS.md` / `CONTRIBUTING-INTERNALS-CN.md` —— 面向在
-  运行时本身工作的贡献者的 C 代码约定与调试方法论。
-- `BADGES.md` / `BADGES-CN.md` —— 供下游项目 README 使用的徽标代码片段。
-- `EASY_MEMORY_REPORT.md` / `EASY_MEMORY_REPORT-CN.md` —— 面向运行时自身
-  构建的 EasyMem 集成与内存分析报告。
-- `WORKFLOW.md` / `WORKFLOW-CN.md` —— 面向从源码构建的贡献者的开发工作流
-  与 xmake 任务参考。
-- `XMAKE_INTEGRATION.md` / `XMAKE_INTEGRATION-CN.md` —— 从源码构建并嵌入
-  Lunet 的指南；二进制压缩包无需任何构建步骤。
+当前排除的文档，对使用预编译二进制的用户都不适用：
+
+- `XMAKE_INTEGRATION.md` / `-CN.md` 与 `EMBEDDING.md` / `-CN.md`：从源码构建并
+  嵌入 Lunet 的指南；压缩包中并无源码，收录反而产生误导。
+- `CONTRIBUTING-INTERNALS.md` / `-CN.md`：面向在运行时本身工作的贡献者的 C 代码
+  约定、调试方法论与测试规程。
+- `WORKFLOW.md` / `-CN.md`：开发工作流与 xmake 任务参考。
+- `BADGES.md` / `-CN.md`：供下游项目 README 使用的徽标代码片段。
+- `EASY_MEMORY_REPORT.md` / `-CN.md`：一份关于既往集成的内部工程报告，属于历史
+  记录而非参考文档。
+- `RELEASE-LAYOUT.md` / `-CN.md`：之所以被排除在 `docs/` 之外，仅仅是因为它们
+  改为放在压缩包根目录。
 
 此规则不适用于 SDK 压缩包（`*-sdk.tar.gz` / `*-sdk.zip`），后者只随包携带
 `docs/EMBEDDING.md` / `docs/EMBEDDING-CN.md`，并重命名为
-`README.md` / `README-CN.md`——SDK 布局详见
+`README.md` / `README-CN.md`。SDK 布局详见
 [`docs/EMBEDDING-CN.md`](EMBEDDING-CN.md)。
+
+由于这些文件会随发布一同分发，它们属于发布内容的一部分：参见 `AGENTS.md` 中的
+发布质量门禁，其中要求在推送版本标签前先审阅文档。
 
 ## 扩展加载机制
 

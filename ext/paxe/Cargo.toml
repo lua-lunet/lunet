@@ -25,23 +25,21 @@ crate-type = ["cdylib"]
 # statically linked by ITS build.rs - which is why this crate no longer has
 # one; cargo propagates the core's link directives to this cdylib's link.
 #
-# Pinned by TAG, never by branch: a moving dependency would let the wire
-# format change under a lunet release without the lunet commit changing.
-# Bumping the tag is a deliberate, reviewable edit, and Cargo.lock records
-# the exact commit the tag resolved to.
+# paxe-core is VENDORED at paxe-core/ (byte-exact from the upstream release
+# tag; see paxe-core.version beside this file for the tag/commit/archive
+# digest). Vendored, not a git dependency: the upstream repository is
+# private, and a git fetch needs credentials that CI runners, the docker
+# gate and arbitrary developer machines do not all have. A path dependency
+# builds everywhere with zero network. Re-vendor on a bump with
+# `xmake vendor-paxe` (needs read access to the upstream repo), which
+# rewrites the tree and the manifest in one reviewable commit.
 #
 # default-features = false: paxe-core's "ffi" feature exports its own
 # lunet_paxe_* symbols, which would collide with this crate's at link time.
 # This crate IS the lunet-facing ABI (see src/lib.rs for why the ABI is
 # owned here rather than re-exported from the dependency).
-#
-# The URL is SSH because paxe-core is a PRIVATE repository: a developer's
-# ssh keys authenticate with no machine-local setup. CI rewrites it to a
-# GITHUB_TOKEN-authenticated https URL (see the build-paxe steps in
-# .github/workflows/build.yml) — the git tag + Cargo.lock commit pin make
-# the fetched source identical either way.
 [dependencies]
-paxe = { package = "paxe-core", git = "ssh://git@github.com/lua-lunet/paxe-core.git", tag = "v0.1.0", default-features = false }
+paxe = { package = "paxe-core", path = "paxe-core", default-features = false }
 
 [profile.release]
 opt-level = 3

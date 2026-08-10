@@ -2,7 +2,7 @@
 
 PAXE (Packet Encryption) is lunet's datagram encryption extension: authenticated, encrypted peer-to-peer UDP traffic for clusters, driven from Lua. It protects one UDP payload at a time — no handshake, no session, no ordering or replay guarantees.
 
-The protocol core is **[paxe-core](https://github.com/lua-lunet/paxe-core)**, a zero-dependency sans-io Rust crate consumed as a pinned git dependency (`tag = "v0.1.0"` in `ext/paxe/Cargo.toml`; the exact commit is recorded in `ext/paxe/Cargo.lock`). The lunet-side crate `ext/paxe` owns the C ABI and builds the `liblunet_paxe` cdylib, which `require("lunet.paxe")` loads through the LuaJIT FFI via the loader `ext/paxe/paxe.lua` — the same loading model as `lunet.jsonic`. The extension is pure opt-in: it is never linked into `lunet-run`.
+The protocol core is **[paxe-core](https://github.com/lua-lunet/paxe-core)**, a zero-dependency sans-io Rust crate **vendored byte-exact** from the upstream release tag into `ext/paxe/paxe-core/` (the tag, commit and archive digest are recorded in `ext/paxe/paxe-core.version`; re-vendor with `xmake vendor-paxe`). The lunet-side crate `ext/paxe` owns the C ABI and builds the `liblunet_paxe` cdylib, which `require("lunet.paxe")` loads through the LuaJIT FFI via the loader `ext/paxe/paxe.lua` — the same loading model as `lunet.jsonic`. The extension is pure opt-in: it is never linked into `lunet-run`.
 
 The **normative wire-format and security contract** is paxe-core's [PAXE.md](https://github.com/lua-lunet/paxe-core/blob/v0.1.0/PAXE.md). This document is the lunet integration reference: it describes what the Lua API does, and restates only the parts of the wire contract a lunet operator touches. Where this document and the upstream contract disagree, the upstream document wins — please report the drift.
 
@@ -25,7 +25,7 @@ xmake build-paxe     # cargo build --release in ext/paxe
 xmake test-paxe      # the crate's FFI boundary test suite (debug + release)
 ```
 
-`paxe-core` is a **private** repository. Cargo fetches it over SSH (`git = "ssh://git@github.com/...` in `ext/paxe/Cargo.toml`) using your ordinary GitHub SSH keys, via the git CLI (`ext/paxe/.cargo/config.toml` sets `net.git-fetch-with-cli`); CI rewrites the URL to a token-authenticated HTTPS one. A machine without GitHub SSH access cannot build the extension.
+The build is fully offline: the protocol core is vendored in-tree (see above), so no git fetch and no credentials are involved. The vendored tree is byte-exact `git archive` output of the pinned upstream tag — `xmake vendor-paxe` re-extracts it, and `xmake vendor-paxe --tag=vX.Y.Z` re-pins to a new upstream release (both need read access to the private upstream repo).
 
 ### Build artifacts
 
@@ -222,7 +222,7 @@ Keys reach the module as Lua strings, and a Lua string lives inside the Lua VM: 
 - `spec/paxe_spec.lua` — the behavioural suite for the Lua boundary (runs under `xmake test`; pending when the cdylib is not built)
 - `test/smoke_paxe.lua` — standalone smoke (`lunet-run test/smoke_paxe.lua`)
 - `test/run_paxe_udp_e2e.sh` — two-process protected-UDP end-to-end over loopback
-- The wire format itself (known-answer vectors, tamper matrices, both frame geometries) is pinned by paxe-core's own `cargo test` suite, which runs in that repository — lunet pins the released tag, so the format cannot change under a lunet release without a reviewed edit to `ext/paxe/Cargo.toml`
+- The wire format itself (known-answer vectors, tamper matrices, both frame geometries) is pinned by paxe-core's own `cargo test` suite, which runs in that repository — lunet vendors the released tag byte-exact, so the format cannot change under a lunet release without a reviewed `xmake vendor-paxe` re-pin commit
 
 ## References
 

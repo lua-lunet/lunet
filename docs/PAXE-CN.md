@@ -2,7 +2,7 @@
 
 PAXE（Packet Encryption）是 lunet 的数据报加密扩展：为集群提供经认证的、加密的点对点 UDP 流量，由 Lua 驱动。它一次保护一个 UDP 载荷——没有握手、没有会话、不保证顺序、不带重放窗口。
 
-协议核心是 **[paxe-core](https://github.com/lua-lunet/paxe-core)**，一个零依赖的 sans-io Rust crate，以锁定的 git 依赖方式引入（`ext/paxe/Cargo.toml` 中的 `tag = "v0.1.0"`；确切的提交记录在 `ext/paxe/Cargo.lock` 中）。lunet 侧的 crate `ext/paxe` 拥有 C ABI 并构建出 `liblunet_paxe` 动态库，`require("lunet.paxe")` 通过加载器 `ext/paxe/paxe.lua` 以 LuaJIT FFI 加载它——与 `lunet.jsonic` 的加载模型相同。该扩展是纯可选的：绝不链接进 `lunet-run`。
+协议核心是 **[paxe-core](https://github.com/lua-lunet/paxe-core)**，一个零依赖的 sans-io Rust crate，按上游发布 tag **逐字节内嵌**（vendored）到 `ext/paxe/paxe-core/`（tag、提交与归档摘要记录在 `ext/paxe/paxe-core.version`；用 `xmake vendor-paxe` 重新内嵌）。lunet 侧的 crate `ext/paxe` 拥有 C ABI 并构建出 `liblunet_paxe` 动态库，`require("lunet.paxe")` 通过加载器 `ext/paxe/paxe.lua` 以 LuaJIT FFI 加载它——与 `lunet.jsonic` 的加载模型相同。该扩展是纯可选的：绝不链接进 `lunet-run`。
 
 **规范性的线路格式与安全契约**是 paxe-core 的 [PAXE.md](https://github.com/lua-lunet/paxe-core/blob/v0.1.0/PAXE.md)。本文档是 lunet 集成参考：描述 Lua API 的行为，仅复述 lunet 运维人员会接触到的线路契约部分。若本文档与上游契约不一致，以上游文档为准——请报告此类漂移。
 
@@ -25,7 +25,7 @@ xmake build-paxe     # 在 ext/paxe 中执行 cargo build --release
 xmake test-paxe      # 该 crate 的 FFI 边界测试套件（debug + release）
 ```
 
-`paxe-core` 是**私有**仓库。Cargo 通过 SSH 拉取它（`ext/paxe/Cargo.toml` 中 `git = "ssh://git@github.com/...`），使用你平常的 GitHub SSH 密钥，经由 git CLI（`ext/paxe/.cargo/config.toml` 设置了 `net.git-fetch-with-cli`）；CI 会把 URL 改写为令牌认证的 HTTPS 形式。没有 GitHub SSH 访问权限的机器无法构建该扩展。
+构建完全离线：协议核心已内嵌在仓库中（见上文），不涉及任何 git 拉取或凭据。内嵌的树是上游锁定 tag 的 `git archive` 逐字节输出——`xmake vendor-paxe` 可重新解包，`xmake vendor-paxe --tag=vX.Y.Z` 可重新锁定到新的上游发布版（两者都需要对私有上游仓库的读权限）。
 
 ### 构建产物
 
@@ -222,7 +222,7 @@ Prefix(9) ‖ EnvelopeNonce(12) ‖ EncryptedDEK(32) ‖ EnvelopeTag(16) ‖ Bod
 - `spec/paxe_spec.lua`——Lua 边界的行为测试套件（随 `xmake test` 运行；动态库未构建时挂起为 pending）
 - `test/smoke_paxe.lua`——独立冒烟测试（`lunet-run test/smoke_paxe.lua`）
 - `test/run_paxe_udp_e2e.sh`——双进程受保护 UDP 回环端到端测试
-- 线路格式本身（已知答案向量、篡改矩阵、两种帧几何）由 paxe-core 自己的 `cargo test` 套件固定，在该仓库运行——lunet 锁定已发布的 tag，因此格式不可能在 lunet 发布版下悄悄改变，除非有人经评审修改 `ext/paxe/Cargo.toml`
+- 线路格式本身（已知答案向量、篡改矩阵、两种帧几何）由 paxe-core 自己的 `cargo test` 套件固定，在该仓库运行——lunet 按发布的 tag 逐字节内嵌，因此格式不可能在 lunet 发布版下悄悄改变，除非有一次经评审的 `xmake vendor-paxe` 重新锁定提交
 
 ## 参考文献
 

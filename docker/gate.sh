@@ -16,14 +16,23 @@ xmake ci
 step "optional extensions (lunet-httpc, release)"
 xmake build lunet-httpc
 
-# PAXE is NOT exercised in this container: ext/paxe fetches paxe-core (a
-# private repository) over ssh, and the image carries no credentials. The
-# crate build + FFI suite + Lua spec run in GitHub CI (build job) and on
-# developer machines with GitHub ssh access (xmake build-paxe, then
-# xmake test covers spec/paxe_spec.lua).
+# PAXE is fully exercised here: the crate is vendored (no network, no
+# credentials) and the image carries a source-built libsodium with the ARM
+# CE AES-256-GCM path (see Dockerfile), so the FFI suite, the Lua spec
+# (inside xmake test below), the smoke and the two-process e2e all run.
+step "paxe crate tests (xmake test-paxe)"
+xmake test-paxe
 
-step "xmake test (busted under luajit; httpc spec live)"
+step "paxe build (xmake build-paxe)"
+xmake build-paxe
+
+step "xmake test (busted under luajit; httpc + paxe specs live)"
 xmake test
+
+step "paxe functional smoke + protected-UDP e2e (release runner)"
+RUNNER="$(find build -type f -name 'lunet-run' -path '*release*' | head -1)"
+timeout 60 "$RUNNER" test/smoke_paxe.lua
+timeout 90 bash test/run_paxe_udp_e2e.sh
 
 step "lnt_shared smoke (release runner)"
 RUNNER="$(find build -type f -name 'lunet-run' -path '*release*' | head -1)"

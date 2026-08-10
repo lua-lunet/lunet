@@ -1270,3 +1270,76 @@ task("test-paxe")
         print("[paxe] tests passed (debug + release)")
     end)
 task_end()
+
+-- Re-vendor the pinned paxe-core release into ext/paxe/paxe-core (the tree
+-- is byte-exact `git archive <tag>` output; the manifest beside it records
+-- tag, commit and archive digest). Requires read access to the private
+-- upstream repository (developer ssh keys). Usage:
+--   xmake vendor-paxe                  -- re-extract the manifest's tag
+--   xmake vendor-paxe --tag=vX.Y.Z     -- re-pin to a new tag + manifest
+task("vendor-paxe")
+    set_menu {
+        usage = "xmake vendor-paxe [--tag=vX.Y.Z]",
+        description = "Vendor (or re-pin) the paxe-core release into ext/paxe/paxe-core",
+        options = {
+            {nil, "tag", "kv", nil, "Upstream tag to vendor (default: the manifest's)"},
+        }
+    }
+    on_run(function ()
+        import("core.base.option")
+        local repodir = path.join(os.scriptdir(), "ext", "paxe")
+        local manifest = path.join(repodir, "paxe-core.version")
+        local vendordir = path.join(repodir, "paxe-core")
+
+        local function manifest_tag()
+            local text = io.readfile(manifest)
+            assert(text, "manifest not found: " .. manifest)
+            return assert(text:match("tag:%s*(%S+)"), "no tag in " .. manifest)
+        end
+
+        local tag = option.get("tag") or manifest_tag()
+        assert(tag:match("^v%d+%.%d+%.%d+$"), "tag must look like vX.Y.Z, got: " .. tag)
+
+        -- Fetch exactly the tag into a throwaway clone under .tmp (rule:
+        -- scratch stays repo-local), then archive it out.
+        local stamp = os.date("%Y%m%d_%H%M%S")
+        local workdir = path.join(os.scriptdir(), ".tmp", "vendor-paxe-" .. stamp)
+        os.mkdir(workdir)
+        local clone = path.join(workdir, "clone")
+        local tarball = path.join(workdir, "paxe-core.tar.gz")
+        print("[vendor-paxe] fetching tag " .. tag .. " from upstream ...")
+        os.execv("git", {"clone", "--quiet", "--depth", "1", "--branch", tag,
+            "git@github.com:lua-lunet/paxe-core.git", clone})
+        os.execv("git", {"-C", clone, "archive", "--format=tar.gz",
+            "-o", tarball, tag})
+        local commit = os.iorunv("git", {"-C", clone, "rev-list", "-n", "1", tag}):trim()
+
+        -- Replace the vendored tree (soft-delete the old one under .tmp).
+        if os.isdir(vendordir) then
+            os.mv(vendordir, path.join(workdir, "paxe-core.previous"))
+        end
+        os.mkdir(vendordir)
+        os.execv("tar", {"-xzf", tarball, "-C", vendordir})
+
+        local sha = os.iorunv("shasum", {"-a", "256", tarball}):trim():match("^(%x+)")
+        io.writefile(manifest, string.format([[
+Vendored paxe-core manifest
+===========================
+
+source-repo:    git@github.com:lua-lunet/paxe-core.git
+tag:            %s
+commit:         %s
+archive-sha256: %s
+vendored-at:    %s
+
+The tree at paxe-core/ is byte-exact `git archive <tag>` output (the digest
+above is the .tar.gz of that archive). Verify or re-vendor with:
+
+    xmake vendor-paxe            -- re-extracts the pinned tag (needs upstream read access)
+    xmake vendor-paxe --tag=vX.Y.Z  -- re-pins to a new tag, updating this manifest
+]], tag, commit, sha, os.date("%Y-%m-%d")))
+        print(("[vendor-paxe] vendored %s (%s) -> %s"):format(tag, commit, vendordir))
+        print("[vendor-paxe] archive sha256: " .. sha)
+        print("[vendor-paxe] scratch left in " .. workdir .. " (inspect, then delete)")
+    end)
+task_end()

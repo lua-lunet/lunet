@@ -1,29 +1,16 @@
-//! lunet.paxe — the C ABI the LuaJIT FFI loader binds to.
+//! The C ABI for LuaJIT FFI.
 //!
-//! The protocol itself lives in `paxe-core`, vendored byte-exact from the
-//! pinned upstream release tag at `ext/paxe/paxe-core` (manifest:
-//! `ext/paxe/paxe-core.version`) and published independently. This crate
-//! is the lunet-facing boundary and nothing else: it owns the
-//! process-global session state (the keystore, the local node identity,
-//! the failure policy, the last-error buffer) because key material must
-//! never cross into Lua, and it exports the `lunet_paxe_*` symbols
-//! `ext/paxe/paxe.lua` declares.
+//! Sans-io, like the rest of the crate: this layer owns no sockets and no
+//! threads. It owns the process-global session state — the keystore, the
+//! local node identity, the failure policy and the last-error buffer —
+//! because key material must never cross into Lua, and because the Lua
+//! loader is a single VM thread by construction.
 //!
-//! The ABI is owned here, not re-exported from the dependency: a dependent
-//! cdylib cannot be relied on to re-export an rlib's `#[no_mangle]`
-//! symbols, and owning the boundary keeps the artifact name
-//! (`liblunet_paxe`) independent of the core's `libpaxe`. The
-//! implementation deliberately mirrors paxe-core's own `src/ffi.rs`
-//! semantics; the pinned vendored tag plus this crate's test suite keep
-//! the two in step.
+//! Rust consumers should use `codec`, `keystore`, `standard`, `dek` and
+//! `stats` directly and keep their own `KeyStore`; nothing here is needed
+//! from Rust. See `src/bin/six-seven-server` for a worked example.
 
-// sodium.rs is the only place unsafe is permitted, and it lives in
-// paxe-core; nothing in this crate needs it except the per-symbol
-// pointer reads below, each re-allowed at its declaration.
-#![deny(unsafe_code)]
-
-use paxe::{codec, dek, keystore, sodium, standard, stats};
-
+use crate::{codec, dek, keystore, sodium, standard, stats};
 
 use std::cell::RefCell;
 use std::os::raw::{c_char, c_int};
@@ -894,7 +881,7 @@ mod ffi_tests {
             lunet_paxe_init(),
             RC_OK,
             "init failed (libsodium {}): {}",
-            paxe::sodium::version_string(),
+            crate::sodium::version_string(),
             last_error_string()
         );
         assert_eq!(lunet_paxe_set_local_id(NODE_A), RC_OK);
@@ -981,7 +968,7 @@ mod ffi_tests {
             RC_OK,
             "init failed (libsodium {}): {} — see PAXE.md \"Requirements\" \
              (AES-256-GCM hardware crypto; libsodium >= 1.0.20 on ARM64 Linux)",
-            paxe::sodium::version_string(),
+            crate::sodium::version_string(),
             last_error_string()
         );
         assert_eq!(lunet_paxe_set_local_id(NODE_A), RC_OK);
@@ -1169,7 +1156,7 @@ mod ffi_tests {
             lunet_paxe_init(),
             RC_OK,
             "init failed (libsodium {}): {}",
-            paxe::sodium::version_string(),
+            crate::sodium::version_string(),
             last_error_string()
         );
         // Seal before set_local_id: operational, clear message.

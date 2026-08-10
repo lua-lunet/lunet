@@ -28,6 +28,10 @@ lunet/                              # extension modules
   liblunet_jsonic.dylib             #   (macOS — not shipped on Windows)
   jsonic.lua                        # jsonic Lua FFI loader + encoder
   dkjson-encode-v2.10.lua           # ordered-JSON encoder (used by jsonic)
+  liblunet_paxe.so                  # PAXE datagram encryption (Linux)
+  liblunet_paxe.dylib               #   (macOS)
+  lunet_paxe.dll                    #   (Windows)
+  paxe.lua                          # PAXE Lua FFI loader
 types/                              # LuaCATS type annotations (---@meta, documentation only)
   lunet.lua
   lunet/
@@ -61,7 +65,9 @@ The archive's top level includes every `docs/*.md` file (and its `-CN.md`
 Chinese counterpart) from the repository, copied in by the release workflow
 by default. This is a default-copy-with-exclusions rule, not an allow-list:
 any new doc added under `docs/` is automatically bundled unless it is added
-to the `DOC_EXCLUDES` list in `.github/workflows/build.yml`.
+to the `DOC_EXCLUDES` list in `.github/workflows/build.yml`. The PAXE
+protocol and Lua integration reference (`PAXE.md` / `PAXE-CN.md`) lives
+under `docs/` precisely so it rides this rule.
 
 Currently excluded (internal-only, not useful to end users of the binary
 release):

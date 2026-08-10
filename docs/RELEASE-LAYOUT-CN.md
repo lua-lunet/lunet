@@ -28,6 +28,10 @@ lunet/                              # 扩展模块
   liblunet_jsonic.dylib             #   （macOS，Windows 不提供）
   jsonic.lua                        # jsonic Lua FFI 加载器 + 编码器
   dkjson-encode-v2.10.lua           # 有序 JSON 编码器（jsonic 依赖）
+  liblunet_paxe.so                  # PAXE 数据报加密（Linux）
+  liblunet_paxe.dylib               #   （macOS）
+  lunet_paxe.dll                    #   （Windows）
+  paxe.lua                          # PAXE Lua FFI 加载器
 types/                              # LuaCATS 类型注解（---@meta，纯文档，无运行时代码）
   lunet.lua
   lunet/
@@ -58,7 +62,8 @@ workspace library 即可获得代码补全和签名提示：
 压缩包顶层默认包含仓库中每一个 `docs/*.md` 文件（以及对应的 `-CN.md` 中文
 版本），由发布工作流自动复制。这是一条"默认全部复制、按需排除"的规则，而
 不是白名单：在 `docs/` 下新增的任何文档都会被自动打包，除非将其加入
-`.github/workflows/build.yml` 中的 `DOC_EXCLUDES` 列表。
+`.github/workflows/build.yml` 中的 `DOC_EXCLUDES` 列表。PAXE 协议与 Lua 集成
+参考（`PAXE.md` / `PAXE-CN.md`）正是为此放在 `docs/` 下，随该规则一并打包。
 
 当前已排除的文档（仅供内部贡献者使用，对二进制发布包的最终用户没有价值）：
 

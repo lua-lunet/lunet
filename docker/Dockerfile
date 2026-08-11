@@ -17,12 +17,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 #  - easy-memory job: + libpq-dev default-libmysqlclient-dev
 #  - embed job:       + zlib1g-dev
 #  - local gates:     + busted (xmake test), libasan8 (ASAN), rustc/cargo (ext)
+# (No distro libsodium: the vendored PAXE crate links a static libsodium, and
+# the trixie arm64 distro package lacks the ARM CE AES-256-GCM runtime path.
+# A source-built one is installed after COPY, below.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential pkg-config \
       luajit libluajit-5.1-dev \
       libuv1-dev libsqlite3-dev zlib1g-dev \
       libpq-dev default-libmysqlclient-dev \
-      libsodium-dev libcurl4-openssl-dev \
+      libcurl4-openssl-dev \
       libasan8 \
       rustc cargo \
       luarocks lua5.1 \
@@ -61,6 +64,11 @@ RUN luarocks --lua-version=5.1 install busted \
 
 WORKDIR /src
 COPY . /src
+
+# Static libsodium 1.0.22 with the ARM CE AES-256-GCM path for the vendored
+# PAXE crate (paxe-core's build.rs resolves PAXE_SODIUM_LIB_DIR first).
+RUN bash contributing/deps/sodium-src.sh
+ENV PAXE_SODIUM_LIB_DIR=/tmp/libsodium/lib
 
 RUN chmod +x docker/gate.sh
 CMD ["bash", "docker/gate.sh"]

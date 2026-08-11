@@ -211,12 +211,10 @@ if is_plat("windows") then
     add_requires("vcpkg::sqlite3", {alias = "sqlite3", optional = true})
     add_requires("vcpkg::libmysql", {alias = "mysql", optional = true})
     add_requires("vcpkg::libpq", {alias = "pq", optional = true})
-    add_requires("vcpkg::libsodium", {alias = "sodium", optional = true})
 else
     add_requires("pkgconfig::sqlite3", {alias = "sqlite3", optional = true})
     add_requires("pkgconfig::mysqlclient", {alias = "mysql", optional = true})
     add_requires("pkgconfig::libpq", {alias = "pq", optional = true})
-    add_requires("pkgconfig::libsodium", {alias = "sodium", optional = true})
 end
 
 -- HTTP client dependencies (optional)
@@ -569,58 +567,9 @@ target("lunet-postgres")
     end
 target_end()
 
--- PAXE Packet Encryption: require("lunet.paxe")
--- NOTE: PAXE requires libsodium and is only for secure peer-to-peer protocols
--- where the application can handle encryption/decryption details.
--- Depends on: libsodium (libsodium.so/libsodium.dylib/libsodium.dll)
--- Optional via: xmake build lunet-paxe
-target("lunet-paxe")
-    set_default(false)  -- Only build when explicitly requested
-    set_kind("shared")
-    add_rules("lunet.c_safety_lint")
-    set_prefixname("")
-    set_basename("paxe")  -- Output: lunet/paxe.so
-    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
-    if is_plat("windows") then
-        set_extension(".dll")
-    else
-        set_extension(".so")
-    end
-
-    add_files(core_sources)
-    add_files("src/paxe.c")
-    add_includedirs("include", {public = true})
-
-    -- CRITICAL: Fail fast if libsodium is not available
-    add_packages("luajit", "libuv", "zlib", {public = true})
-    add_packages("sodium")  -- Will fail at config time if not found (no optional = true)
-    lunet_apply_asan_flags("shared")
-    lunet_apply_easy_memory()
-
-    add_defines("LUNET_PAXE")
-
-    if is_plat("macosx") then
-        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
-    end
-    if is_plat("linux") then
-        add_defines("_GNU_SOURCE")
-        add_cflags("-pthread")
-        add_ldflags("-pthread")
-        add_syslinks("pthread", "dl", "m")
-    end
-    if is_plat("windows") then
-        add_cflags("/TC")
-        add_defines("LUNET_BUILDING_DLL")
-        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
-    end
-    if has_config("lunet_trace") then
-        add_defines("LUNET_TRACE")
-        add_defines("LUNET_TEST_FAULTS")
-    end
-    if has_config("lunet_verbose_trace") then
-        add_defines("LUNET_TRACE_VERBOSE")
-    end
-target_end()
+-- PAXE Packet Encryption: require("lunet.paxe") — a Rust cdylib in
+-- ext/paxe (paxe-core over the LuaJIT FFI), NOT an xmake C target.
+-- Build it with: xmake build-paxe   (see the task at the end of this file)
 
 -- HTTPS client module: require("lunet.httpc")
 -- Optional via: xmake build lunet-httpc
@@ -1279,5 +1228,118 @@ task("jsonic-smoke")
         os.exec("xmake build-release")
         local runner = lunet_runner_path("release")
         os.execv(runner, {"test/smoke_jsonic.lua"})
+    end)
+task_end()
+
+-- =============================================================================
+-- paxe extension (Rust, optional) - PAXE datagram encryption via LuaJIT FFI
+-- =============================================================================
+-- Build:   xmake build-paxe
+-- Zero-dependency cdylib living in ext/paxe/, loaded at runtime by
+-- lunet.paxe via LuaJIT FFI. Not linked into lunet-run. The toolchain is
+-- pinned by ext/paxe/rust-toolchain.toml, so cargo must run with the crate
+-- dir as cwd (rustup resolves the pin from cwd, not --manifest-path).
+
+task("build-paxe")
+    set_menu {
+        usage = "xmake build-paxe",
+        description = "Build the paxe Rust extension (ext/paxe)"
+    }
+    on_run(function ()
+        local crate_dir = path.join(os.scriptdir(), "ext", "paxe")
+        print("[paxe] cargo build --release ...")
+        os.execv("cargo", {"build", "--release"}, {curdir = crate_dir})
+        print("[paxe] built: " .. path.join(crate_dir, "target", "release"))
+    end)
+task_end()
+
+task("test-paxe")
+    set_menu {
+        usage = "xmake test-paxe",
+        description = "Run the paxe Rust test suite (ext/paxe), debug and release profiles"
+    }
+    on_run(function ()
+        local crate_dir = path.join(os.scriptdir(), "ext", "paxe")
+        -- Both profiles run: panic = "abort" changes the release profile, so
+        -- debug-passing tests are not proof the release profile passes.
+        -- os.execv raises on non-zero exit, failing the task on any test failure.
+        print("[paxe] cargo test ...")
+        os.execv("cargo", {"test"}, {curdir = crate_dir})
+        print("[paxe] cargo test --release ...")
+        os.execv("cargo", {"test", "--release"}, {curdir = crate_dir})
+        print("[paxe] tests passed (debug + release)")
+    end)
+task_end()
+
+-- Re-vendor the pinned paxe-core release into ext/paxe/paxe-core (the tree
+-- is byte-exact `git archive <tag>` output; the manifest beside it records
+-- tag, commit and archive digest). Requires read access to the private
+-- upstream repository (developer ssh keys). Usage:
+--   xmake vendor-paxe                  -- re-extract the manifest's tag
+--   xmake vendor-paxe --tag=vX.Y.Z     -- re-pin to a new tag + manifest
+task("vendor-paxe")
+    set_menu {
+        usage = "xmake vendor-paxe [--tag=vX.Y.Z]",
+        description = "Vendor (or re-pin) the paxe-core release into ext/paxe/paxe-core",
+        options = {
+            {nil, "tag", "kv", nil, "Upstream tag to vendor (default: the manifest's)"},
+        }
+    }
+    on_run(function ()
+        import("core.base.option")
+        local repodir = path.join(os.scriptdir(), "ext", "paxe")
+        local manifest = path.join(repodir, "paxe-core.version")
+        local vendordir = path.join(repodir, "paxe-core")
+
+        local function manifest_tag()
+            local text = io.readfile(manifest)
+            assert(text, "manifest not found: " .. manifest)
+            return assert(text:match("tag:%s*(%S+)"), "no tag in " .. manifest)
+        end
+
+        local tag = option.get("tag") or manifest_tag()
+        assert(tag:match("^v%d+%.%d+%.%d+$"), "tag must look like vX.Y.Z, got: " .. tag)
+
+        -- Fetch exactly the tag into a throwaway clone under .tmp (rule:
+        -- scratch stays repo-local), then archive it out.
+        local stamp = os.date("%Y%m%d_%H%M%S")
+        local workdir = path.join(os.scriptdir(), ".tmp", "vendor-paxe-" .. stamp)
+        os.mkdir(workdir)
+        local clone = path.join(workdir, "clone")
+        local tarball = path.join(workdir, "paxe-core.tar.gz")
+        print("[vendor-paxe] fetching tag " .. tag .. " from upstream ...")
+        os.execv("git", {"clone", "--quiet", "--depth", "1", "--branch", tag,
+            "git@github.com:lua-lunet/paxe-core.git", clone})
+        os.execv("git", {"-C", clone, "archive", "--format=tar.gz",
+            "-o", tarball, tag})
+        local commit = os.iorunv("git", {"-C", clone, "rev-list", "-n", "1", tag}):trim()
+
+        -- Replace the vendored tree (soft-delete the old one under .tmp).
+        if os.isdir(vendordir) then
+            os.mv(vendordir, path.join(workdir, "paxe-core.previous"))
+        end
+        os.mkdir(vendordir)
+        os.execv("tar", {"-xzf", tarball, "-C", vendordir})
+
+        local sha = os.iorunv("shasum", {"-a", "256", tarball}):trim():match("^(%x+)")
+        io.writefile(manifest, string.format([[
+Vendored paxe-core manifest
+===========================
+
+source-repo:    git@github.com:lua-lunet/paxe-core.git
+tag:            %s
+commit:         %s
+archive-sha256: %s
+vendored-at:    %s
+
+The tree at paxe-core/ is byte-exact `git archive <tag>` output (the digest
+above is the .tar.gz of that archive). Verify or re-vendor with:
+
+    xmake vendor-paxe            -- re-extracts the pinned tag (needs upstream read access)
+    xmake vendor-paxe --tag=vX.Y.Z  -- re-pins to a new tag, updating this manifest
+]], tag, commit, sha, os.date("%Y-%m-%d")))
+        print(("[vendor-paxe] vendored %s (%s) -> %s"):format(tag, commit, vendordir))
+        print("[vendor-paxe] archive sha256: " .. sha)
+        print("[vendor-paxe] scratch left in " .. workdir .. " (inspect, then delete)")
     end)
 task_end()

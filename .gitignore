@@ -8,9 +8,10 @@ build_*
 .idea/
 .xmake/
 tmp/
-# Rust build artifacts for ext/lnt_shared, ext/jsonic
+# Rust build artifacts for ext/lnt_shared, ext/jsonic, ext/paxe
 ext/lnt_shared/target/
 ext/jsonic/target/
+ext/paxe/target/
 .DS_Store
 # Alternate xmake build dirs (build/ and build_* covered above)
 build-*/

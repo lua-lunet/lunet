@@ -1515,6 +1515,9 @@ static void lunet_connect_cb(uv_connect_t *req, int status) {
   lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(co, ctx->co_ref);
   ctx->co_ref = LUA_NOREF;
+  /* rawgeti pushed the waiter thread itself; drop it so it does not sit
+   * below the resume arguments, matching the other async callbacks. */
+  lua_pop(co, 1);
 
   if (status == 0) {
     if (socket_handle_new_protected(co, ctx->ctx) != 0) {

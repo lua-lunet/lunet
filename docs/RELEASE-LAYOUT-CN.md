@@ -295,11 +295,12 @@ Lua 封装层，而不是直接调用 FFI——二进制格式属于编解码器
 
 ```sh
 # 核心（始终需要）
-apt-get install -y libluajit-5.1-2 libuv1 zlib1g libcurl4
+apt-get install -y libluajit-5.1-2 libuv1 zlib1g
 
 # 按你实际 require() 的驱动安装——不需要的可跳过
+apt-get install -y libcurl4          # lunet.httpc
 apt-get install -y libpq5            # lunet.postgres
-apt-get install -y libmariadb3       # lunet.mysql
+apt-get install -y libmariadb3       # lunet.mysql（在 Debian trixie 上提供 libmysqlclient.so）
 apt-get install -y libsqlite3-0      # lunet.sqlite3
 ```
 
@@ -321,5 +322,7 @@ brew install mysql-client   # lunet.mysql
 
 macOS 上不存在非版本化符号链接问题；Homebrew 已提供正确的 `*.dylib` 名称。
 
-**Windows**：无需额外的运行时软件包；压缩包是自包含的
-（数据库驱动链接各自的客户端库，需在 `PATH` 中可用）。
+**Windows**：核心运行时无需额外的系统软件包。
+数据库驱动（`postgres.dll`、`mysql.dll`、`sqlite3.dll`）
+链接各自的客户端库，如果你 `require()` 它们，则需要单独安装
+并确保在 `PATH` 中可用。

@@ -123,8 +123,9 @@ We can try to move all the logic into OpenResty in front of Lunet, but
 that would mean Lunet is not "batteries included". I would still advise
 putting nginx in front of any process exposed to the internet, simply
 because process separation is the best form of memory safety against all
-types of bugs. Lunet deserves its own complete feature set, so the
-recent `ngx.store` workalike has been written in Rust.
+types of bugs. Lunet deserves its own complete feature set — it deserves
+its own `ngx.shared` model (shipped as `lnt.shared` in `lnt_shared`),
+written in Rust.
 
 Another example is cjson. That is a nice little lib, yet there are safe
 versions that are nominally slower. If cjson was a system library getting

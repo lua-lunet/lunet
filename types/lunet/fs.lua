@@ -71,8 +71,12 @@ function fs.read(fd, size) end
 ---if err then
 ---    print('Error opening file: ' .. err)
 ---end
----local n, err = fs.write(file, 'Hello, world!')
----print('Wrote ' .. n .. ' bytes')
+---local n, werr = fs.write(file, 'Hello, world!')
+---if werr then
+---    print('Write error: ' .. werr)
+---else
+---    print('Wrote ' .. n .. ' bytes')
+---end
 ---```
 function fs.write(fd, data) end
 

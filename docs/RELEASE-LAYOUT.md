@@ -314,11 +314,12 @@ binary-only consumer needs the runtime packages installed — not the
 
 ```sh
 # Core (always needed)
-apt-get install -y libluajit-5.1-2 libuv1 zlib1g libcurl4
+apt-get install -y libluajit-5.1-2 libuv1 zlib1g
 
 # Per driver you actually use — skip the ones you don't require()
+apt-get install -y libcurl4          # lunet.httpc
 apt-get install -y libpq5            # lunet.postgres
-apt-get install -y libmariadb3       # lunet.mysql
+apt-get install -y libmariadb3       # lunet.mysql (provides libmysqlclient.so on Debian trixie)
 apt-get install -y libsqlite3-0      # lunet.sqlite3
 ```
 
@@ -342,6 +343,7 @@ brew install mysql-client   # lunet.mysql
 No unversioned-symlink gotcha on macOS; Homebrew already provides the
 correct `*.dylib` names.
 
-**Windows**: No additional runtime packages needed; the archive is
-self-contained (database drivers link against their respective client
-libraries, which must be on `PATH`).
+**Windows**: No additional system packages are needed for the core
+runtime. Database drivers (`postgres.dll`, `mysql.dll`, `sqlite3.dll`)
+link against their respective client libraries, which must be installed
+separately and present on `PATH` if you `require()` them.

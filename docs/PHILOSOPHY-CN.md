@@ -102,8 +102,9 @@ Lunet 通信。这样就把承载业务逻辑和凭证的代码移出了暴露�
 所有逻辑移到 Lunet 前面的 OpenResty 中，但那样 Lunet 就不再是"开箱
 即用（batteries included）"的了。我仍然建议在任何暴露于互联网的进程
 前面放置 nginx，原因很简单：进程隔离是针对所有类型漏洞的最佳"内存
-安全"形式。Lunet 理应拥有自己完整的功能集，因此最近仿照 `ngx.store`
-的组件是用 Rust 编写的。
+安全"形式。Lunet 理应拥有自己完整的功能集——它理应拥有自己的
+`ngx.shared` 模型（以 `lnt_shared` 中的 `lnt.shared` 形式交付），
+用 Rust 编写。
 
 另一个例子是 cjson。那是个不错的小库，但也有名义上更慢的安全版本。如果
 cjson 是一个在 Debian LTS 上获得安全补丁的系统库，那我会用它。然而

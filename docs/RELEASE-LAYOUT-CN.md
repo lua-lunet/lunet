@@ -285,3 +285,41 @@ Lua 封装层，而不是直接调用 FFI——二进制格式属于编解码器
   `macosx-version-min=14.0`。
 - **Windows (amd64)**：Rust 扩展（`lnt_shared`、`jsonic`）因底层 crate 仅限
   POSIX 平台而未包含。数据库驱动和事务封装正常提供。
+
+### 运行时依赖
+
+发布压缩包**并非**对其依赖完全静态链接（PAXE 除外——libsodium 是静态链接的）。
+纯二进制消费者需要安装运行时软件包——不是 `-dev` 变体。
+
+**Debian/Ubuntu (Linux)**：
+
+```sh
+# 核心（始终需要）
+apt-get install -y libluajit-5.1-2 libuv1 zlib1g libcurl4
+
+# 按你实际 require() 的驱动安装——不需要的可跳过
+apt-get install -y libpq5            # lunet.postgres
+apt-get install -y libmariadb3       # lunet.mysql
+apt-get install -y libsqlite3-0      # lunet.sqlite3
+```
+
+PAXE 扩展（`liblunet_paxe`）将 libsodium **静态链接**；
+不需要 `libsodium23` 软件包或任何非版本化 `.so` 符号链接。
+此前使用 `ln -sf libsodium.so.23 libsodium.so` 变通方案的下游应用应将其删除。
+
+**macOS**：
+
+```sh
+# 核心（始终需要）
+brew install luajit libuv
+
+# 按你实际使用的驱动安装
+brew install libpq          # lunet.postgres
+brew install mysql-client   # lunet.mysql
+# sqlite3 使用系统库——无需额外安装
+```
+
+macOS 上不存在非版本化符号链接问题；Homebrew 已提供正确的 `*.dylib` 名称。
+
+**Windows**：无需额外的运行时软件包；压缩包是自包含的
+（数据库驱动链接各自的客户端库，需在 `PATH` 中可用）。

@@ -269,9 +269,9 @@ jobs:
     # spec/paxe_spec.lua goes pending when the PAXE cdylib is absent, and
     # the no-pending gate turns that into a hard failure — so building the
     # crate after this step fails the job on a test that never ran.
-    - name: Lua test suite (make test)
+    - name: Lua test suite
       if: matrix.os == 'ubuntu-latest'
-      run: make test
+      run: xmake test
 
     - name: C SDK lifecycle test (Unix)
       if: runner.os != 'Windows'
@@ -320,7 +320,7 @@ jobs:
 
     # PAXE example smoke: the old C-module smoke steps were retired with the
     # C implementation. The Rust crate's own suite ran above; the Lua-side
-    # behavioural suite (spec/paxe_spec.lua) runs under `make test` on Linux,
+    # behavioural suite (spec/paxe_spec.lua) runs under `xmake test` on Linux,
     # and examples/06/07 stay runnable locally (xmake build-paxe first).
 
     - name: Package release archive (Linux)

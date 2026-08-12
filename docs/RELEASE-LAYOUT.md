@@ -302,3 +302,46 @@ and `conn:rollback()` methods to the native driver connections.
 - **Windows (amd64)**: Rust extensions (`lnt_shared`, `jsonic`) are not
   included because the underlying crates are POSIX-only. Database drivers
   and transaction wrappers are shipped.
+
+### Runtime dependencies
+
+The release archives are **not** statically linked against their
+dependencies (except libsodium, which PAXE links statically). A
+binary-only consumer needs the runtime packages installed — not the
+`-dev` variants.
+
+**Debian/Ubuntu (Linux)**:
+
+```sh
+# Core (always needed)
+apt-get install -y libluajit-5.1-2 libuv1 zlib1g libcurl4
+
+# Per driver you actually use — skip the ones you don't require()
+apt-get install -y libpq5            # lunet.postgres
+apt-get install -y libmariadb3       # lunet.mysql
+apt-get install -y libsqlite3-0      # lunet.sqlite3
+```
+
+The PAXE extension (`liblunet_paxe`) links libsodium **statically**;
+no `libsodium23` package or unversioned `.so` symlink is needed.
+Downstream apps that previously carried the
+`ln -sf libsodium.so.23 libsodium.so` workaround should remove it.
+
+**macOS**:
+
+```sh
+# Core (always needed)
+brew install luajit libuv
+
+# Per driver you actually use
+brew install libpq          # lunet.postgres
+brew install mysql-client   # lunet.mysql
+# sqlite3 uses the system lib — no extra package needed
+```
+
+No unversioned-symlink gotcha on macOS; Homebrew already provides the
+correct `*.dylib` names.
+
+**Windows**: No additional runtime packages needed; the archive is
+self-contained (database drivers link against their respective client
+libraries, which must be on `PATH`).

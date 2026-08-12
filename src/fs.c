@@ -436,7 +436,7 @@ int lunet_fs_read(lua_State *L) {
   FS_TRACE_READ(fd, len);
 
   uv_buf_t buf = uv_buf_init(ctx->buf, len);
-  int rc = uv_fs_read(uv_default_loop(), &ctx->req, fd, &buf, 1, 0, lunet_fs_read_cb);
+  int rc = uv_fs_read(uv_default_loop(), &ctx->req, fd, &buf, 1, -1, lunet_fs_read_cb);
   if (rc < 0) {
     lunet_coref_release(L, ctx->co_ref);
     lunet_free_nonnull(ctx->buf);
@@ -527,7 +527,7 @@ int lunet_fs_write(lua_State *L) {
   FS_TRACE_WRITE(fd, len);
 
   uv_buf_t buf = uv_buf_init(ctx->buf, len);
-  int rc = uv_fs_write(uv_default_loop(), &ctx->req, fd, &buf, 1, 0, lunet_fs_write_cb);
+  int rc = uv_fs_write(uv_default_loop(), &ctx->req, fd, &buf, 1, -1, lunet_fs_write_cb);
   if (rc < 0) {
     lunet_coref_release(L, ctx->co_ref);
     lunet_free_nonnull(ctx->buf);

@@ -499,8 +499,8 @@ int lunet_fs_write(lua_State *L) {
     return 2;
   }
   uv_file fd = (uv_file)lua_tointeger(L, 1);
-  const char *data = luaL_checkstring(L, 2);
-  size_t len = strlen(data);
+  size_t len;
+  const char *data = luaL_checklstring(L, 2, &len);
 
   fs_write_ctx_t *ctx = lunet_alloc(sizeof(fs_write_ctx_t));
   if (!ctx) {

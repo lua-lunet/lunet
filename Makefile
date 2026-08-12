@@ -2,7 +2,7 @@
 # after `make init`, use `xmake build-release`, `xmake test`, `xmake stress`
 # (see docs/XMAKE_INTEGRATION.md).
 
-.PHONY: init lint check check-types test help
+.PHONY: init help
 
 init:
 	@OS=$$(uname -s); \
@@ -17,23 +17,9 @@ init:
 		*) echo "Windows? run: pwsh contributing\\windows\\setup.ps1" ;; \
 	esac
 
-lint:
-	xmake lint
-
-check:
-	xmake check
-
-check-types:
-	xmake check-types
-
-test:
-	xmake test
-
 help:
 	@echo "Available targets:"
-	@echo "  init         - Install system deps + luarocks QA tools + verify the build (default)"
-	@echo "  lint         - Run C safety lint checks"
-	@echo "  check        - Run luacheck static analysis"
-	@echo "  check-types  - Validate LuaCATS annotations with lua-language-server"
-	@echo "  test         - Run check-types then the busted suite (xmake test)"
-	@echo "  help         - Show this message"
+	@echo "  init  - Install system deps + luarocks QA tools + verify the build"
+	@echo "  help  - Show this message"
+	@echo ""
+	@echo "Build/test/lint: use xmake directly — xmake lint, xmake check, xmake test, etc."

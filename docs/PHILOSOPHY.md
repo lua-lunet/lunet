@@ -85,3 +85,62 @@ the design centre: loopback by default (Talos), server-sent events as a
 first-class transport, an outbound HTTPS client for calling real APIs, and
 an embed mode for turning the result into one self-contained `.run`
 executable. See `examples/mcp_openalex_sse/` for the canonical example.
+
+## A Few Thoughts on Rust
+
+There are some things people expect to be magic, but there is only code.
+One example is the expectation that if you use a language with memory
+safety, you will be secure. Logical bugs can leave you wide open, no
+matter how strong your compiler is. In the case of Lunet, the
+recommendation is to use the qmail security model: use battle-hardened
+nginx on the network interface, and then have it talk to Lunet over a
+Unix domain socket. This moves the code that has your business logic and
+your credentials out of the process that is exposed to the internet. This
+is the best security to use, no matter which languages and frameworks you
+use. It also means that the code exposed to the network is the code that
+everyone else using it is testing for you.
+
+I thought long and hard about adding in Rust simply for the "brand
+halo", yet we had extensive memory leak testing, load testing, and the
+use of battle-tested C libraries, while allowing LuaJIT to use dynamic
+code generation. When the C code was minimal, well-tested glue code for
+stable mainstream C projects, adding a splattering of Rust felt a little
+"cargo cult" (pun intended). At the same time, there is no reason not to
+be belt-and-braces. Security and stability are defence-in-depth.
+
+Recently, to build real-world apps, features like session cache and
+atomic counters across requests have proven very useful. To implement
+something like the NextCloud Enterprise 31 Login Flow V2, the server
+needs to respond to client polls until the user has clicked through some
+screens. While this can use the main database, it is, by definition, a
+public protocol, since the client uses it to authenticate. This means it
+is a surface for a DDoS attack. We should offload the poll to a memory
+cache to avoid exposing the database to an unbounded number of
+unauthenticated requests. If we do not want that logic inside of Lunet,
+then we need to use Memcached or Redis. We suddenly add a lot of
+application infrastructure. That then becomes its own maintenance burden.
+We can try to move all the logic into OpenResty in front of Lunet, but
+that would mean Lunet is not "batteries included". I would still advise
+putting nginx in front of any process exposed to the internet, simply
+because process separation is the best form of memory safety against all
+types of bugs. Lunet deserves its own complete feature set — it deserves
+its own `ngx.shared` model (shipped as `lnt.shared` in `lnt_shared`),
+written in Rust.
+
+Another example is cjson. That is a nice little lib, yet there are safe
+versions that are nominally slower. If cjson was a system library getting
+security patches on Debian LTS, then I would have used it. Yet the
+ergonomics of cjson is that it is just a single C file you can use. This
+created a dilemma for me. Adding in "just a Lua file" such as dkjson
+feels safer, since Lua has GC and so no pointer arithmetic. That seems
+low-risk for parsing strings that come into the system as JSON. Adding in
+a C file from a 3rd party that will be used to parse strings from the
+outside world seems like a future DoS attack or, worse, the dreaded
+"undefined behaviour". It was therefore a no-brainer to look for an
+MIT-licensed single-file Rust JSON parser of the same weight as cjson.
+This is why there is jsonic ext to parse JSON while retaining dkjson to
+encode Lua tables, as that is efficient.
+
+Lunet is proudly polyglot. We may see some typed Lua Teal coming soon
+now that we have a more standard lib to use. The future is bright as it
+is built on the shoulders of giants.

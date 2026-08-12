@@ -314,7 +314,7 @@ target("lunet-bin")
         add_includedirs(".tmp/generated")
 
         before_build(function ()
-            local root = os.projectdir()
+            local root = os.scriptdir()
             local generator = path.join(root, "bin", "generate_embed_scripts.lua")
             local source_dir = get_config("lunet_embed_scripts_dir") or "lua"
             local generated_dir = path.join(root, ".tmp", "generated")
@@ -971,6 +971,9 @@ task("stress")
         -- lunet_listen_cb into self-close must be supplied here.
         os.execv(runner, {"test/socket_listener_self_close.lua"},
             {envs = {LUNET_TEST_SOCKET_LISTEN_FAULT = "alloc_fail,drop_fail"}})
+        -- fs module regressions: sequential read/write offset advancement,
+        -- append mode, binary NUL payloads, fs.write return type, multi-chunk.
+        os.execv(runner, {"test/smoke_fs.lua"})
     end)
 task_end()
 

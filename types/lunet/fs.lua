@@ -62,6 +62,7 @@ function fs.read(fd, size) end
 ---Write to a file
 ---@param fd integer The file descriptor to write to
 ---@param data string The data to write to the file
+---@return integer|nil bytes_written Number of bytes written on success
 ---@return string|nil error Error message if failed
 ---@usage
 ---```lua
@@ -70,7 +71,12 @@ function fs.read(fd, size) end
 ---if err then
 ---    print('Error opening file: ' .. err)
 ---end
----fs.write(file, 'Hello, world!')
+---local n, werr = fs.write(file, 'Hello, world!')
+---if werr then
+---    print('Write error: ' .. werr)
+---else
+---    print('Wrote ' .. n .. ' bytes')
+---end
 ---```
 function fs.write(fd, data) end
 

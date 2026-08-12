@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <uv.h>
+
 #ifdef LUNET_EASY_MEMORY
 #ifdef LUNET_EASY_MEMORY_DIAGNOSTICS
 #ifndef DEBUG
@@ -26,6 +28,39 @@
 #endif
 
 lunet_mem_state_t lunet_mem_state;
+
+/*
+ * The instrumented allocator is shared by the loop thread and the libuv
+ * thread pool: the database drivers build their result sets (column names,
+ * row cells) from inside their uv_work_t work callbacks, while the loop
+ * thread frees the previous request's context from the matching after
+ * callback. Neither the EasyMem arena nor the statistics below are
+ * thread-safe, so unsynchronised use let a worker's allocation overlap a
+ * block the loop thread was poisoning and freeing, which surfaced as
+ * canary failures on already-poisoned headers, garbled result rows, and
+ * red-black tree crashes inside the arena.
+ *
+ * Release builds map straight onto libc and never reach this code, so the
+ * lock only costs the trace/EasyMem QA profiles.
+ */
+static uv_once_t g_lunet_mem_lock_once = UV_ONCE_INIT;
+static uv_mutex_t g_lunet_mem_lock;
+
+static void lunet_mem_lock_init(void) {
+    if (uv_mutex_init(&g_lunet_mem_lock) != 0) {
+        fprintf(stderr, "[MEM_TRACE] FATAL: failed to initialise allocator mutex\n");
+        abort();
+    }
+}
+
+static void lunet_mem_lock(void) {
+    uv_once(&g_lunet_mem_lock_once, lunet_mem_lock_init);
+    uv_mutex_lock(&g_lunet_mem_lock);
+}
+
+static void lunet_mem_unlock(void) {
+    uv_mutex_unlock(&g_lunet_mem_lock);
+}
 
 #ifdef LUNET_EASY_MEMORY
 static EM *g_lunet_em = NULL;
@@ -57,9 +92,11 @@ static void lunet_backend_free(void *ptr) {
 #endif
 
 void lunet_mem_init(void) {
+    lunet_mem_lock();
     memset(&lunet_mem_state, 0, sizeof(lunet_mem_state));
 #ifdef LUNET_EASY_MEMORY
     if (g_lunet_em_initialized) {
+        lunet_mem_unlock();
         return;
     }
     g_lunet_em_initialized = 1;
@@ -82,9 +119,11 @@ void lunet_mem_init(void) {
         }
     }
 #endif
+    lunet_mem_unlock();
 }
 
 void lunet_mem_shutdown(void) {
+    lunet_mem_lock();
 #ifdef LUNET_EASY_MEMORY
     if (g_lunet_em_enabled && g_lunet_em) {
         em_destroy(g_lunet_em);
@@ -93,9 +132,10 @@ void lunet_mem_shutdown(void) {
     g_lunet_em_enabled = 0;
     g_lunet_em_initialized = 0;
 #endif
+    lunet_mem_unlock();
 }
 
-void *lunet_mem_alloc_impl(size_t size, const char *file, int line) {
+static void *lunet_mem_alloc_unlocked(size_t size, const char *file, int line) {
     lunet_mem_header_t *header = NULL;
 #ifdef LUNET_EASY_MEMORY
     header = (lunet_mem_header_t *)lunet_backend_alloc(sizeof(lunet_mem_header_t) + size);
@@ -129,18 +169,11 @@ void *lunet_mem_alloc_impl(size_t size, const char *file, int line) {
     return ptr;
 }
 
-void *lunet_mem_calloc_impl(size_t count, size_t size, const char *file, int line) {
-    size_t total = count * size;
-    void *ptr = lunet_mem_alloc_impl(total, file, line);
-    if (ptr) {
-        memset(ptr, 0, total);
-    }
-    return ptr;
-}
+static void lunet_mem_free_unlocked(void *ptr, const char *file, int line);
 
-void *lunet_mem_realloc_impl(void *ptr, size_t size, const char *file, int line) {
+static void *lunet_mem_realloc_unlocked(void *ptr, size_t size, const char *file, int line) {
     if (!ptr) {
-        return lunet_mem_alloc_impl(size, file, line);
+        return lunet_mem_alloc_unlocked(size, file, line);
     }
 
     lunet_mem_header_t *old_header = ((lunet_mem_header_t *)ptr) - 1;
@@ -153,7 +186,7 @@ void *lunet_mem_realloc_impl(void *ptr, size_t size, const char *file, int line)
 
 #ifdef LUNET_EASY_MEMORY
     uint32_t old_size = old_header->size;
-    void *new_ptr = lunet_mem_alloc_impl(size, file, line);
+    void *new_ptr = lunet_mem_alloc_unlocked(size, file, line);
     if (!new_ptr) {
         return NULL;
     }
@@ -161,7 +194,7 @@ void *lunet_mem_realloc_impl(void *ptr, size_t size, const char *file, int line)
         size_t copy_size = old_size < size ? (size_t)old_size : size;
         memcpy(new_ptr, ptr, copy_size);
     }
-    lunet_mem_free_impl(ptr, file, line);
+    lunet_mem_free_unlocked(ptr, file, line);
     return new_ptr;
 #else
     uint32_t old_size = old_header->size;
@@ -189,11 +222,7 @@ void *lunet_mem_realloc_impl(void *ptr, size_t size, const char *file, int line)
 #endif
 }
 
-void lunet_mem_free_impl(void *ptr, const char *file, int line) {
-    if (!ptr) {
-        return;
-    }
-
+static void lunet_mem_free_unlocked(void *ptr, const char *file, int line) {
     lunet_mem_header_t *header = ((lunet_mem_header_t *)ptr) - 1;
     if (header->canary != LUNET_MEM_CANARY) {
         if (header->canary == (LUNET_MEM_POISON | (LUNET_MEM_POISON << 8) |
@@ -230,7 +259,42 @@ void lunet_mem_free_impl(void *ptr, const char *file, int line) {
 #endif
 }
 
+void *lunet_mem_alloc_impl(size_t size, const char *file, int line) {
+    lunet_mem_lock();
+    void *ptr = lunet_mem_alloc_unlocked(size, file, line);
+    lunet_mem_unlock();
+    return ptr;
+}
+
+void *lunet_mem_calloc_impl(size_t count, size_t size, const char *file, int line) {
+    size_t total = count * size;
+    lunet_mem_lock();
+    void *ptr = lunet_mem_alloc_unlocked(total, file, line);
+    if (ptr) {
+        memset(ptr, 0, total);
+    }
+    lunet_mem_unlock();
+    return ptr;
+}
+
+void *lunet_mem_realloc_impl(void *ptr, size_t size, const char *file, int line) {
+    lunet_mem_lock();
+    void *new_ptr = lunet_mem_realloc_unlocked(ptr, size, file, line);
+    lunet_mem_unlock();
+    return new_ptr;
+}
+
+void lunet_mem_free_impl(void *ptr, const char *file, int line) {
+    if (!ptr) {
+        return;
+    }
+    lunet_mem_lock();
+    lunet_mem_free_unlocked(ptr, file, line);
+    lunet_mem_unlock();
+}
+
 void lunet_mem_summary(void) {
+    lunet_mem_lock();
     fprintf(stderr, "[MEM_TRACE] SUMMARY: allocs=%d frees=%d "
             "alloc_bytes=%lld free_bytes=%lld current=%lld peak=%lld\n",
             lunet_mem_state.alloc_count,
@@ -254,9 +318,11 @@ void lunet_mem_summary(void) {
         fprintf(stderr, "[MEM_TRACE] EASY_MEMORY: disabled (libc fallback)\n");
     }
 #endif
+    lunet_mem_unlock();
 }
 
 void lunet_mem_assert_balanced(const char *context) {
+    lunet_mem_lock();
     if (lunet_mem_state.alloc_count != lunet_mem_state.free_count) {
         fprintf(stderr, "[MEM_TRACE] LEAK at %s: alloc_count=%d free_count=%d (delta=%d)\n",
                 context,
@@ -269,6 +335,7 @@ void lunet_mem_assert_balanced(const char *context) {
         fprintf(stderr, "[MEM_TRACE] LEAK at %s: %lld bytes still allocated\n",
                 context, (long long)lunet_mem_state.current_bytes);
     }
+    lunet_mem_unlock();
 }
 
 #endif /* LUNET_TRACE || LUNET_EASY_MEMORY */

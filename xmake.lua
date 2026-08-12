@@ -971,6 +971,9 @@ task("stress")
         -- lunet_listen_cb into self-close must be supplied here.
         os.execv(runner, {"test/socket_listener_self_close.lua"},
             {envs = {LUNET_TEST_SOCKET_LISTEN_FAULT = "alloc_fail,drop_fail"}})
+        -- fs module regressions: sequential read/write offset advancement,
+        -- append mode, binary NUL payloads, fs.write return type, multi-chunk.
+        os.execv(runner, {"test/smoke_fs.lua"})
     end)
 task_end()
 

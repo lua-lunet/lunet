@@ -73,14 +73,15 @@ function socket.read(client) end
 ---Write data to a socket (must be called from coroutine)
 ---@param client lightuserdata The client handle
 ---@param data string The data to send
----@return string|nil error Error message if failed
+---@return string|nil error `nil` on success; the error message on failure
 ---@usage
 ---```lua
 ---local socket = require('lunet.socket')
 ---lunet.spawn(function()
----    local ok, err = socket.write(client, "Hello, client!")
----    if not ok then
----        print("Write error: " .. err)
+---    -- error-only: one result. nil means the write completed.
+---    local write_error = socket.write(client, "Hello, client!")
+---    if write_error then
+---        print("Write error: " .. write_error)
 ---    end
 ---end)
 ---```

@@ -10,6 +10,8 @@ local examples = {
   "examples/mcp_openalex_sse/openalex.lua",
   "examples/mcp_openalex_sse/json.lua",
   "examples/mcp_openalex_sse/dotenv.lua",
+  "examples/11_websocket_echo.lua",
+  "examples/12_websocket_upgrade.lua",
 }
 
 local ok_count = 0

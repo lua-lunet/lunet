@@ -26,7 +26,7 @@ use paxe::{codec, dek, keystore, sodium, standard, stats};
 
 
 use std::cell::RefCell;
-use std::os::raw::{c_char, c_int};
+use std::os::raw::{c_char, c_int, c_ulonglong};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 // ---------------------------------------------------------------------------
@@ -837,6 +837,203 @@ pub extern "C" fn lunet_paxe_version() -> *const c_char {
     VERSION.as_ptr() as *const c_char
 }
 
+// ---------------------------------------------------------------------------
+// lunet.sodium — a MINIMAL libsodium primitive surface (three functions,
+// nothing more). The cdylib already links libsodium statically for PAXE,
+// so every archive consumer carries the bytes for ordinary primitives
+// (SHA-256, HMAC-SHA-256, randombytes) that were previously unreachable:
+// the static libsodium symbols are not exported from the cdylib, and
+// loading a SECOND libsodium (homebrew, distro) into the same process
+// invites dlsym(RTLD_DEFAULT) ambiguity. These shims expose exactly
+// three primitives under lunet_sodium_* names, so a user-owned libsodium
+// in the same process can never capture the lookup and the vendored
+// sodium version never becomes a public ABI promise (no wholesale
+// namespace export — that would be a collision hazard, not a feature).
+//
+// SECURITY BOUNDARY, stated plainly (docs/SODIUM.md says the same):
+// stateless hashing crosses no secrets; the HMAC KEY is ordinary Lua
+// string data and does cross the FFI unguarded. That is a documented
+// boundary with the same posture as the paxe keystore notes — guarded
+// key memory remains PAXE's job (lunet.paxe.keystore_set); this surface
+// is for ordinary primitives (checksums, JWT HS256), not key custody.
+//
+// The exports are standalone: each initialises libsodium itself
+// (idempotent, cheap) and none of them touch the PAXE keystore,
+// identity, counters or failure policy.
+// ---------------------------------------------------------------------------
+
+/// SHA-256 digest size in bytes, per libsodium (crypto_hash_sha256_BYTES).
+const SHA256BYTES: usize = 32;
+
+/// The one place outside paxe-core where libsodium externs are declared.
+/// paxe-core's vendored tree is byte-exact upstream output and is not
+/// modified for this surface, so its `sodium.rs` cannot host them; this
+/// private module mirrors its declaration discipline (contract comments,
+/// pointer+length never allowed to disagree) on the three primitives.
+#[allow(unsafe_code)]
+mod sodium_ffi {
+    use std::os::raw::{c_int, c_uchar, c_ulonglong};
+
+    extern "C" {
+        /// CONTRACT (libsodium docs, "SHA-2"): one-shot SHA-256. Writes
+        /// exactly crypto_hash_sha256_BYTES (32) bytes to `out`; `out`
+        /// must have room for them. Returns 0; there is no documented
+        /// failure mode for valid buffers.
+        pub fn crypto_hash_sha256(
+            out: *mut c_uchar,
+            in_: *const c_uchar,
+            inlen: c_ulonglong,
+        ) -> c_int;
+
+        /// CONTRACT (libsodium docs, "HMAC-SHA-2"): one-shot HMAC-SHA-256.
+        /// Writes exactly crypto_auth_hmacsha256_BYTES (32) bytes to
+        /// `out`; `k` must be exactly crypto_auth_hmacsha256_KEYBYTES
+        /// (32) bytes. Returns 0; there is no documented failure mode
+        /// for valid buffers.
+        pub fn crypto_auth_hmacsha256(
+            out: *mut c_uchar,
+            in_: *const c_uchar,
+            inlen: c_ulonglong,
+            k: *const c_uchar,
+        ) -> c_int;
+
+        /// CONTRACT (libsodium docs, "Key size"): reports
+        /// crypto_auth_hmacsha256_KEYBYTES from the LINKED library (32 in
+        /// every libsodium release). Read at call time, never restated as
+        /// a literal, so an ABI drift is a detectable runtime error.
+        pub fn crypto_auth_hmacsha256_keybytes() -> usize;
+
+        /// CONTRACT (libsodium docs, "Generating random data"): fills
+        /// `buf[0..size)` from the system CSPRNG (seeded at
+        /// `sodium_init`, reseeded as required). Cannot fail (void
+        /// return). The same RNG PAXE draws nonces and DEKs from, so a
+        /// process never mixes two RNGs.
+        pub fn randombytes_buf(buf: *mut c_uchar, size: usize);
+    }
+}
+
+/// Shared prologue: make sure libsodium is initialised before a primitive
+/// runs. `sodium::init` (paxe-core) is idempotent and thread-safe; later
+/// calls are cheap. An init failure is an environment property, reported
+/// as an operational error — never a panic.
+fn sodium_ready() -> Result<(), String> {
+    sodium::init()
+        .map(|_| ())
+        .map_err(|e| format!("libsodium initialisation failed: {e}"))
+}
+
+/// One-shot SHA-256. Writes the 32-byte digest to `out` (which must have
+/// room for exactly [`SHA256BYTES`] bytes). RC_OK on success; RC_INVAL
+/// for a null `out` or a null input with a non-zero length; RC_ERR only
+/// when libsodium could not be initialised.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_sodium_sha256(
+    input: *const u8,
+    input_len: usize,
+    out: *mut u8,
+) -> c_int {
+    if let Err(m) = sodium_ready() {
+        return fail(&m);
+    }
+    let input = match buf_in(input, input_len, "sha256 input") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    if out.is_null() {
+        return invalid(format!("sha256 output pointer must not be null ({SHA256BYTES} bytes required)"));
+    }
+    // SAFETY: out non-null checked above, caller contract guarantees 32
+    // writable bytes; input pointer/length derive from one slice.
+    let rc = unsafe {
+        sodium_ffi::crypto_hash_sha256(out, input.as_ptr(), input.len() as c_ulonglong)
+    };
+    if rc != 0 {
+        return fail("crypto_hash_sha256 returned a non-zero status (undocumented libsodium failure)");
+    }
+    RC_OK
+}
+
+/// One-shot HMAC-SHA-256 (the JWT HS256 primitive). Writes the 32-byte
+/// tag to `out` (room for exactly [`SHA256BYTES`] bytes required). `key`
+/// must be exactly libsodium's HMAC-SHA-256 key size (32 bytes — read
+/// from the linked library at call time, never restated as a literal).
+/// RC_OK on success; RC_INVAL for a wrong key length or a null pointer
+/// where bytes are required; RC_ERR only when libsodium could not be
+/// initialised.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_sodium_hmac_sha256(
+    input: *const u8,
+    input_len: usize,
+    key: *const u8,
+    key_len: usize,
+    out: *mut u8,
+) -> c_int {
+    if let Err(m) = sodium_ready() {
+        return fail(&m);
+    }
+    let input = match buf_in(input, input_len, "hmac_sha256 input") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    let key = match buf_in(key, key_len, "hmac_sha256 key") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    if out.is_null() {
+        return invalid(format!(
+            "hmac_sha256 output pointer must not be null ({SHA256BYTES} bytes required)"
+        ));
+    }
+    // The key size is the LINKED library's constant, not a literal here.
+    let want = unsafe { sodium_ffi::crypto_auth_hmacsha256_keybytes() };
+    if key.len() != want {
+        return invalid(format!(
+            "hmac_sha256 key must be exactly {want} bytes, got {}",
+            key.len()
+        ));
+    }
+    // SAFETY: out non-null checked above, caller contract guarantees 32
+    // writable bytes; both pointer/length pairs derive from one slice.
+    let rc = unsafe {
+        sodium_ffi::crypto_auth_hmacsha256(
+            out,
+            input.as_ptr(),
+            input.len() as c_ulonglong,
+            key.as_ptr(),
+        )
+    };
+    if rc != 0 {
+        return fail("crypto_auth_hmacsha256 returned a non-zero status (undocumented libsodium failure)");
+    }
+    RC_OK
+}
+
+/// Fill `out[0..out_len)` with unpredictable bytes from the same CSPRNG
+/// PAXE uses (never mix two RNGs in one process). A zero length is a
+/// successful no-op. RC_OK on success; RC_INVAL for a null `out` with a
+/// non-zero length; RC_ERR only when libsodium could not be initialised.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_sodium_randombytes(out: *mut u8, out_len: usize) -> c_int {
+    if let Err(m) = sodium_ready() {
+        return fail(&m);
+    }
+    if out_len == 0 {
+        return RC_OK;
+    }
+    if out.is_null() {
+        return invalid(format!(
+            "randombytes output pointer must not be null ({out_len} bytes requested)"
+        ));
+    }
+    // SAFETY: out non-null checked above; the caller contract guarantees
+    // out_len writable bytes.
+    unsafe { sodium_ffi::randombytes_buf(out, out_len) };
+    RC_OK
+}
+
 #[cfg(test)]
 mod tests {
     // Reading back the exported C string inherently dereferences a raw
@@ -1614,5 +1811,191 @@ mod ffi_tests {
         assert_eq!(lunet_paxe_frame_for_us(std::ptr::null(), 9), RC_INVAL);
         let after = stats::snapshot();
         assert_eq!(after.rx_total - before.rx_total, 0);
+    }
+
+    // -------------------------------------------------------------------
+    // The lunet.sodium primitive surface. Known-answer vectors are from
+    // independent implementations (FIPS 180-4 / RFC 4231-style inputs
+    // recomputed with Python's hashlib/hmac against libsodium's FIXED
+    // 32-byte HMAC key size), so a wrong binding here fails loudly.
+    // -------------------------------------------------------------------
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn sha256(input: &[u8]) -> (c_int, [u8; SHA256BYTES]) {
+        let mut out = [0u8; SHA256BYTES];
+        let rc = lunet_sodium_sha256(input.as_ptr(), input.len(), out.as_mut_ptr());
+        (rc, out)
+    }
+
+    fn hmac_sha256(input: &[u8], key: &[u8]) -> (c_int, [u8; SHA256BYTES]) {
+        let mut out = [0u8; SHA256BYTES];
+        let rc = lunet_sodium_hmac_sha256(
+            input.as_ptr(),
+            input.len(),
+            key.as_ptr(),
+            key.len(),
+            out.as_mut_ptr(),
+        );
+        (rc, out)
+    }
+
+    #[test]
+    fn sodium_sha256_known_answers() {
+        let (rc, out) = sha256(b"");
+        assert_eq!(rc, RC_OK, "{}", last_error_string());
+        assert_eq!(
+            hex(&out),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let (rc, out) = sha256(b"abc");
+        assert_eq!(rc, RC_OK);
+        assert_eq!(
+            hex(&out),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let (rc, out) = sha256(b"The quick brown fox jumps over the lazy dog");
+        assert_eq!(rc, RC_OK);
+        assert_eq!(
+            hex(&out),
+            "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592"
+        );
+        // Empty input via a NULL pointer (LuaJIT may hand NULL for "") is
+        // the empty slice, not malformed.
+        let mut out = [0u8; SHA256BYTES];
+        assert_eq!(
+            lunet_sodium_sha256(std::ptr::null(), 0, out.as_mut_ptr()),
+            RC_OK
+        );
+        assert_eq!(hex(&out), hex(&sha256(b"").1));
+    }
+
+    #[test]
+    fn sodium_hmac_sha256_known_answers() {
+        // 32-byte keys (libsodium's fixed HMAC-SHA-256 key size);
+        // expected tags computed with Python's hmac module.
+        let k1 = [0x0bu8; 32];
+        let (rc, out) = hmac_sha256(b"Hi There", &k1);
+        assert_eq!(rc, RC_OK, "{}", last_error_string());
+        assert_eq!(
+            hex(&out),
+            "198a607eb44bfbc69903a0f1cf2bbdc5ba0aa3f3d9ae3c1c7a3b1696a0b68cf7"
+        );
+        let k2 = *b"01234567890123456789012345678901";
+        let (rc, out) = hmac_sha256(b"lunet.sodium known-answer", &k2);
+        assert_eq!(rc, RC_OK);
+        assert_eq!(
+            hex(&out),
+            "385bb9f6f70ceb6ae2c6a918e0fd024ff3cb38aca35f43cb9c67611ec1791662"
+        );
+        let k3: Vec<u8> = (0u8..32).collect();
+        let (rc, out) = hmac_sha256(b"", &k3);
+        assert_eq!(rc, RC_OK);
+        assert_eq!(
+            hex(&out),
+            "d38b42096d80f45f826b44a9d5607de72496a415d3f4a1a8c88e3bb9da8dc1cb"
+        );
+        // Determinism, and a different key changes the tag.
+        let (rc1, t1) = hmac_sha256(b"payload", &k1);
+        let (rc2, t2) = hmac_sha256(b"payload", &k1);
+        assert_eq!(rc1, RC_OK);
+        assert_eq!(rc2, RC_OK);
+        assert_eq!(t1, t2);
+        let (_, t3) = hmac_sha256(b"payload", &k2);
+        assert_ne!(t1, t3);
+    }
+
+    #[test]
+    fn sodium_malformed_arguments_are_rc_inval_and_nothing_panics() {
+        let mut out = [0u8; SHA256BYTES];
+        // Wrong key lengths: too short, too long, empty.
+        for bad_len in [0usize, 31, 33] {
+            let rc = lunet_sodium_hmac_sha256(
+                b"m".as_ptr(),
+                1,
+                KEY.as_ptr(),
+                bad_len,
+                out.as_mut_ptr(),
+            );
+            assert_eq!(rc, RC_INVAL, "key length {bad_len} must be rejected");
+            assert!(last_error_string().contains("exactly 32 bytes"));
+        }
+        // Null key pointer with a non-zero length.
+        assert_eq!(
+            lunet_sodium_hmac_sha256(
+                b"m".as_ptr(),
+                1,
+                std::ptr::null(),
+                32,
+                out.as_mut_ptr()
+            ),
+            RC_INVAL
+        );
+        // Null output pointers.
+        assert_eq!(
+            lunet_sodium_sha256(b"m".as_ptr(), 1, std::ptr::null_mut()),
+            RC_INVAL
+        );
+        assert_eq!(
+            lunet_sodium_hmac_sha256(
+                b"m".as_ptr(),
+                1,
+                KEY.as_ptr(),
+                KEY.len(),
+                std::ptr::null_mut()
+            ),
+            RC_INVAL
+        );
+        assert_eq!(lunet_sodium_randombytes(std::ptr::null_mut(), 16), RC_INVAL);
+        // Null input with a NON-zero length.
+        assert_eq!(
+            lunet_sodium_sha256(std::ptr::null(), 5, out.as_mut_ptr()),
+            RC_INVAL
+        );
+        // Zero-length random is a successful no-op, even with NULL.
+        assert_eq!(lunet_sodium_randombytes(std::ptr::null_mut(), 0), RC_OK);
+    }
+
+    #[test]
+    fn sodium_randombytes_lengths_and_unpredictability() {
+        let mut a = [0u8; 64];
+        assert_eq!(
+            lunet_sodium_randombytes(a.as_mut_ptr(), a.len()),
+            RC_OK,
+            "{}",
+            last_error_string()
+        );
+        let mut b = [0u8; 64];
+        assert_eq!(lunet_sodium_randombytes(b.as_mut_ptr(), b.len()), RC_OK);
+        // Two draws differ (2^-512 collision odds for 64 random bytes —
+        // a deterministic RNG or a constant fill fails this loudly).
+        assert_ne!(a, b);
+        // Lenient statistical shape over a bigger sample: not all zero
+        // and both bit values occur (an all-zero or all-0xFF fill fails).
+        let mut big = [0u8; 1024];
+        assert_eq!(lunet_sodium_randombytes(big.as_mut_ptr(), big.len()), RC_OK);
+        assert!(big.iter().any(|&b| b != 0), "all-zero fill is not random");
+        assert!(big.iter().any(|&b| b != 0xFF), "all-0xFF fill is not random");
+        // One byte draws work (no length floor).
+        let mut one = [0u8; 1];
+        assert_eq!(lunet_sodium_randombytes(one.as_mut_ptr(), 1), RC_OK);
+    }
+
+    #[test]
+    fn sodium_surface_is_independent_of_paxe_state() {
+        // No init()/set_local_id() anywhere here: the primitives must work
+        // in a process that never configures PAXE, and must not disturb
+        // PAXE state when it IS configured.
+        let before = stats::snapshot();
+        assert_eq!(sha256(b"independent").0, RC_OK);
+        let key = [0x11u8; 32];
+        assert_eq!(hmac_sha256(b"independent", &key).0, RC_OK);
+        let mut r = [0u8; 8];
+        assert_eq!(lunet_sodium_randombytes(r.as_mut_ptr(), r.len()), RC_OK);
+        let after = stats::snapshot();
+        assert_eq!(after.rx_total, before.rx_total, "sodium must not touch rx");
+        assert_eq!(after.tx_total, before.tx_total, "sodium must not touch tx");
     }
 }

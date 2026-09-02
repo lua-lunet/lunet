@@ -32,6 +32,9 @@ lunet/                              # 扩展模块
   liblunet_paxe.dylib               #   （macOS）
   lunet_paxe.dll                    #   （Windows）
   paxe.lua                          # PAXE Lua FFI 加载器
+  sodium.lua                        # lunet.sodium 加密原语加载器
+                                    #   （SHA-256 / HMAC-SHA-256 / randombytes，
+                                    #   垫片位于同一个 cdylib 中）
 types/                              # LuaCATS 类型注解（---@meta，纯文档，无运行时代码）
   lunet.lua
   lunet/
@@ -45,6 +48,7 @@ types/                              # LuaCATS 类型注解（---@meta，纯文�
     paxe.lua                        # AES-256-GCM 加密
     signal.lua                      # 操作系统信号处理
     socket.lua                      # TCP 套接字操作
+    sodium.lua                      # SHA-256 / HMAC-SHA-256 / randombytes
     udp.lua                         # UDP 套接字操作
 *.md                                # 随包文档（见下文"随包文档"一节）
 ```
@@ -102,11 +106,13 @@ local json  = require("lunet.jsonic")
 |------------|------------------------------|
 | lnt_shared | `LUNET_LNT_SHARED_LIB`       |
 | jsonic     | `LUNET_JSONIC_LIB`           |
+| sodium     | `LUNET_SODIUM_LIB`（回退到 `LUNET_PAXE_LIB`） |
 
 ## 独立使用扩展（不依赖 lunet-run）
 
-两个 Rust 扩展都导出了稳定的 C ABI，任何 LuaJIT 程序都可以通过 `ffi.load()`
-直接加载。以下章节记录了完整的 FFI API 接口——cdef 声明、错误码和值类型常量。
+以下章节记录的扩展都导出了稳定的 C ABI，任何 LuaJIT 程序都可以通过
+`ffi.load()` 直接加载。内容包括完整的 FFI API 接口——cdef 声明、错误码和
+值类型常量。
 
 无需头文件：以下声明使用 LuaJIT FFI cdef 语法编写，可以直接粘贴到
 `ffi.cdef[[...]]` 块中使用。
@@ -266,6 +272,51 @@ Lua 封装层，而不是直接调用 FFI——二进制格式属于编解码器
 
 与 lnt_shared 相同：`lunet_jsonic_decode` 在堆上分配输出缓冲区，调用者必须
 使用 `lunet_jsonic_free_bytes` 释放。
+
+---
+
+## lunet.sodium — 加密原语（SHA-256 / HMAC-SHA-256 / randombytes）
+
+跨平台（Linux / macOS / Windows）。从**与 PAXE 相同的 cdylib**
+（`liblunet_paxe`）导出的极简 libsodium 原语接口，该 cdylib 已经静态链接了
+libsodium —— 进程中永远不需要第二个 libsodium。仅导出三个符号（外加用于
+错误消息的共享符号 `lunet_paxe_last_error`）；完整的 ABI 承诺、Lua API 与
+安全说明见 [`docs/SODIUM-CN.md`](SODIUM-CN.md)。
+
+### FFI 声明
+
+```lua
+ffi.cdef[[
+  int lunet_sodium_sha256(const uint8_t* input, size_t input_len, uint8_t* out);
+  int lunet_sodium_hmac_sha256(const uint8_t* input, size_t input_len,
+                               const uint8_t* key, size_t key_len, uint8_t* out);
+  int lunet_sodium_randombytes(uint8_t* out, size_t out_len);
+  const uint8_t* lunet_paxe_last_error(size_t* len);
+]]
+```
+
+### 错误码
+
+| 代码 | 常量           | 含义                                            |
+|------|----------------|-------------------------------------------------|
+| `0`  | 成功           | `out` 中为摘要/标签/随机字节                     |
+| `-2` | 畸形参数       | 在需要字节处传了空指针，或 HMAC 密钥不是恰好 32 字节 |
+| `-1` | 操作性失败     | libsodium 初始化失败                             |
+
+输出缓冲区归调用者所有：两个哈希输出为 32 字节，random 为 `out_len` 字节。
+长度为 0 的 `lunet_sodium_randombytes` 是成功的空操作。
+
+### 最小示例（独立 FFI）
+
+```lua
+local ffi = require("ffi")
+ffi.cdef[[ /* 粘贴上面的 cdef 块 */ ]]
+local lib = ffi.load("./lunet/liblunet_paxe.so")  -- 或 .dylib / lunet_paxe.dll
+
+local out = ffi.new("uint8_t[32]")
+assert(lib.lunet_sodium_sha256("abc", 3, out) == 0)
+-- out 现在持有 ba7816bf...（"abc" 的 FIPS 180-4 SHA-256 摘要）
+```
 
 ---
 

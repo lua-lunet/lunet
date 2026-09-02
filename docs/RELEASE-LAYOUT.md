@@ -32,6 +32,9 @@ lunet/                              # extension modules
   liblunet_paxe.dylib               #   (macOS)
   lunet_paxe.dll                    #   (Windows)
   paxe.lua                          # PAXE Lua FFI loader
+  sodium.lua                        # lunet.sodium crypto primitives loader
+                                    #   (SHA-256 / HMAC-SHA-256 / randombytes,
+                                    #   shims in the same cdylib)
 types/                              # LuaCATS type annotations (---@meta, documentation only)
   lunet.lua
   lunet/
@@ -45,6 +48,7 @@ types/                              # LuaCATS type annotations (---@meta, docume
     paxe.lua                        # AES-256-GCM encryption
     signal.lua                      # OS signal handling
     socket.lua                      # TCP socket operations
+    sodium.lua                      # SHA-256 / HMAC-SHA-256 / randombytes
     udp.lua                         # UDP socket operations
 *.md                                # bundled docs (see "Bundled documentation" below)
 ```
@@ -112,12 +116,14 @@ that the corresponding loader checks:
 |------------|------------------------------|
 | lnt_shared | `LUNET_LNT_SHARED_LIB`       |
 | jsonic     | `LUNET_JSONIC_LIB`           |
+| sodium     | `LUNET_SODIUM_LIB` (falls back to `LUNET_PAXE_LIB`) |
 
 ## Using extensions standalone (without lunet-run)
 
-Both Rust extensions export a stable C ABI and can be loaded directly by any
-LuaJIT program via `ffi.load()`. The sections below document the complete FFI
-API surface — cdef declarations, error codes, and value type constants.
+The extensions documented below export a stable C ABI and can be loaded
+directly by any LuaJIT program via `ffi.load()`. The sections below document
+the complete FFI API surface — cdef declarations, error codes, and value type
+constants.
 
 No header files are needed: the declarations below are written in LuaJIT FFI
 cdef syntax and can be pasted directly into a `ffi.cdef[[...]]` block.
@@ -281,6 +287,53 @@ the FFI directly — the binary format is internal to the codec pair.
 
 Same as lnt_shared: `lunet_jsonic_decode` heap-allocates the output buffer;
 the caller must free it with `lunet_jsonic_free_bytes`.
+
+---
+
+## lunet.sodium — crypto primitives (SHA-256 / HMAC-SHA-256 / randombytes)
+
+Cross-platform (Linux / macOS / Windows). A minimal libsodium primitive
+surface exposed from the **same cdylib as PAXE** (`liblunet_paxe`), which
+already statically links libsodium — so no second libsodium is ever needed
+in the process. Exactly three symbols are exported (plus the shared
+`lunet_paxe_last_error` used for error messages); the full ABI promise,
+Lua API and security notes are in [`docs/SODIUM.md`](SODIUM.md).
+
+### FFI declarations
+
+```lua
+ffi.cdef[[
+  int lunet_sodium_sha256(const uint8_t* input, size_t input_len, uint8_t* out);
+  int lunet_sodium_hmac_sha256(const uint8_t* input, size_t input_len,
+                               const uint8_t* key, size_t key_len, uint8_t* out);
+  int lunet_sodium_randombytes(uint8_t* out, size_t out_len);
+  const uint8_t* lunet_paxe_last_error(size_t* len);
+]]
+```
+
+### Error codes
+
+| Code | Constant          | Meaning                                          |
+|------|-------------------|--------------------------------------------------|
+| `0`  | success           | `out` holds the digest/tag/random bytes          |
+| `-2` | malformed argument| null pointer where bytes are required, or an HMAC key that is not exactly 32 bytes |
+| `-1` | operational failure | libsodium initialisation failed                |
+
+Output buffers are caller-owned: 32 bytes for the two hash outputs,
+`out_len` bytes for random. `lunet_sodium_randombytes` with a zero length
+is a successful no-op.
+
+### Minimal example (standalone FFI)
+
+```lua
+local ffi = require("ffi")
+ffi.cdef[[ /* paste cdef block above */ ]]
+local lib = ffi.load("./lunet/liblunet_paxe.so")  -- or .dylib / lunet_paxe.dll
+
+local out = ffi.new("uint8_t[32]")
+assert(lib.lunet_sodium_sha256("abc", 3, out) == 0)
+-- out now holds ba7816bf... (the FIPS 180-4 SHA-256 digest of "abc")
+```
 
 ---
 

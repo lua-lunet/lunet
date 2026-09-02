@@ -345,6 +345,9 @@ jobs:
         # statically into the cdylib, so the archive stays self-contained.
         cp ext/paxe/paxe.lua "$DIST_DIR/lunet/"
         cp ext/paxe/target/release/liblunet_paxe.so "$DIST_DIR/lunet/"
+        # lunet.sodium: the primitives loader binds the SAME cdylib through
+        # its dylib handle (lunet_sodium_* shims) — no extra artifact.
+        cp ext/paxe/sodium.lua "$DIST_DIR/lunet/"
         # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
@@ -385,6 +388,9 @@ jobs:
         # statically into the cdylib, so the archive stays self-contained.
         cp ext/paxe/paxe.lua "$DIST_DIR/lunet/"
         cp ext/paxe/target/release/liblunet_paxe.dylib "$DIST_DIR/lunet/"
+        # lunet.sodium: the primitives loader binds the SAME cdylib through
+        # its dylib handle (lunet_sodium_* shims) — no extra artifact.
+        cp ext/paxe/sodium.lua "$DIST_DIR/lunet/"
         # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
@@ -451,6 +457,9 @@ jobs:
         # statically into the cdylib, so the archive stays self-contained.
         Copy-Item ext\paxe\paxe.lua (Join-Path $dist "lunet")
         Copy-Item ext\paxe\target\release\lunet_paxe.dll (Join-Path $dist "lunet")
+        # lunet.sodium: the primitives loader binds the SAME cdylib through
+        # its dylib handle (lunet_sodium_* shims) — no extra artifact.
+        Copy-Item ext\paxe\sodium.lua (Join-Path $dist "lunet")
         # DB transaction wrappers: one per driver, deliberately not shared.
         Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
         # Documentation: copy every docs\*.md (and its -CN.md counterpart)
@@ -515,7 +524,17 @@ jobs:
         local s = paxe.stats()
         assert(type(s.rx_total) == "number" and type(s.tx_oversize) == "number")
         paxe.shutdown()
-        print("VERIFY OK: lunet.lnt_shared + lunet.jsonic + lunet.paxe work from packaged archive")
+        -- lunet.sodium: known-answer vectors, straight from the archive.
+        local sodium = require("lunet.sodium")
+        local function hex(str)
+          return (str:gsub(".", function(c) return string.format("%02x", c:byte()) end))
+        end
+        assert(hex(sodium.sha256("abc")) ==
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        assert(hex(sodium.hmac_sha256("Hi There", string.rep("\x0b", 32))) ==
+          "198a607eb44bfbc69903a0f1cf2bbdc5ba0aa3f3d9ae3c1c7a3b1696a0b68cf7")
+        assert(#sodium.random(32) == 32 and sodium.random(32) ~= sodium.random(32))
+        print("VERIFY OK: lunet.lnt_shared + lunet.jsonic + lunet.paxe + lunet.sodium work from packaged archive")
         LUA
         "$VERIFY_DIR/lunet-run" "$VERIFY_DIR/verify_ext.lua"
         # The archive must also carry the PAXE protocol/integration doc (it
@@ -525,7 +544,9 @@ jobs:
         ARCHIVE_LIST="$(tar -tzf "$ARCHIVE")"
         grep -q '^./PAXE.md$' <<<"$ARCHIVE_LIST"
         grep -q '^./PAXE-CN.md$' <<<"$ARCHIVE_LIST"
-        echo "VERIFY OK: PAXE.md and PAXE-CN.md are bundled"
+        grep -q '^./SODIUM.md$' <<<"$ARCHIVE_LIST"
+        grep -q '^./SODIUM-CN.md$' <<<"$ARCHIVE_LIST"
+        echo "VERIFY OK: PAXE.md, PAXE-CN.md, SODIUM.md and SODIUM-CN.md are bundled"
 
     # Keep these steps byte-identical to the documented commands in
     # docs/EMBEDDING.md so CI verifies exactly what users are told to run.

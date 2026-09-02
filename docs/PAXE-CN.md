@@ -32,6 +32,7 @@ xmake test-paxe      # 该 crate 的 FFI 边界测试套件（debug + release）
 - `ext/paxe/target/release/liblunet_paxe.so`（Linux）、`.dylib`（macOS）、`lunet_paxe.dll`（Windows）
 - 加载器是 `ext/paxe/paxe.lua`；`LUNET_PAXE_LIB` 可覆盖它加载的库路径
 - 发布归档将两者一并打包为 `lunet/paxe.lua` 加旁边的动态库，自包含（libsodium 为静态链接）
+- 同一个 cdylib 还导出极简的 `lunet_sodium_*` 原语接口（SHA-256、HMAC-SHA-256、randombytes），由 `lunet/sodium.lua` 加载——见 [`SODIUM-CN.md`](SODIUM-CN.md)。它与 PAXE 只共享 cdylib，绝不共享密钥库或计数器。
 
 ## 从 lunet 视角看的线路格式
 

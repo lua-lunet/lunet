@@ -37,6 +37,8 @@ Lunet 采用**模块化设计**。只构建你需要的：
   - `lunet.lnt_shared` - lunet 风格的共享字典，通过 Rust FFI 实现（`xmake build-lnt-shared`）
 - **JSON**（可选 Rust 扩展，Linux/macOS）：
   - `lunet.jsonic` - dkjson 风格的编解码；解码通过 Rust FFI 封装 [jsonic](https://github.com/g1mv/jsonic)（`xmake build-jsonic`）
+- **WebSocket 服务端模块**（可选 xmake 目标）：
+  - `lunet-websocket` - RFC6455 WebSocket 服务端支持（`require("lunet.websocket")`）
 
 只构建一个数据库驱动，而不是全部。没有未使用的依赖。不需要为从未使用的库打安全补丁。
 
@@ -44,6 +46,7 @@ Lunet 采用**模块化设计**。只构建你需要的：
 - **[docs/PHILOSOPHY-CN.md](docs/PHILOSOPHY-CN.md)**（长篇理念阐述）
 - **[docs/XMAKE_INTEGRATION-CN.md](docs/XMAKE_INTEGRATION-CN.md)**
 - **[docs/HTTPC-CN.md](docs/HTTPC-CN.md)**（可选出站 HTTPS 客户端）
+- **[docs/WEBSOCKET-CN.md](docs/WEBSOCKET-CN.md)**（可选 WebSocket 服务端模块）
 
 ### 为什么使用 lunet 数据库驱动？
 
@@ -73,6 +76,10 @@ LuaJIT、libuv 和 zlib 是必需依赖；每个驱动只增加自己的客户�
 最小入门示例请见 [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) —— 一个通过 `lunet.httpc` 调用 [OpenAlex](https://openalex.org/) 学术 API 的 SSE 传输 MCP 服务器，无数据库、无文件状态。
 
 完整的 RealWorld "Conduit" API 实现请参见 [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app)。
+
+WebSocket 示例：
+- `examples/11_websocket_echo.lua`（独立端口 WebSocket Echo）
+- `examples/12_websocket_upgrade.lua`（同端口 HTTP + WebSocket Upgrade）
 
 ## 核心模块
 

@@ -37,6 +37,8 @@ Lunet is **modular by design**. You build only what you need:
   - `lunet.lnt_shared` - lunet-style shared dict via Rust FFI (`xmake build-lnt-shared`)
 - **JSON** (optional Rust extension, Linux/macOS):
   - `lunet.jsonic` - dkjson-style encode/decode; decode via Rust FFI wrapping [jsonic](https://github.com/g1mv/jsonic) (`xmake build-jsonic`)
+- **WebSocket server module** (optional xmake target):
+  - `lunet-websocket` - RFC6455 WebSocket server support (`require("lunet.websocket")`)
 
 Build one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
 
@@ -44,6 +46,7 @@ Getting started (build flow, profiles, and integration details):
 - **[docs/PHILOSOPHY.md](docs/PHILOSOPHY.md)** (the long-form why)
 - **[docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md)**
 - **[docs/HTTPC.md](docs/HTTPC.md)** (optional outbound HTTPS client)
+- **[docs/WEBSOCKET.md](docs/WEBSOCKET.md)** (optional WebSocket server module)
 
 ### Why use lunet database drivers?
 
@@ -118,6 +121,8 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1
 | 08 | [`examples/08_lnt_shared.lua`](examples/08_lnt_shared.lua) | lunet-style shared dictionary via Rust FFI | `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_lnt_shared.lua` |
 | 09 | [`examples/09_jsonic_demo.lua`](examples/09_jsonic_demo.lua) | dkjson-style JSON encode/decode via Rust FFI | `xmake build-jsonic` | `"$LUNET_BIN" examples/09_jsonic_demo.lua` |
 | 10 | [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) | **Canonical tiny MCP server**: SSE transport + OpenAlex API via `lunet.httpc`, no DB, loopback only | `xmake build lunet-httpc` + `OPEN_ALEX_API_KEY` in `.env` | `"$LUNET_BIN" examples/mcp_openalex_sse/main.lua` |
+| 11 | [`examples/11_websocket_echo.lua`](examples/11_websocket_echo.lua) | Dedicated-port WebSocket echo server | `xmake build lunet-websocket` | `"$LUNET_BIN" examples/11_websocket_echo.lua` |
+| 12 | [`examples/12_websocket_upgrade.lua`](examples/12_websocket_upgrade.lua) | Mixed HTTP + WebSocket upgrade on one port | `xmake build lunet-websocket` | `"$LUNET_BIN" examples/12_websocket_upgrade.lua` |
 
 See also [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app) for a complete RealWorld "Conduit" API implementation.
 

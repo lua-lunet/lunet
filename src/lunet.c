@@ -309,12 +309,14 @@ static void lunet_runtime_teardown_loop(lua_State *L) {
   }
   lua_pop(L, 1);
 
-  /* 2. No new work may be accepted after this point: every handle closes. */
+  /* 2-3. Close every remaining handle and drain the close callbacks. Work
+   * abandoned by close callbacks may leave new handles behind (a woken
+   * coroutine can schedule another timer before parking); sweep again until
+   * the loop is handle-free so uv_loop_close cannot report UV_EBUSY. */
   uv_walk(loop, lunet_teardown_close_cb, NULL);
-
-  /* 3. Drain the close callbacks. */
   while (uv_loop_alive(loop)) {
     uv_run(loop, UV_RUN_ONCE);
+    uv_walk(loop, lunet_teardown_close_cb, NULL);
   }
 }
 
@@ -519,6 +521,11 @@ int lunet_runtime_init(lunet_runtime_t **out_runtime,
     return -1;
   }
   runtime->stop_wakeup_inited = 1;
+  /* An open uv_async_t keeps the event loop alive, which would stop
+   * drain-based applications from ever exiting. Unreference it: the loop
+   * exits when the application's own handles drain, while uv_async_send
+   * from another thread still wakes it for a deliberate stop. */
+  uv_unref((uv_handle_t *)&runtime->stop_wakeup);
   g_active_runtime = runtime;
   g_runtime_consumed = 1;
   *out_runtime = runtime;

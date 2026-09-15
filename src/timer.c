@@ -54,9 +54,8 @@ static void lunet_sleep_close_cb(uv_handle_t *handle) {
 }
 
 /*
- * Drain-point teardown (declared in timer.h). Work already accepted runs to
- * completion: the sleeping coroutine is resumed as if the timer fired, and
- * then the timer handle is closed and its context freed.
+ * Drain-point teardown (declared in timer.h). The timer handle is closed and
+ * its context freed. See the close body for the parked-coroutine semantics.
  */
 void lunet_timer_teardown_close(struct uv_handle_s *raw) {
   uv_handle_t *handle = (uv_handle_t *)raw;
@@ -66,22 +65,25 @@ void lunet_timer_teardown_close(struct uv_handle_s *raw) {
   }
   uv_timer_stop((uv_timer_t *)handle);
 
+  /* Work past the stop request is abandoned safely: the timer never fires
+   * and the parked coroutine is never resumed again. The registry reference
+   * is released so the coroutine reference trace stays balanced. Resuming
+   * here would be wrong: a looping worker would spawn the next sleep and
+   * livelock the close-callback drain. */
+  handle->data = NULL;
   lua_State *L = ctx->owner_L;
   lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
   lunet_coref_release(L, ctx->co_ref);
-  if (lua_isthread(L, -1)) {
-    lua_State *co = lua_tothread(L, -1);
-    lua_pop(L, 1);
-    (void)lunet_co_resume(co, 0);
-  } else {
-    lua_pop(L, 1);
-  }
+  lua_pop(L, 1);
 
   uv_close(handle, lunet_sleep_close_cb);
 }
 
 static void lunet_sleep_cb(uv_timer_t *timer) {
   sleep_ctx_t *ctx = (sleep_ctx_t *)timer->data;
+  if (!ctx) {
+    return; /* already torn down */
+  }
   lua_State *L = ctx->owner_L;
 
   TIMER_TRACE_WAKE(ctx);

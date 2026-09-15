@@ -111,8 +111,10 @@ host can request it from C with `lunet_runtime_request_stop`. The semantics:
 
 - the event loop stops taking new work immediately (`uv_stop` ends the
   current iteration; no new accepts/reads proceed past it);
-- work already accepted keeps running: a parked coroutine behind a still
-  pending sleep timer is completed during teardown;
+- work already accepted keeps running; whatever is still parked when the
+  loop is stopped is abandoned safely: a pending sleep timer never fires
+  again and its coroutine is never resumed (mirroring the safe-abandon rule
+  for outbound writes);
 - outbound writes either complete or are abandoned safely;
 - at the drain point the registered post-drain Lua callback runs exactly
   once and must do synchronous work only:

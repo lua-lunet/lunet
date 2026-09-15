@@ -84,7 +84,7 @@ extracted script tree and nothing else installed.
 
 ## C API and lifecycle
 
-`include/lunet.h` exposes an opaque `lunet_runtime_t` and four functions:
+`include/lunet.h` exposes an opaque `lunet_runtime_t` and five functions:
 
 1. Call `lunet_runtime_init` once, optionally supplying the executable path
    and `dangerously_skip_loopback_restriction=1`.
@@ -92,13 +92,50 @@ extracted script tree and nothing else installed.
    `lunet_runtime_run_embedded`.
 3. Inspect the returned API status separately from the output application exit
    code.
-4. Always call `lunet_runtime_shutdown` after successful initialization.
+4. Call `lunet_runtime_request_stop` to request a deliberate stop (passes the
+   runtime through the drain point below). This one call is thread-safe: a
+   host may call it from another thread while `run_file` / `run_embedded`
+   blocks on the runtime thread.
+5. Always call `lunet_runtime_shutdown` after successful initialization.
 
 The runtime supports one initialization and one application run per process,
 because Lunet uses one default Lua state and libuv loop. `run_embedded` accepts
 only safe relative entry-script paths and validates the `LUNETPK1` gzip blob
 before running it. Loopback-only network binding remains the default; the
 dangerous opt-out is explicit in `lunet_runtime_options_t`.
+
+## Deliberate stop, drain point, and the post-drain hook
+
+A running application can request termination itself (`lunet.stop()`), or the
+host can request it from C with `lunet_runtime_request_stop`. The semantics:
+
+- the event loop stops taking new work immediately (`uv_stop` ends the
+  current iteration; no new accepts/reads proceed past it);
+- work already accepted keeps running: a parked coroutine behind a still
+  pending sleep timer is completed during teardown;
+- outbound writes either complete or are abandoned safely;
+- at the drain point the registered post-drain Lua callback runs exactly
+  once and must do synchronous work only:
+  the state in memory is the state here, so the host can persist it (write
+  the WAL, record the superblock `flushed` flag).
+- after the callback, every remaining handle is closed, the callbacks are
+  drained, and `uv_loop_close` runs with its return value checked.
+
+Registered via `lunet.on_stop(fn)` (replaces a previously registered one):
+
+```lua
+lunet.on_stop(function()
+    -- synchronous only: the loop is not driving anything here
+    wal.write(state)
+    superblock.write_flag("flushed")
+end)
+lunet.stop()
+```
+
+So the lifecycle the host builds: `running` before the loop starts, `stopping`
+when termination is requested, `flushed` inside the post-drain hook. On the
+next start, `flushed` means the previous process ended cleanly; anything
+earlier means it died mid-shutdown and the WAL must be replayed.
 
 The static core does not include optional database drivers, PAXE, HTTP client,
 or release archive extension modules. Ship those separately when an application

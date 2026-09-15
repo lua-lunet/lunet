@@ -30,6 +30,10 @@ int main(void) {
     fprintf(stderr, "expected failure for run_file(NULL runtime)\n");
     return 1;
   }
+  if (lunet_runtime_request_stop(NULL) == 0) {
+    fprintf(stderr, "expected failure for request_stop(NULL runtime)\n");
+    return 1;
+  }
 
   options.executable_path = "sdk-api-test";
   if (lunet_runtime_init(&runtime, &options, error, sizeof(error)) != 0) {
@@ -88,6 +92,12 @@ int main(void) {
   if (lunet_runtime_run_file(runtime, "test/sdk_api_script.lua", &exit_code, error,
                              sizeof(error)) != 0 || exit_code != 23) {
     fprintf(stderr, "file run failed: %s (exit %d)\n", error, exit_code);
+    lunet_runtime_shutdown(runtime);
+    return 1;
+  }
+  /* A stop request after the run returned is a harmless no-op. */
+  if (lunet_runtime_request_stop(runtime) != 0) {
+    fprintf(stderr, "request_stop after run failed\n");
     lunet_runtime_shutdown(runtime);
     return 1;
   }

@@ -3,6 +3,16 @@
 
 #include "lunet_lua.h"
 
+struct uv_handle_s;
+
+/*
+ * Close one socket context during the drain-point teardown. Dispatched by
+ * lunet.c's uv_walk over every handle that is still open after the event
+ * loop has stopped. Does nothing when the handle is already closing or has
+ * no client/server context attached.
+ */
+void lunet_socket_teardown_close(struct uv_handle_s *handle);
+
 int lunet_socket_listen(lua_State* L);
 int lunet_socket_accept(lua_State* L);
 int lunet_socket_getpeername(lua_State* L);

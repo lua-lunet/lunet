@@ -33,9 +33,37 @@ static char *lunet_resolve_executable_path(const char *argv0) {
 
 lunet_runtime_config_t g_lunet_config = {0};
 
+/* Registry key for the post-drain on_stop hook (light userdata address key) */
+static char lunet_on_stop_hook_key;
+
+static void lunet_teardown_close_cb(uv_handle_t *handle, void *arg);
+/*
+ * lunet.stop(): request deliberate termination from Lua.
+ */
+int lunet_stop(lua_State *L) {
+  (void)L;
+  uv_stop(uv_default_loop());
+  return 0;
+}
+
+/*
+ * lunet.on_stop(fn): register the post-drain hook (replaces any previous one).
+ */
+int lunet_on_stop(lua_State *L) {
+  luaL_checktype(L, 1, LUA_TFUNCTION);
+  lua_pushlightuserdata(L, &lunet_on_stop_hook_key);
+  lua_pushvalue(L, 1);
+  lua_rawset(L, LUA_REGISTRYINDEX);
+  return 0;
+}
+
 // register core module
 int lunet_open_core(lua_State *L) {
-  luaL_Reg funcs[] = {{"spawn", lunet_spawn}, {"sleep", lunet_sleep}, {NULL, NULL}};
+  luaL_Reg funcs[] = {{"spawn", lunet_spawn},
+                      {"sleep", lunet_sleep},
+                      {"stop", lunet_stop},
+                      {"on_stop", lunet_on_stop},
+                      {NULL, NULL}};
   luaL_newlib(L, funcs);
   return 1;
 }
@@ -233,10 +261,89 @@ struct lunet_runtime {
   lua_State *L;
   int has_run;
   char embedded_root[LUNET_EMBED_PATH_MAX];
+  /* Wakes a running event loop from any thread when a host requests a
+   * deliberate stop. Initialized lazily by lunet_runtime_request_stop and
+   * closed during the drain-point teardown alongside every other handle. */
+  uv_async_t stop_wakeup;
+  int stop_wakeup_inited;
+  /* Set for the duration of the event loop run: a stop request while no
+   * loop is running returns as a harmless no-op (also keeps request_stop
+   * away from a wakeup handle that the teardown already closed). */
+  int loop_running;
 };
 
 static lunet_runtime_t *g_active_runtime = NULL;
 static int g_runtime_consumed = 0;
+
+/* Wakeup dispatched in the loop thread when a foreign thread calls
+ * lunet_runtime_request_stop. uv_stop only ends the current iteration; the
+ * drain-point teardown runs after uv_run returns in run_path. */
+static void lunet_stop_wakeup_cb(uv_async_t *async) {
+  (void)async;
+  uv_stop(uv_default_loop());
+}
+
+/* Drain-point teardown. Runs once, right after uv_run returns, before the
+ * event loop is ever closed:
+ *   1. invoke the registered on_stop hook exactly once (in-memory state is
+ *      final here; this is the host's safe point to persist it);
+ *   2. close every remaining handle via uv_walk (socket, UDP, sleep timers,
+ *      signal waits, the stop-wakeup async itself);
+ *   3. keep running the loop until the close callbacks drained, leaving the
+ *      loop handle-free so the checked uv_loop_close in shutdown succeeds. */
+static void lunet_runtime_teardown_loop(lua_State *L) {
+  uv_loop_t *loop = uv_default_loop();
+
+  /* 1. Post-drain hook. Clear the registry slot first so the callback can
+   * never fire a second time, even across a reentrant teardown. */
+  lua_pushlightuserdata(L, &lunet_on_stop_hook_key);
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  lua_pushlightuserdata(L, &lunet_on_stop_hook_key);
+  lua_pushnil(L);
+  lua_rawset(L, LUA_REGISTRYINDEX);
+  if (lua_isfunction(L, -1)) {
+    if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+      const char *err = lua_tostring(L, -1);
+      fprintf(stderr, "[lunet] on_stop callback error: %s\n", err ? err : "unknown");
+    }
+  }
+  lua_pop(L, 1);
+
+  /* 2. No new work may be accepted after this point: every handle closes. */
+  uv_walk(loop, lunet_teardown_close_cb, NULL);
+
+  /* 3. Drain the close callbacks. */
+  while (uv_loop_alive(loop)) {
+    uv_run(loop, UV_RUN_ONCE);
+  }
+}
+
+/* Hook for the uv_walk teardown pass: dispatch each still-open handle to
+ * the module that owns its context; unknown handle types close bare. */
+static void lunet_teardown_close_cb(uv_handle_t *handle, void *arg) {
+  (void)arg;
+  if (uv_is_closing(handle)) {
+    return;
+  }
+  switch (handle->type) {
+    case UV_TCP:
+    case UV_NAMED_PIPE:
+      lunet_socket_teardown_close(handle);
+      break;
+    case UV_UDP:
+      lunet_udp_teardown_close(handle);
+      break;
+    case UV_TIMER:
+      lunet_timer_teardown_close(handle);
+      break;
+    case UV_SIGNAL:
+      lunet_signal_teardown_close(handle);
+      break;
+    default:
+      uv_close(handle, NULL);
+      break;
+  }
+}
 
 static void lunet_runtime_set_error(char *error, size_t error_len, const char *fmt, ...) {
   va_list ap;
@@ -354,7 +461,13 @@ static int lunet_runtime_run_path(lunet_runtime_t *runtime,
     lua_pop(runtime->L, 1);
     return -1;
   }
+  runtime->loop_running = 1;
   loop_result = uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+  runtime->loop_running = 0;
+  /* Drain point: stop requested (or the loop emptied) -> run the on_stop
+   * hook while in-memory state is final, then close every remaining handle
+   * and drain the close callbacks. */
+  lunet_runtime_teardown_loop(runtime->L);
   lua_getglobal(runtime->L, "__lunet_exit_code");
   if (lua_isnumber(runtime->L, -1)) {
     lua_exit_code = (int)lua_tointeger(runtime->L, -1);
@@ -397,6 +510,15 @@ int lunet_runtime_init(lunet_runtime_t **out_runtime,
   set_default_luaL(runtime->L);
   lunet_open(runtime->L);
   lunet_runtime_configure_module_paths(runtime->L, options ? options->executable_path : NULL);
+  /* Arm the cross-thread stop wakeup now: uv_async_init is only safe on the
+   * loop thread, and an idle uv_async_t does not keep the loop alive. */
+  if (uv_async_init(uv_default_loop(), &runtime->stop_wakeup, lunet_stop_wakeup_cb) != 0) {
+    lua_close(runtime->L);
+    free(runtime);
+    lunet_runtime_set_error(error, error_len, "failed to initialize stop wakeup");
+    return -1;
+  }
+  runtime->stop_wakeup_inited = 1;
   g_active_runtime = runtime;
   g_runtime_consumed = 1;
   *out_runtime = runtime;
@@ -459,6 +581,17 @@ void lunet_runtime_shutdown(lunet_runtime_t *runtime) {
   if (!runtime || runtime != g_active_runtime) {
     return;
   }
+  /* The drain-point teardown in run_path closes the wakeup handle; also
+   * close it here so a failed or never-started run cannot strand it. */
+  if (runtime->stop_wakeup_inited) {
+    uv_handle_t *wakeup = (uv_handle_t *)&runtime->stop_wakeup;
+    if (!uv_is_closing(wakeup)) {
+      uv_close(wakeup, NULL);
+    }
+    if (uv_loop_alive(uv_default_loop())) {
+      uv_run(uv_default_loop(), UV_RUN_ONCE);
+    }
+  }
   lunet_trace_shutdown();
   lua_close(runtime->L);
   lunet_embed_scripts_cleanup(runtime->embedded_root);
@@ -477,6 +610,22 @@ void lunet_runtime_shutdown(lunet_runtime_t *runtime) {
 #endif
   g_active_runtime = NULL;
   free(runtime);
+}
+
+int lunet_runtime_request_stop(lunet_runtime_t *runtime) {
+  if (!runtime || runtime != g_active_runtime) {
+    return -1;
+  }
+  if (!runtime->loop_running) {
+    /* The wakeup handle is armed at init but the loop is not running:
+     * nothing to stop (and the teardown may already have closed it). */
+    return 0;
+  }
+  /* The wakeup handle is armed at init (uv_async_init needs the loop
+   * thread; uv_async_send is the one thread-safe libuv call). An idle
+   * uv_async_t does not keep the loop alive, so it cannot hang the run. */
+  uv_async_send(&runtime->stop_wakeup);
+  return 0;
 }
 
 void *lunet_runtime_get_lua_state(lunet_runtime_t *runtime) {

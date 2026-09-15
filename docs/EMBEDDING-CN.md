@@ -81,19 +81,55 @@ cl /nologo /std:c11 /I include /I generated `
 
 ## C API 和生命周期
 
-`include/lunet.h` 提供不透明的 `lunet_runtime_t` 和四个函数：
+`include/lunet.h` 提供不透明的 `lunet_runtime_t` 和五个函数：
 
 1. 调用一次 `lunet_runtime_init`；可选地提供可执行文件路径以及
    `dangerously_skip_loopback_restriction=1`。
 2. 只能调用一次 `lunet_runtime_run_file` 或
    `lunet_runtime_run_embedded`。
 3. 将返回的 API 状态与输出的应用退出码分开处理。
-4. 初始化成功后始终调用 `lunet_runtime_shutdown`。
+4. 调用 `lunet_runtime_request_stop` 请求主动停止（让运行时经历下面的排水点）。
+   这是唯一线程安全的调用：宿主可在其他线程调用它，同时 `run_file` /
+   `run_embedded` 在运行时线程上阻塞。
+5. 初始化成功后始终调用 `lunet_runtime_shutdown`。
 
 运行时每个进程仅支持一次初始化和一次应用运行，因为 Lunet 使用一个默认 Lua
 状态和 libuv 事件循环。`run_embedded` 只接受安全的相对入口脚本路径，并会在运行
 前验证 `LUNETPK1` gzip blob。仅绑定回环地址仍是默认行为；危险的退出选项在
 `lunet_runtime_options_t` 中显式指定。
+
+## 主动停止、排水点与后排水钩子
+
+运行中的应用可自行请求终止（`lunet.stop()`），宿主也可以从 C 调用
+`lunet_runtime_request_stop`。语义如下：
+
+- 事件循环立即停止接收新工作（`uv_stop` 结束当前迭代，之后不会有新的
+  accept/read 推进）；
+- 已经接收的工作继续完成：teardown 会完成挂在仍处于悬停状态的睡眠定时器
+  之后的协程；
+- 出站写入要么完成，要么被安全放弃；
+- 在到达排水点时，注册的后排水 Lua 回调恰好运行一次，且只能进行同步工作：
+  此时内存中的状态即最终状态，宿主可以有保障地持久化（写入 WAL，写入
+  超级块的 `flushed` 标记）；
+- 回调返回后，所有剩余句柄全部关闭，回调被逐层清空，然后调用
+  `uv_loop_close` 并检验其返回值。
+
+## 后排水钩子的创建方式
+
+可通过 `lunet.on_stop(fn)` 注册（会替换先前注册的那个）：
+
+```lua
+lunet.on_stop(function()
+    -- 只做同步操作：事件循环已不再驱动任何内容
+    wal.write(state)
+    superblock.write_flag("flushed")
+end)
+lunet.stop()
+```
+
+因此宿主构建的生命周期为：事件循环启动前状态为 `running`；请求终止时为
+`stopping`；在后排水钩子内部为 `flushed`。下次启动时，`flushed` 表示上一次
+进程干净终止；任何其他结尾都说明该进程在关机过程中死亡，必须重放 WAL。
 
 静态核心不包含可选数据库驱动、PAXE、HTTP 客户端或发布压缩包中的扩展模块。
 应用使用它们时请单独分发。

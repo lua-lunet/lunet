@@ -1283,6 +1283,68 @@ int lunet_socket_getpeername(lua_State *L) {
   return 2;
 }
 
+/* Shared stop/close path for a socket context, used by the Lua socket.close
+ * entry point and by the drain-point teardown (uv_walk over remaining
+ * handles). Takes the ctx directly; the Lua-facing call must validate the
+ * handle argument first. */
+static void lunet_socket_close_ctx_now(socket_ctx_t *ctx) {
+  if (ctx->closing) {
+    return;
+  }
+
+  ctx->closing = 1;
+
+  if (ctx->type == SOCKET_SERVER) {
+    /* Wake a coroutine parked in socket.accept: no listen_cb can fire
+     * after close, so without this it would hang forever with its coref
+     * leaked. */
+    lunet_accept_wake(ctx, "listener closed");
+
+    /* Drain connections that were accepted but never delivered to Lua. */
+    lunet_server_drain_pending(ctx);
+  } else {
+    /* Stop reading immediately so libuv won't fire read_cb after close */
+    uv_read_stop(&ctx->u.stream);
+
+    /* Coroutines parked in socket.read/write can never make forward
+     * progress after close; resume them with an error now. */
+    if (ctx->client.read_ref != LUA_NOREF) {
+      lua_State *co = ctx->owner_L;
+      lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->client.read_ref);
+      lunet_coref_release(co, ctx->client.read_ref);
+      ctx->client.read_ref = LUA_NOREF;
+      SOCKET_BK_CANCEL(ctx, "read");
+
+      if (lua_isthread(co, -1)) {
+        lua_State *waiting_co = lua_tothread(co, -1);
+        lua_pop(co, 1);
+
+        lua_pushnil(waiting_co);
+        lua_pushstring(waiting_co, "socket closed");
+
+        int resume_status = lunet_co_resume(waiting_co, 2);
+        if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
+          const char *err = lua_tostring(waiting_co, -1);
+          if (err) {
+            fprintf(stderr, "[lunet] resume error in socket_close: %s\n", err);
+          }
+        }
+      } else {
+        lua_pop(co, 1);
+        fprintf(stderr,
+                "[lunet] socket_close: read waiter's registry slot was "
+                "not a coroutine\n");
+      }
+
+      socket_ctx_release(ctx);
+    }
+
+    lunet_write_wake(ctx, "socket closed");
+  }
+
+  uv_close(&ctx->u.handle, lunet_close_cb);
+}
+
 int lunet_socket_close(lua_State *L) {
   socket_handle_t *handle = socket_handle_check(L, 1);
   if (!handle) {
@@ -1298,62 +1360,23 @@ int lunet_socket_close(lua_State *L) {
 
   SOCKET_TRACE_CLOSE(ctx);
 
-  if (!ctx->closing) {
-      ctx->closing = 1;
-
-      if (ctx->type == SOCKET_SERVER) {
-        /* Wake a coroutine parked in socket.accept: no listen_cb can fire
-         * after close, so without this it would hang forever with its coref
-         * leaked. */
-        lunet_accept_wake(ctx, "listener closed");
-
-        /* Drain connections that were accepted but never delivered to Lua. */
-        lunet_server_drain_pending(ctx);
-      } else {
-        /* Stop reading immediately so libuv won't fire read_cb after close */
-        uv_read_stop(&ctx->u.stream);
-
-        /* Coroutines parked in socket.read/write can never make forward
-         * progress after close; resume them with an error now. */
-        if (ctx->client.read_ref != LUA_NOREF) {
-          lua_State *co = ctx->owner_L;
-          lua_rawgeti(co, LUA_REGISTRYINDEX, ctx->client.read_ref);
-          lunet_coref_release(co, ctx->client.read_ref);
-          ctx->client.read_ref = LUA_NOREF;
-          SOCKET_BK_CANCEL(ctx, "read");
-
-          if (lua_isthread(co, -1)) {
-            lua_State *waiting_co = lua_tothread(co, -1);
-            lua_pop(co, 1);
-
-            lua_pushnil(waiting_co);
-            lua_pushstring(waiting_co, "socket closed");
-
-            int resume_status = lunet_co_resume(waiting_co, 2);
-            if (resume_status != LUA_OK && resume_status != LUA_YIELD) {
-              const char *err = lua_tostring(waiting_co, -1);
-              if (err) {
-                fprintf(stderr, "[lunet] resume error in socket_close: %s\n", err);
-              }
-            }
-          } else {
-            lua_pop(co, 1);
-            fprintf(stderr,
-                    "[lunet] socket_close: read waiter's registry slot was "
-                    "not a coroutine\n");
-          }
-
-          socket_ctx_release(ctx);
-        }
-
-        lunet_write_wake(ctx, "socket closed");
-      }
-
-      uv_close(&ctx->u.handle, lunet_close_cb);
-  }
+  lunet_socket_close_ctx_now(ctx);
 
   lua_pushnil(L);
   return 1;
+}
+
+/* Drain-point teardown hook (declared in socket.h). The walk handles any
+ * still-open stream socket (listener or connection) after the event loop
+ * has stopped taking new work. */
+void lunet_socket_teardown_close(struct uv_handle_s *raw) {
+  uv_handle_t *handle = (uv_handle_t *)raw;
+  socket_ctx_t *ctx = (socket_ctx_t *)handle->data;
+  if (!ctx) {
+    return;
+  }
+  SOCKET_TRACE_CLOSE(ctx);
+  lunet_socket_close_ctx_now(ctx);
 }
 
 int lunet_socket_read(lua_State *co) {

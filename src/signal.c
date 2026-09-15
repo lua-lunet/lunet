@@ -56,6 +56,39 @@ static void signal_close_cb(uv_handle_t *handle) {
   lunet_free_nonnull(handle->data);
 }
 
+/*
+ * Drain-point teardown (declared in lunet_signal.h). The waiting coroutine
+ * is woken with an error, the signal handler is unwatched, the handle is
+ * closed and its context freed. No-op when the handle has no waiting
+ * context attached.
+ */
+void lunet_signal_teardown_close(struct uv_handle_s *raw) {
+  uv_handle_t *handle = (uv_handle_t *)raw;
+  signal_ctx_t *ctx = (signal_ctx_t *)handle->data;
+  if (!ctx) {
+    return;
+  }
+  uv_signal_stop((uv_signal_t *)handle);
+
+  lua_State *L = ctx->owner_L;
+  if (ctx->co_ref != LUA_NOREF) {
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
+    lunet_coref_release(L, ctx->co_ref);
+    ctx->co_ref = LUA_NOREF;
+    if (lua_isthread(L, -1)) {
+      lua_State *waiting_co = lua_tothread(L, -1);
+      lua_pop(L, 1);
+      lua_pushnil(waiting_co);
+      lua_pushstring(waiting_co, "runtime shutting down");
+      (void)lunet_co_resume(waiting_co, 2);
+    } else {
+      lua_pop(L, 1);
+    }
+  }
+
+  uv_close(handle, signal_close_cb);
+}
+
 static void lunet_signal_cb(uv_signal_t *handle, int signo) {
   signal_ctx_t *ctx = (signal_ctx_t *)handle->data;
   lua_State *L = ctx->owner_L;

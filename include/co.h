@@ -6,6 +6,23 @@
 int lunet_spawn(lua_State *L);
 
 /*
+ * lunet.stop(): request deliberate termination from Lua. The event loop
+ * stops taking new work; run_file / run_embedded return after the drain
+ * point (on_stop hook fired, all remaining handles closed). Repeat calls
+ * are safe no-ops. Violates nothing if the loop is not running.
+ */
+int lunet_stop(lua_State *L);
+
+/*
+ * lunet.on_stop(fn): register the post-drain hook. The hook runs exactly
+ * once at the drain point (after uv_run returns, before any handle is
+ * closed) and must use synchronous I/O only -- the event loop is not
+ * driving anything at that point, so registering new async operations
+ * cannot progress. Calling it with a non-callable value raises an error.
+ */
+int lunet_on_stop(lua_State *L);
+
+/*
  * Unanchor a coroutine from the alive-set, allowing GC to collect it.
  * Call this after lua_resume returns LUA_OK or an error (coroutine is done).
  */

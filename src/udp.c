@@ -548,16 +548,10 @@ int lunet_udp_getsockname(lua_State *L) {
   return 3;
 }
 
-int lunet_udp_close(lua_State *L) {
-  if (lunet_ensure_coroutine(L, "udp.close") != 0) return 2;
-
-  udp_ctx_t *ctx = (udp_ctx_t *)lua_touserdata(L, 1);
-  if (ctx == NULL) {
-    lua_pushnil(L);
-    lua_pushstring(L, "invalid udp handle");
-    return 2;
-  }
-
+/* Shared close path for a UDP context, used by the Lua udp.close entry
+ * point and by the drain-point teardown. The caller must validate the
+ * context first. */
+static void lunet_udp_close_ctx_now(udp_ctx_t *ctx) {
   uv_udp_recv_stop(&ctx->handle);
 
   while (!queue_is_empty(ctx->pending)) {
@@ -591,7 +585,31 @@ int lunet_udp_close(lua_State *L) {
   UDP_TRACE_CLOSE(ctx);
 
   uv_close((uv_handle_t *)&ctx->handle, udp_on_close);
+}
+
+int lunet_udp_close(lua_State *L) {
+  if (lunet_ensure_coroutine(L, "udp.close") != 0) return 2;
+
+  udp_ctx_t *ctx = (udp_ctx_t *)lua_touserdata(L, 1);
+  if (ctx == NULL) {
+    lua_pushnil(L);
+    lua_pushstring(L, "invalid udp handle");
+    return 2;
+  }
+
+  lunet_udp_close_ctx_now(ctx);
+
   lua_pushboolean(L, 1);
   lua_pushnil(L);
   return 2;
+}
+
+/* Drain-point teardown hook (declared in udp.h). */
+void lunet_udp_teardown_close(struct uv_handle_s *raw) {
+  uv_handle_t *handle = (uv_handle_t *)raw;
+  udp_ctx_t *ctx = (udp_ctx_t *)handle->data;
+  if (!ctx) {
+    return;
+  }
+  lunet_udp_close_ctx_now(ctx);
 }

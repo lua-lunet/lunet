@@ -974,6 +974,18 @@ task("stress")
         -- fs module regressions: sequential read/write offset advancement,
         -- append mode, binary NUL payloads, fs.write return type, multi-chunk.
         os.execv(runner, {"test/smoke_fs.lua"})
+        -- Runtime shutdown: deliberate stop, drain point, on_stop hook,
+        -- clean teardown of every remaining handle (listener + bound UDP +
+        -- in-flight sleep timer). The marker file is written by the on_stop
+        -- callback itself ("ok") and appended by the accept-waiting
+        -- coroutine woken during the walk ("w"): exactly "okw".
+        local marker = path.join(os.projectdir(), ".tmp", "stop_and_drain.marker")
+        os.execv(runner, {"test/stop_and_drain.lua"})
+        local marker_text = os.isfile(marker) and (io.readfile(marker) or "") or ""
+        if not marker_text:match("^okw$") then
+            raise("stop_and_drain: marker file must contain exactly 'okw', got '" ..
+                (marker_text or "") .. "'")
+        end
     end)
 task_end()
 

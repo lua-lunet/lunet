@@ -70,6 +70,15 @@ LUNET_API int lunet_runtime_run_embedded(lunet_runtime_t *runtime,
  * successful init, even when the run failed. */
 LUNET_API void lunet_runtime_shutdown(lunet_runtime_t *runtime);
 
+/* Request a deliberate stop of the running application: the event loop
+ * stops taking new work, the registered post-drain Lua hook fires at the
+ * drain point, every remaining handle is closed, and run_file /
+ * run_embedded then return. Thread-safe: may be called from any thread,
+ * including a dedicated runtime thread while the host waits elsewhere.
+ * Calling it from Lua is the equivalent (lunet.stop()).
+ * Returns 0 on success, -1 when runtime is invalid. */
+LUNET_API int lunet_runtime_request_stop(lunet_runtime_t *runtime);
+
 /* Get the Lua state from the runtime. Returns NULL if runtime is NULL.
  * Used by main.c to set up globals like 'arg' before running scripts. */
 LUNET_API void *lunet_runtime_get_lua_state(lunet_runtime_t *runtime);

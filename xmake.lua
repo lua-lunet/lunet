@@ -618,6 +618,66 @@ target("lunet-httpc")
     end
 target_end()
 
+-- WebSocket server module: require("lunet._websocket")
+-- Lua wrapper: require("lunet.websocket")
+-- Optional via: xmake build lunet-websocket
+target("lunet-websocket")
+    set_default(false)
+    set_kind("shared")
+    add_rules("lunet.c_safety_lint")
+    set_prefixname("")
+    set_basename("_websocket")  -- Output: lunet/_websocket.so
+    set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
+    if is_plat("windows") then
+        set_extension(".dll")
+    else
+        set_extension(".so")
+    end
+
+    add_files(core_sources)
+    add_files("ext/websocket/ws.c")
+    add_includedirs("include", "ext/websocket", {public = true})
+    add_packages("luajit", "libuv")
+    if is_plat("macosx") then
+        add_includedirs("/opt/homebrew/include", {public = false})
+        add_linkdirs("/opt/homebrew/lib")
+        add_links("wslay")
+    elseif is_plat("windows") then
+        add_includedirs("$(env VCPKG_ROOT)/installed/x64-windows/include", {public = false})
+        add_linkdirs("$(env VCPKG_ROOT)/installed/x64-windows/lib")
+        add_links("wslay")
+    else
+        add_includedirs("/usr/include", "/usr/local/include", {public = false})
+        add_linkdirs("/usr/lib", "/usr/local/lib")
+        add_links("wslay")
+    end
+    lunet_apply_asan_flags("shared")
+    lunet_apply_easy_memory()
+
+    add_defines("LUNET_NO_MAIN", "LUNET_WEBSOCKET")
+
+    if is_plat("macosx") then
+        add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
+    end
+    if is_plat("linux") then
+        add_defines("_GNU_SOURCE")
+        add_cflags("-pthread")
+        add_ldflags("-pthread")
+        add_syslinks("pthread", "dl", "m")
+    end
+    if is_plat("windows") then
+        add_cflags("/TC")
+        add_defines("LUNET_BUILDING_DLL")
+        add_syslinks("ws2_32", "iphlpapi", "userenv", "psapi", "advapi32", "user32", "shell32", "ole32", "dbghelp")
+    end
+    if has_config("lunet_trace") then
+        add_defines("LUNET_TRACE")
+    end
+    if has_config("lunet_verbose_trace") then
+        add_defines("LUNET_TRACE_VERBOSE")
+    end
+target_end()
+
 -- =============================================================================
 -- Developer Tasks (xmake-only workflow)
 -- =============================================================================

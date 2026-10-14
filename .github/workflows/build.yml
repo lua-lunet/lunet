@@ -611,24 +611,19 @@ jobs:
           xmake lua bin\generate_embed_scripts.lua
           if ($LASTEXITCODE -ne 0) { throw "SDK blob generation failed" }
           # The blacksmith Windows runner has MSVC installed but does not put
-          # `cl` on PATH. Resolve it via vswhere so the SDK compile can run.
+          # `cl` on PATH, and the Windows SDK include paths are not set either.
+          # Locate VS installation and invoke cl via vcvarsall.bat so INCLUDE/LIB
+          # are populated with Windows SDK headers (ucrt, um) and library paths.
           $vsInstall = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if (-not $vsInstall) { throw "Visual Studio installation not found" }
-          $vcToolsRoot = Join-Path $vsInstall "VC\Tools\MSVC"
-          $vcToolsDir = Get-ChildItem -Path $vcToolsRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
-          if (-not $vcToolsDir) { throw "VC tools directory not found under $vcToolsRoot" }
-          $cl = Join-Path $vcToolsDir.FullName "bin\Hostx64\x64\cl.exe"
-          if (-not (Test-Path $cl)) { throw "cl.exe not found at $cl" }
-          Write-Host "Using cl: $cl"
-          # /MD is required, not optional: lunet-static.lib is built against the
-          # dynamic CRT, so its objects reference __imp_ CRT symbols, and the
-          # vcpkg x64-windows triplet is dynamic too. Without /MD, cl defaults to
-          # the static CRT and the link dies with LNK2019 on __imp__fullpath,
-          # __imp_fopen, __imp_fwrite, __imp_realloc, __imp_strerror and
-          # __imp__mkdir (preceded by a wall of LNK4217/LNK4286 "defined in
-          # libucrt.lib ... is imported by" warnings, which are the tell).
-          & $cl /nologo /std:c11 /MD /I include /I generated /I "$env:VCPKG_ROOT\installed\x64-windows\include" examples\sdk_embed\main.c lib\lunet-static.lib /link /LIBPATH:"$env:VCPKG_ROOT\installed\x64-windows\lib" lua51.lib uv.lib zlib.lib ws2_32.lib iphlpapi.lib userenv.lib psapi.lib advapi32.lib user32.lib shell32.lib ole32.lib dbghelp.lib /OUT:sdk-embedded-app.exe
-          if ($LASTEXITCODE -ne 0) { throw "SDK example compile failed" }
+          $vcvars = Join-Path $vsInstall "VC\Auxiliary\Build\vcvarsall.bat"
+          if (-not (Test-Path $vcvars)) { throw "vcvarsall.bat not found at $vcvars" }
+          # Build the cl command line as a single string for cmd /c.
+          # The vcvarsall.bat x64 call sets up INCLUDE/LIB for Windows SDK + CRT.
+          $clCmd = '& "' + $vcvars + '" x64 && cl /nologo /std:c11 /MD /I include /I generated /I "' + $env:VCPKG_ROOT + '\installed\x64-windows\include" examples\sdk_embed\main.c lib\lunet-static.lib /link /LIBPATH:"' + $env:VCPKG_ROOT + '\installed\x64-windows\lib" lua51.lib uv.lib zlib.lib ws2_32.lib iphlpapi.lib userenv.lib psapi.lib advapi32.lib user32.lib shell32.lib ole32.lib dbghelp.lib /OUT:sdk-embedded-app.exe'
+          Write-Host "Invoking cl via vcvarsall..."
+          $result = cmd /c $clCmd
+          if ($LASTEXITCODE -ne 0) { throw "SDK example compile failed (exit $LASTEXITCODE)" }
           # /MD plus the dynamic vcpkg triplet means the exe loads lua51.dll,
           # uv.dll and zlib1.dll at runtime. They live in vcpkg's bin, not in
           # the SDK archive, so without this the process dies before main()

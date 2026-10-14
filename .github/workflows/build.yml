@@ -51,7 +51,10 @@ jobs:
         run: |
           TARGETS="${{ github.event.inputs.targets }}"
           # Full matrix definition (compact JSON for GitHub Actions output)
-          ALL='{"include":[{"os":"ubuntu-latest","arch":"amd64","platform":"linux","target_key":"linux-amd64"},{"os":"blacksmith-4vcpu-ubuntu-2404-arm","arch":"arm64","platform":"linux","target_key":"linux-arm64"},{"os":"macos-latest","arch":"arm64","platform":"macos","target_key":"macos"},{"os":"blacksmith-4vcpu-windows-2025","arch":"amd64","platform":"windows","target_key":"windows"}]}'
+          # Windows temporarily disabled: the blacksmith-4vcpu-windows-2025 runner
+          # is not surfacing `cl` / MSVC at the moment. See the follow-up branch
+          # that fixes the Windows setup and re-enables this matrix entry.
+          ALL='{"include":[{"os":"ubuntu-latest","arch":"amd64","platform":"linux","target_key":"linux-amd64"},{"os":"blacksmith-4vcpu-ubuntu-2404-arm","arch":"arm64","platform":"linux","target_key":"linux-arm64"},{"os":"macos-latest","arch":"arm64","platform":"macos","target_key":"macos"}]}'
           if [ -z "$TARGETS" ]; then
             echo "matrix=$ALL" >> "$GITHUB_OUTPUT"
           else
@@ -776,7 +779,10 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        os: [ubuntu-latest, macos-latest, blacksmith-4vcpu-windows-2025]
+        # Windows temporarily disabled while the MSVC environment on the
+        # blacksmith-4vcpu-windows-2025 runner is fixed. Re-enable once `cl`
+        # is available in PATH again.
+        os: [ubuntu-latest, macos-latest]
 
     steps:
     - name: Checkout

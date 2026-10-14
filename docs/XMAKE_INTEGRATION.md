@@ -1,5 +1,9 @@
 # Integrating Lunet into Your Project
 
+> Just want a runtime? A prebuilt release archive needs no toolchain at all —
+> see "Get a runtime" in [README.md](../README.md). Build from source only
+> when you must compile on the target box or want to get into the low levels.
+
 This guide helps you build and use Lunet in your own application. No prior xmake experience required.
 
 ## What is xmake?

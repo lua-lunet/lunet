@@ -1,7 +1,9 @@
 # `lunet.sqlite3`
 
-SQLite driver. Build with `xmake build lunet-sqlite3`; output is
-`lunet/sqlite3.so`.
+SQLite driver. Either `require("lunet.sqlite3")` a prebuilt module straight
+from a release archive (`lunet/sqlite3.so`; see the archive layout in
+[docs/RELEASE-LAYOUT.md](docs/RELEASE-LAYOUT.md)), or build it yourself with
+`xmake build lunet-sqlite3`; output is `lunet/sqlite3.so`.
 
 Placeholders are `?`. Parameters are bound natively via `sqlite3_bind_*`, so
 values are never concatenated into SQL. There is deliberately no `db.escape`.

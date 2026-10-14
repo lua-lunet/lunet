@@ -1,6 +1,9 @@
 # `lunet.sqlite3`
 
-SQLite 驱动。使用 `xmake build lunet-sqlite3` 构建，产物为 `lunet/sqlite3.so`。
+SQLite 驱动。可以直接 `require("lunet.sqlite3")` 发布压缩包中的预构建模块
+（`lunet/sqlite3.so`；压缩包布局见
+[docs/RELEASE-LAYOUT-CN.md](docs/RELEASE-LAYOUT-CN.md)），也可以自己用
+`xmake build lunet-sqlite3` 构建，产物为 `lunet/sqlite3.so`。
 
 占位符为 `?`。参数通过 `sqlite3_bind_*` 原生绑定，值永远不会被拼接进 SQL。
 本项目有意不提供 `db.escape`。

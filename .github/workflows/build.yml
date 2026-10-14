@@ -51,10 +51,7 @@ jobs:
         run: |
           TARGETS="${{ github.event.inputs.targets }}"
           # Full matrix definition (compact JSON for GitHub Actions output)
-          # Windows temporarily disabled: the blacksmith-4vcpu-windows-2025 runner
-          # is not surfacing `cl` / MSVC at the moment. See the follow-up branch
-          # that fixes the Windows setup and re-enables this matrix entry.
-          ALL='{"include":[{"os":"ubuntu-latest","arch":"amd64","platform":"linux","target_key":"linux-amd64"},{"os":"blacksmith-4vcpu-ubuntu-2404-arm","arch":"arm64","platform":"linux","target_key":"linux-arm64"},{"os":"macos-latest","arch":"arm64","platform":"macos","target_key":"macos"}]}'
+          ALL='{"include":[{"os":"ubuntu-latest","arch":"amd64","platform":"linux","target_key":"linux-amd64"},{"os":"blacksmith-4vcpu-ubuntu-2404-arm","arch":"arm64","platform":"linux","target_key":"linux-arm64"},{"os":"macos-latest","arch":"arm64","platform":"macos","target_key":"macos"},{"os":"blacksmith-4vcpu-windows-2025","arch":"amd64","platform":"windows","target_key":"windows"}]}'
           if [ -z "$TARGETS" ]; then
             echo "matrix=$ALL" >> "$GITHUB_OUTPUT"
           else
@@ -144,6 +141,12 @@ jobs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: pwsh contributing/deps/windows.ps1
+
+    - name: Setup MSVC dev environment (Windows)
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
 
     - name: Configure (Unix)
       if: runner.os != 'Windows'
@@ -779,10 +782,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        # Windows temporarily disabled while the MSVC environment on the
-        # blacksmith-4vcpu-windows-2025 runner is fixed. Re-enable once `cl`
-        # is available in PATH again.
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, blacksmith-4vcpu-windows-2025]
 
     steps:
     - name: Checkout
@@ -827,6 +827,12 @@ jobs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: pwsh contributing/deps/windows.ps1
+
+    - name: Setup MSVC dev environment (Windows)
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
 
     - name: Configure EasyMem + ASAN (Unix)
       if: runner.os != 'Windows'

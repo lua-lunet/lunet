@@ -620,7 +620,9 @@ jobs:
           if (-not (Test-Path $vcvars)) { throw "vcvarsall.bat not found at $vcvars" }
           # Build the cl command line as a single string for cmd /c.
           # The vcvarsall.bat x64 call sets up INCLUDE/LIB for Windows SDK + CRT.
-          $clCmd = '& "' + $vcvars + '" x64 && cl /nologo /std:c11 /MD /I include /I generated /I "' + $env:VCPKG_ROOT + '\installed\x64-windows\include" examples\sdk_embed\main.c lib\lunet-static.lib /link /LIBPATH:"' + $env:VCPKG_ROOT + '\installed\x64-windows\lib" lua51.lib uv.lib zlib.lib ws2_32.lib iphlpapi.lib userenv.lib psapi.lib advapi32.lib user32.lib shell32.lib ole32.lib dbghelp.lib /OUT:sdk-embedded-app.exe'
+          # Build the cl command line for cmd /c: call vcvarsall then cl.
+          # No leading '&' — that is PowerShell's call operator, not for cmd.
+          $clCmd = '"' + $vcvars + '" x64 && cl /nologo /std:c11 /MD /I include /I generated /I "' + $env:VCPKG_ROOT + '\installed\x64-windows\include" examples\sdk_embed\main.c lib\lunet-static.lib /link /LIBPATH:"' + $env:VCPKG_ROOT + '\installed\x64-windows\lib" lua51.lib uv.lib zlib.lib ws2_32.lib iphlpapi.lib userenv.lib psapi.lib advapi32.lib user32.lib shell32.lib ole32.lib dbghelp.lib /OUT:sdk-embedded-app.exe'
           Write-Host "Invoking cl via vcvarsall..."
           $result = cmd /c $clCmd
           if ($LASTEXITCODE -ne 0) { throw "SDK example compile failed (exit $LASTEXITCODE)" }

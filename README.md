@@ -18,6 +18,43 @@ Lunet began as a way to write **tiny localhost MCP servers** — Model Context P
 | **Package an appliance** | You ship one self-contained executable — your `main()` + Lunet + your app | The release SDK + a C compiler | [docs/EMBEDDING.md](docs/EMBEDDING.md) |
 | **Hack the core** | You develop Lunet itself, or want a minimal feature build | xmake + system dev libraries | `make init`, then [docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md) |
 
+## Get a runtime
+
+**The easy option: download a prebuilt release archive.** No toolchain at
+all — each [release](https://github.com/lua-lunet/lunet/releases) publishes
+a self-contained archive (`lunet-linux-amd64.tar.gz`,
+`lunet-linux-arm64.tar.gz`, `lunet-macos.tar.gz`,
+`lunet-windows-amd64.zip`) containing `lunet-run` and every extension as a
+prebuilt binary:
+
+```bash
+TAG=v0.10.0
+curl -fsSLO "https://github.com/lua-lunet/lunet/releases/download/${TAG}/lunet-macos.tar.gz"
+tar -xzf lunet-macos.tar.gz
+./lunet-run path/to/app.lua
+```
+
+(On Windows, download and unzip `lunet-windows-amd64.zip`.) The runtime
+packages your OS already ships satisfy the shared-library references — on
+Debian/Ubuntu: `libluajit-5.1-2 libuv1 zlib1g`, plus one package per
+extension you actually `require()` (for example `libsqlite3-0` for the
+SQLite driver, `libcurl4` for `lunet.httpc`). Verbatim dependency list and
+platform notes: [docs/RELEASE-LAYOUT.md](docs/RELEASE-LAYOUT.md).
+
+What is inside the archive:
+
+| File | What it is |
+|------|-----------|
+| `lunet-run` | standalone executable — run Lua apps directly |
+| `lunet.so` | core shared library for `require("lunet")` |
+| `lunet/` | prebuilt extension modules: `sqlite3` / `mysql` / `postgres` drivers + transaction wrappers, `httpc`, the Rust extensions (`lnt_shared`, `jsonic`, `paxe`, `sodium`) as `.so` / `.dylib` / `.dll` |
+| `types/` | LuaCATS annotations for editor completion |
+| `*.md` | bundled docs |
+
+You can also build from source to get into the low levels — see
+[docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md). That path is required
+when the target rules out prebuilt binaries; otherwise use the archive.
+
 ## Security posture: loopback by default
 
 Lunet refuses to bind listeners to anything other than `127.0.0.1`, `::1`, or a Unix socket — **no remote security holes by default**. To expose a service, put a battle-hardened sidecar in front (nginx, OpenResty, Caddy, Envoy — the admin picks) so protocol-smashing attacks die at the proxy, not in your Lua coroutine. On a private network whose only ingress is a hardened cloud proxy that scrubs bad traffic and absorbs DDoS, binding all interfaces can be safe — but Lunet makes you say that out loud with the explicit `--dangerously-skip-loopback-restriction` flag. Details: [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md).
@@ -107,6 +144,11 @@ First build the runner:
 xmake build-release
 LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1)
 ```
+
+If you downloaded a prebuilt release archive instead of building, point
+`LUNET_BIN` at its `lunet-run`: the `lunet/` directory next to it already
+ships every extension listed in the "Requires" column below as a prebuilt
+binary — `xmake build <target>` is only needed when you build from source.
 
 | # | Example | What it shows | Requires | Run |
 |---:|---------|---------------|----------|-----|

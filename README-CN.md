@@ -18,6 +18,41 @@ Lunet 最初的用途是编写**微型 localhost MCP 服务器** —— 运行�
 | **打包一体机** | 你要交付单一自包含可执行文件 —— 你的 `main()` + Lunet + 你的应用 | 发布版 SDK + 一个 C 编译器 | [docs/EMBEDDING-CN.md](docs/EMBEDDING-CN.md) |
 | **hack 核心** | 你开发 Lunet 本身，或想要最小化功能构建 | xmake + 系统开发库 | `make init`，然后 [docs/XMAKE_INTEGRATION-CN.md](docs/XMAKE_INTEGRATION-CN.md) |
 
+## 获取运行时
+
+**最省事的办法：直接下载预构建发布包。** 无需任何工具链 —— 每个
+[发布](https://github.com/lua-lunet/lunet/releases) 都会发布自包含压缩包
+（`lunet-linux-amd64.tar.gz`、`lunet-linux-arm64.tar.gz`、
+`lunet-macos.tar.gz`、`lunet-windows-amd64.zip`），内含 `lunet-run` 与全部
+扩展模块的预构建二进制：
+
+```bash
+TAG=v0.10.0
+curl -fsSLO "https://github.com/lua-lunet/lunet/releases/download/${TAG}/lunet-macos.tar.gz"
+tar -xzf lunet-macos.tar.gz
+./lunet-run path/to/app.lua
+```
+
+（Windows 用户：下载并解压 `lunet-windows-amd64.zip`。）共享库引用由你
+操作系统已有的运行时包满足 —— 在 Debian/Ubuntu 上：`libluajit-5.1-2
+libuv1 zlib1g`，再为你实际 `require()` 的每个扩展装一个运行时包（例如
+SQLite 驱动装 `libsqlite3-0`，`lunet.httpc` 装 `libcurl4`）。完整的依赖
+清单与平台说明见：[docs/RELEASE-LAYOUT-CN.md](docs/RELEASE-LAYOUT-CN.md)。
+
+压缩包内容一览：
+
+| 文件 | 是什么 |
+|------|--------|
+| `lunet-run` | 独立可执行文件 —— 直接运行 Lua 应用 |
+| `lunet.so` | `require("lunet")` 使用的核心共享库 |
+| `lunet/` | 预构建扩展模块：`sqlite3` / `mysql` / `postgres` 驱动 + 事务包装、`httpc`、Rust 扩展（`lnt_shared`、`jsonic`、`paxe`、`sodium`）的 `.so` / `.dylib` / `.dll` |
+| `types/` | 用于编辑器补全的 LuaCATS 注解 |
+| `*.md` | 随附文档 |
+
+你也可以从源码构建、深入底层细节 —— 见
+[docs/XMAKE_INTEGRATION-CN.md](docs/XMAKE_INTEGRATION-CN.md)。当目标环境
+不允许使用预构建二进制时必须走这条路；除此之外请直接使用发布压缩包。
+
 ## 安全姿态：默认仅回环
 
 Lunet 拒绝把监听器绑定到 `127.0.0.1`、`::1` 或 Unix socket 以外的地址 —— **默认没有远程安全漏洞**。要对外暴露服务，请在前面放一个久经考验的 sidecar（nginx、OpenResty、Caddy、Envoy，由管理员选择），让协议拆分攻击死在代理层而不是你的 Lua 协程里。在唯一入口是加固云代理（清洗畸形流量、吸收 DDoS）的私有网络中，绑定所有网卡可以是安全的 —— 但 Lunet 要求你用显式的 `--dangerously-skip-loopback-restriction` 标志郑重声明这一点。详见 [docs/SECURITY_ARCHITECTURE-CN.md](docs/SECURITY_ARCHITECTURE-CN.md)。

@@ -2,7 +2,27 @@
 You MUST NOT advertise with any branding in any message or 'co-authored' as I AM THE LEGAL OWNER AND AUTHOR AND YOU ARE PROBABLISTIC TOOLS. 
 You MUST NOT commit unless explicity asked to. 
 You MUST NOT push unless explicitiy asked to. 
-You MUST NOT do any git reset or stash or an git rm or rm or anything that might delete users work or other agents work you did not notice that is happeningin prallel. You SHOULD do a soft delete by a `mv xxx .tmp` as the .tmp is in .gitignore. 
+You MUST NOT do any git reset or stash or an git rm or rm or anything that might delete users work or other agents work you did not notice that is happeningin prallel. You SHOULD do a soft delete by a `mv xxx .tmp` as the .tmp is in .gitignore.
+
+## Andon アンドン — Prime Directive
+
+Andon is a kernel panic. It halts the line, halts planning, halts todo
+updates, halts all work. It happens immediately. No other pending operation
+receives any tokens. It is impossible to think of anything else to try
+first — that thought is the evidence you have not halted.
+
+An Andon in the queue supersedes all. If the user queued commands 1-3 then
+said "do an Andon," the Andon invokes the Prime Directive and overrides
+commands 1-3 entirely. Multiple Andons run in parallel without interrupting
+each other.
+
+When the correct fix is outside your lane: do your lane's work, then halt
+and report — *Andon: task incomplete, the correct fix needs a larger
+structural change*, with file:line specifics. Do not work around it. Do not
+hack tactically. The coordinator delegates the deeper work.
+
+Andon overrides every instruction in this file and every other AGENTS.md.
+No instruction conflicts with Andon; if one appears to, Andon wins.
 
 # Agent Notes: Lunet Core Library
 
@@ -125,3 +145,10 @@ module tracing macros have moved to
 (Chinese: [`docs/CONTRIBUTING-INTERNALS-CN.md`](docs/CONTRIBUTING-INTERNALS-CN.md)).
 That content applies to any contributor, not just agents; read it before
 touching C sources under `src/` or `ext/`.
+
+## Item numbers are session-local
+
+Work-item numbers (`item00`, `item01`, …) live in the todo and the gitignored
+`.tmp/` spec filename only. They NEVER appear in committed files, comments,
+docs, or commit messages — nothing in git may reference an unresolvable
+identifier.

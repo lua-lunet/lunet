@@ -142,12 +142,6 @@ jobs:
       shell: pwsh
       run: pwsh contributing/deps/windows.ps1
 
-    - name: Setup MSVC dev environment (Windows)
-      if: runner.os == 'Windows'
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x64
-
     - name: Configure (Unix)
       if: runner.os != 'Windows'
       run: xmake f -m release -y
@@ -156,10 +150,13 @@ jobs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        $env:VCPKG_ROOT = "${{ github.workspace }}/vcpkg"
-        $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
-        $env:CL = "/MP"
-        $env:CI = "true"
+        # Persist vcpkg/MSVC environment for later Windows steps; $env: alone
+        # only lasts for the current step, and the SDK verification invokes
+        # `cl` directly rather than through xmake.
+        "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> $env:GITHUB_ENV
+        "VCPKG_DEFAULT_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+        "CL=/MP" >> $env:GITHUB_ENV
+        "CI=true" >> $env:GITHUB_ENV
         xmake f -m release -y
 
     - name: Build (Unix)
@@ -613,6 +610,16 @@ jobs:
           $env:LUNET_EMBED_PROJECT_ROOT = $verify
           xmake lua bin\generate_embed_scripts.lua
           if ($LASTEXITCODE -ne 0) { throw "SDK blob generation failed" }
+          # The blacksmith Windows runner has MSVC installed but does not put
+          # `cl` on PATH. Resolve it via vswhere so the SDK compile can run.
+          $vsInstall = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsInstall) { throw "Visual Studio installation not found" }
+          $vcToolsRoot = Join-Path $vsInstall "VC\Tools\MSVC"
+          $vcToolsDir = Get-ChildItem -Path $vcToolsRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $vcToolsDir) { throw "VC tools directory not found under $vcToolsRoot" }
+          $cl = Join-Path $vcToolsDir.FullName "bin\Hostx64\x64\cl.exe"
+          if (-not (Test-Path $cl)) { throw "cl.exe not found at $cl" }
+          Write-Host "Using cl: $cl"
           # /MD is required, not optional: lunet-static.lib is built against the
           # dynamic CRT, so its objects reference __imp_ CRT symbols, and the
           # vcpkg x64-windows triplet is dynamic too. Without /MD, cl defaults to
@@ -620,7 +627,7 @@ jobs:
           # __imp_fopen, __imp_fwrite, __imp_realloc, __imp_strerror and
           # __imp__mkdir (preceded by a wall of LNK4217/LNK4286 "defined in
           # libucrt.lib ... is imported by" warnings, which are the tell).
-          cl /nologo /std:c11 /MD /I include /I generated /I "$env:VCPKG_ROOT\installed\x64-windows\include" examples\sdk_embed\main.c lib\lunet-static.lib /link /LIBPATH:"$env:VCPKG_ROOT\installed\x64-windows\lib" lua51.lib uv.lib zlib.lib ws2_32.lib iphlpapi.lib userenv.lib psapi.lib advapi32.lib user32.lib shell32.lib ole32.lib dbghelp.lib /OUT:sdk-embedded-app.exe
+          & $cl /nologo /std:c11 /MD /I include /I generated /I "$env:VCPKG_ROOT\installed\x64-windows\include" examples\sdk_embed\main.c lib\lunet-static.lib /link /LIBPATH:"$env:VCPKG_ROOT\installed\x64-windows\lib" lua51.lib uv.lib zlib.lib ws2_32.lib iphlpapi.lib userenv.lib psapi.lib advapi32.lib user32.lib shell32.lib ole32.lib dbghelp.lib /OUT:sdk-embedded-app.exe
           if ($LASTEXITCODE -ne 0) { throw "SDK example compile failed" }
           # /MD plus the dynamic vcpkg triplet means the exe loads lua51.dll,
           # uv.dll and zlib1.dll at runtime. They live in vcpkg's bin, not in
@@ -828,12 +835,6 @@ jobs:
       shell: pwsh
       run: pwsh contributing/deps/windows.ps1
 
-    - name: Setup MSVC dev environment (Windows)
-      if: runner.os == 'Windows'
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x64
-
     - name: Configure EasyMem + ASAN (Unix)
       if: runner.os != 'Windows'
       run: xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n --asan=y --easy_memory=y -y
@@ -842,10 +843,10 @@ jobs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        $env:VCPKG_ROOT = "${{ github.workspace }}/vcpkg"
-        $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
-        $env:CL = "/MP"
-        $env:CI = "true"
+        "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> $env:GITHUB_ENV
+        "VCPKG_DEFAULT_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+        "CL=/MP" >> $env:GITHUB_ENV
+        "CI=true" >> $env:GITHUB_ENV
         xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n --asan=y --easy_memory=y -y
 
     - name: Build Core + DB Drivers (EasyMem + ASAN)

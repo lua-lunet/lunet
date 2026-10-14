@@ -107,7 +107,9 @@ LuaJIT、libuv 和 zlib 是必需依赖；每个驱动只增加自己的客户�
 
 最小入门示例请见 [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) —— 一个通过 `lunet.httpc` 调用 [OpenAlex](https://openalex.org/) 学术 API 的 SSE 传输 MCP 服务器，无数据库、无文件状态。
 
-完整的 RealWorld "Conduit" API 实现请参见 [lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app)。
+[`examples/realworld/README-CN.md`](examples/realworld/README-CN.md) 是路标：完整的 RealWorld "Conduit" 实现位于
+[lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua)，演示如何
+用 Lunet 构建更典型的应用，同时保持更小的内存占用与更快的启动时间。
 
 ## 核心模块
 

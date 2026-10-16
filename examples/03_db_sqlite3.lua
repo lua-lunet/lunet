@@ -36,6 +36,8 @@ lunet.spawn(function()
     print()
 
     os.remove(DB_PATH)
+    os.remove(DB_PATH .. "-wal")
+    os.remove(DB_PATH .. "-shm")
 
     local rw, ro, err = db.open({ path = DB_PATH })
     if not rw then
@@ -139,6 +141,8 @@ lunet.spawn(function()
     db.close(rw)
     db.close(ro)
     os.remove(DB_PATH)
+    os.remove(DB_PATH .. "-wal")
+    os.remove(DB_PATH .. "-shm")
     print()
     print("Database closed. Demo complete!")
 end)

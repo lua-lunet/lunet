@@ -14,13 +14,17 @@ local db = {}
 ---@field charset string Charset to use (MySQL only, default: "utf8mb4")
 
 ---Connection parameters for the SQLite3 backend.
+---The sqlite3 driver's open returns TWO connections: prefer
+---types/lunet/sqlite3.lua, which annotates the (rw, ro, err) shape.
 ---@class DbFileParams
 ---@field path string Database file path (default: ":memory:")
 
 ---Open a database connection
 ---@param params DbNetParams|DbFileParams Connection parameters (shape depends on the compiled backend)
 ---@return lightuserdata|nil conn The connection handle or nil on error
+---@return lightuserdata|nil ro_readonly Read-only connection (sqlite3 backend only); nil on error or network backends
 ---@return string|nil error Error message if failed
+---(sqlite3 backend: third return; network backends: second return)
 function db.open(params) end
 
 ---Close a database connection

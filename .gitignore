@@ -21,3 +21,6 @@ sdk-embedded-app*
 my-lunet-app*
 *.run
 .env
+
+# runtime demo database artifacts
+03_db_sqlite3_demo.db*

@@ -9,13 +9,13 @@ local function test_sqlite3()
 
     -- Test 1: Open in-memory database
     print("1. Opening in-memory database...")
-    local conn, err = db.open({path = ":memory:"})
+    local conn, ro, err = db.open({path = ":memory:"})
     if not conn then
         print("FAIL: Could not open database: " .. tostring(err))
         __lunet_exit_code = 1
         return
     end
-    print("   OK: Database opened")
+    print("   OK: Database opened (rw + read-only ro)")
 
     local _, rows
     -- Test 2: Create table
@@ -71,7 +71,8 @@ local function test_sqlite3()
     -- Test 6: Close connection
     print("6. Closing connection...")
     db.close(conn)
-    print("   OK: Connection closed")
+    db.close(ro)
+    print("   OK: Connections closed")
 
     print("")
     print("=== All SQLite3 tests passed ===")

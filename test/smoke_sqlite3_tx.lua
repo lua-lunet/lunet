@@ -34,7 +34,7 @@ end
 
 lunet.spawn(function()
     local path = os.tmpname() .. ".db"
-    local conn, err = db.open({ path = path })
+    local conn, ro, err = db.open({ path = path })
     if not conn then
         print("cannot open sqlite db: " .. tostring(err))
         os.exit(1)
@@ -123,6 +123,7 @@ lunet.spawn(function()
     check(count("/src") == 1, "connection works after aborted transactions")
 
     db.close(conn)
+    db.close(ro)
     os.remove(path)
 
     print(string.format("\n%d checks, %d failures", steps, failures))

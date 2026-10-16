@@ -21,6 +21,7 @@ int lunet_socket_read(lua_State* L);
 int lunet_socket_write(lua_State* L);
 int lunet_socket_connect(lua_State* L);
 int lunet_socket_set_read_buffer_size(lua_State* L);
+int lunet_socket_set_nodelay(lua_State* L);
 
 #ifdef LUNET_TRACE
 void lunet_socket_trace_summary(void);

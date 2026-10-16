@@ -989,6 +989,10 @@ static void lunet_listen_cb(uv_stream_t *server, int status) {
 
   client_ctx->u.handle.data = client_ctx;
 
+  if (client_ctx->domain == SOCKET_DOMAIN_TCP) {
+    uv_tcp_nodelay(&client_ctx->u.tcp, 1);
+  }
+
   if (uv_accept(server, &client_ctx->u.stream) < 0) {
     uv_close(&client_ctx->u.handle, lunet_close_cb);
     return;
@@ -1626,6 +1630,10 @@ int lunet_socket_connect(lua_State *L) {
 
   ctx->u.handle.data = ctx;
 
+  if (domain == SOCKET_DOMAIN_TCP) {
+    uv_tcp_nodelay(&ctx->u.tcp, 1);
+  }
+
   connect_ctx_t *connect_ctx = lunet_alloc(sizeof(connect_ctx_t));
   if (!connect_ctx) {
     uv_close(&ctx->u.handle, lunet_close_cb);
@@ -1680,6 +1688,39 @@ int lunet_socket_set_read_buffer_size(lua_State *L) {
   if (lua_isnumber(L, 1)) {
     read_buffer_size = lua_tointeger(L, 1);
   }
+  lua_pushnil(L);
+  return 1;
+}
+
+int lunet_socket_set_nodelay(lua_State *L) {
+  socket_handle_t *handle = socket_handle_check(L, 1);
+  if (!handle) {
+    lua_pushnil(L);
+    lua_pushstring(L, "invalid socket handle");
+    return 2;
+  }
+
+  socket_ctx_t *ctx = socket_handle_get(handle);
+  if (!ctx) {
+    lua_pushnil(L);
+    lua_pushstring(L, "socket closed");
+    return 2;
+  }
+
+  if (ctx->domain != SOCKET_DOMAIN_TCP) {
+    lua_pushnil(L);
+    lua_pushstring(L, "not a tcp socket");
+    return 2;
+  }
+
+  int enabled = lua_toboolean(L, 2) ? 1 : 0;
+  int ret = uv_tcp_nodelay(&ctx->u.tcp, enabled);
+  if (ret < 0) {
+    lua_pushnil(L);
+    lua_pushfstring(L, "failed to set nodelay: %s", uv_strerror(ret));
+    return 2;
+  }
+
   lua_pushnil(L);
   return 1;
 }

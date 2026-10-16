@@ -189,6 +189,16 @@ socket.write(conn, "hello")
 socket.close(conn)
 ```
 
+TCP data sockets (`accept` and `connect` results) get `TCP_NODELAY` enabled by default: the
+runtime's workload is small single-write request/response traffic, where Nagle can only add
+delayed-ACK tail latency and never helps. Call `socket.set_nodelay(handle, false)` to re-enable
+Nagle on a specific socket (chatty many-tiny-writes protocols); `socket.set_nodelay(handle, true)`
+turns it back off. Unix sockets ignore the setting.
+
+```lua
+socket.set_nodelay(conn, false)  -- re-enable Nagle on this one socket
+```
+
 ### UDP (`lunet.udp`)
 
 ```lua

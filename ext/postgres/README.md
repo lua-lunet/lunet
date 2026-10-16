@@ -2,7 +2,7 @@
 
 PostgreSQL driver (libpq). Either `require("lunet.postgres")` a prebuilt
 module straight from a release archive (`lunet/postgres.so`; see the archive
-layout in [docs/RELEASE-LAYOUT.md](docs/RELEASE-LAYOUT.md)), or build it
+layout in [docs/RELEASE-LAYOUT.md](../docs/RELEASE-LAYOUT.md)), or build it
 yourself with `xmake build lunet-postgres`; output is `lunet/postgres.so`.
 
 Placeholders are `$1`, `$2`, … Parameters are bound natively via

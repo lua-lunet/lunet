@@ -26,7 +26,7 @@
       local sqlite = require("lunet.sqlite3")
       local tx = require("lunet.sqlite3_tx")
 
-      local conn = sqlite.open("app.db")
+      local conn = sqlite.open({ path = "app.db" })
 
       local ok, err = tx.transaction(conn, function(t)
           t.exec("DELETE FROM nodes WHERE path = ?", dst)

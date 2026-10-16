@@ -2,7 +2,7 @@
 
 MySQL 驱动（libmysqlclient）。可以直接 `require("lunet.mysql")` 发布压缩包
 中的预构建模块（`lunet/mysql.so`；压缩包布局见
-[docs/RELEASE-LAYOUT-CN.md](docs/RELEASE-LAYOUT-CN.md)），也可以自己用
+[docs/RELEASE-LAYOUT-CN.md](../docs/RELEASE-LAYOUT-CN.md)），也可以自己用
 `xmake build lunet-mysql` 构建，产物为 `lunet/mysql.so`。
 
 占位符为 `?`。参数通过 `mysql_stmt_bind_param` 原生绑定，值永远不会被拼接进

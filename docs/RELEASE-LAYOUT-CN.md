@@ -17,6 +17,7 @@ lunet-run                           # 独立可执行文件（Windows 上为 lun
 lunet.so                            # 核心动态库，用于 require("lunet")
                                     #   （Windows 上为 lunet.dll）
 lunet/                              # 扩展模块
+  httpc.so                          # HTTPS 客户端（libcurl）
   sqlite3core.so / postgres.so      # 数据库驱动动态库
   mysql.so                          #   （Windows 上为 .dll）
   sqlite3.lua                       # sqlite3 加载器：公开表面 + 按路径的

@@ -17,6 +17,7 @@ lunet-run                           # standalone executable (lunet-run.exe on Wi
 lunet.so                            # core shared library for require("lunet")
                                     #   (lunet.dll on Windows)
 lunet/                              # extension modules
+  httpc.so                          # HTTPS client (libcurl)
   sqlite3core.so / postgres.so      # DB driver shared libraries
   mysql.so                          #   (.dll on Windows)
   sqlite3.lua                       # sqlite3 loader: public surface + the

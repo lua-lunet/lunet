@@ -2,7 +2,7 @@
 
 PostgreSQL 驱动（libpq）。可以直接 `require("lunet.postgres")` 发布压缩包
 中的预构建模块（`lunet/postgres.so`；压缩包布局见
-[docs/RELEASE-LAYOUT-CN.md](docs/RELEASE-LAYOUT-CN.md)），也可以自己用
+[docs/RELEASE-LAYOUT-CN.md](../docs/RELEASE-LAYOUT-CN.md)），也可以自己用
 `xmake build lunet-postgres` 构建，产物为 `lunet/postgres.so`。
 
 占位符为 `$1`、`$2` …… 参数通过 `PQexecParams` 原生绑定，值永远不会被拼接进

@@ -17,8 +17,11 @@ lunet-run                           # standalone executable (lunet-run.exe on Wi
 lunet.so                            # core shared library for require("lunet")
                                     #   (lunet.dll on Windows)
 lunet/                              # extension modules
-  sqlite3.so / postgres.so          # DB driver shared libraries
+  sqlite3core.so / postgres.so      # DB driver shared libraries
   mysql.so                          #   (.dll on Windows)
+  sqlite3.lua                       # sqlite3 loader: public surface + the
+                                    #   path-keyed handle cache (the binary
+                                    #   registers as lunet.sqlite3core)
   sqlite3_tx.lua / postgres_tx.lua  # DB transaction wrappers
   mysql_tx.lua
   liblnt_shared.so                  # lnt_shared shared dictionary (Linux)
@@ -397,6 +400,6 @@ No unversioned-symlink gotcha on macOS; Homebrew already provides the
 correct `*.dylib` names.
 
 **Windows**: No additional system packages are needed for the core
-runtime. Database drivers (`postgres.dll`, `mysql.dll`, `sqlite3.dll`)
+runtime. Database drivers (`postgres.dll`, `mysql.dll`, `sqlite3core.dll`)
 link against their respective client libraries, which must be installed
 separately and present on `PATH` if you `require()` them.

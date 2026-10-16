@@ -8,7 +8,7 @@ global type Conn = userdata
 -- annotated as the sqlite3 3-return split.
 global record db
     open: function(params: {host: string, port: integer, user: string, password: string, database: string, charset: string, pool_size: integer}): Conn, string
-    open: function(params: {path: string, pool_size: integer}): Conn, Conn, string
+    open: function(params: {path: string}): Conn, Conn, string
     close: function(conn: Conn): string
     query: function(conn: Conn, sql: string): {any}, string
     exec: function(conn: Conn, sql: string): {affected_rows: integer, last_insert_id: integer}, string

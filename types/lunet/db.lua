@@ -16,13 +16,11 @@ local db = {}
 ---(default 1; postgres_tx/mysql_tx require the default)
 
 ---Connection parameters for the SQLite3 backend.
----The sqlite3 driver's open returns TWO connections: prefer
----types/lunet/sqlite3.lua, which annotates the (rw, ro, err) shape and the
----optional pool_size escape hatch (default 1).
+---The sqlite3 driver's open returns TWO connections and carries no pooling:
+---prefer types/lunet/sqlite3.lua, which annotates the (rw, ro, err) shape,
+---the open_raw escape, and destroy(path).
 ---@class DbFileParams
 ---@field path string Database file path (default: ":memory:")
----@field pool_size integer Connections behind the rw handle, round-robin
----(sqlite3 only, default 1; escape hatch, not for performance)
 
 ---Open a database connection
 ---@param params DbNetParams|DbFileParams Connection parameters (shape depends on the compiled backend)

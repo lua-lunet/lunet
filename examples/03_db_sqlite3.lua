@@ -141,24 +141,24 @@ lunet.spawn(function()
     db.close(rw)
     db.close(ro)
 
-    -- Sloppy mode: pool_size > 1 puts several connections behind the rw
-    -- handle, one statement -> one member, round-robin. An escape hatch,
-    -- never for performance; sqlite3_tx requires the default. See
-    -- ext/sqlite3/SQLITE.md.
+    -- The convenience open caches the pair keyed on the path: a second
+    -- open of the same file returns the SAME handles, destroy(path)
+    -- closes both and clears the entry, open_raw always opens fresh.
+    -- See ext/sqlite3/SQLITE.md.
     print()
-    print("Opening with pool_size = 2 (sloppy mode)...")
-    local prw, pro, perr = db.open({ path = DB_PATH, pool_size = 2 })
-    assert(prw and pro and not perr, "pooled open failed: " .. tostring(perr))
-    for i = 1, 4 do
-      local _, e = db.exec_params(prw, "INSERT INTO users (name, email, age) VALUES (?, ?, ?)",
-                                  "p" .. i, "p" .. i .. "@example.com", 20 + i)
-      assert(not e, "pooled insert failed: " .. tostring(e))
-    end
-    rows, err = db.query(pro, "SELECT COUNT(*) AS n FROM users")
-    assert(not err and rows[1].n == 7, "pooled writes must all land: " .. tostring(rows and rows[1].n))
-    print("  4 statements round-robined over 2 connections; ro sees all 7 rows")
-    db.close(prw)
-    db.close(pro)
+    print("Cached open + destroy(path) + open_raw...")
+    local cw1, co1, cerr = db.open({ path = DB_PATH })
+    assert(cw1 and co1 and not cerr, "cached open failed: " .. tostring(cerr))
+    local cw2, co2 = db.open({ path = DB_PATH })
+    assert(cw1 == cw2 and co1 == co2, "repeat open must return the same pair")
+    local raw1, raw2, rerr = db.open_raw({ path = DB_PATH })
+    assert(raw1 and raw2 and not rerr, "open_raw failed: " .. tostring(rerr))
+    assert(raw1 ~= cw1, "open_raw must not return cached handles")
+    db.destroy(DB_PATH)
+    local cw3 = db.open({ path = DB_PATH })
+    assert(cw3 ~= nil and cw3 ~= cw1, "post-destroy open must be a fresh pair")
+    print("  same pair on repeat open; open_raw fresh; destroy clears")
+    db.destroy(DB_PATH)
 
     os.remove(DB_PATH)
     os.remove(DB_PATH .. "-wal")

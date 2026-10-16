@@ -154,7 +154,7 @@ binary — `xmake build <target>` is only needed when you build from source.
 |---:|---------|---------------|----------|-----|
 | 01 | [`examples/01_http_json.lua`](examples/01_http_json.lua) | Minimal HTTP server returning JSON | core (`lunet`, `lunet.socket`) | `"$LUNET_BIN" examples/01_http_json.lua` |
 | 02 | [`examples/02_http_routing.lua`](examples/02_http_routing.lua) | Tiny router with `:params` in paths | core (`lunet`, `lunet.socket`) | `"$LUNET_BIN" examples/02_http_routing.lua` |
-| 03 | [`examples/03_db_sqlite3.lua`](examples/03_db_sqlite3.lua) | SQLite3 CRUD + `query_params` / `exec_params` | `xmake build lunet-sqlite3` | `"$LUNET_BIN" examples/03_db_sqlite3.lua` |
+| 03 | [`examples/03_db_sqlite3.lua`](examples/03_db_sqlite3.lua) | SQLite3 CRUD + the `(rw, ro)` read/write split (reads inline on the loop thread) | `xmake build lunet-sqlite3` | `"$LUNET_BIN" examples/03_db_sqlite3.lua` |
 | 04 | [`examples/04_db_mysql.lua`](examples/04_db_mysql.lua) | MySQL CRUD + prepared statements (`?`) | `xmake build lunet-mysql` + MySQL server | `"$LUNET_BIN" examples/04_db_mysql.lua` |
 | 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + prepared statements (`$1`) | `xmake build lunet-postgres` + Postgres server | `"$LUNET_BIN" examples/05_db_postgres.lua` |
 | 08 | [`examples/08_lnt_shared.lua`](examples/08_lnt_shared.lua) | lunet-style shared dictionary via Rust FFI | `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_lnt_shared.lua` |

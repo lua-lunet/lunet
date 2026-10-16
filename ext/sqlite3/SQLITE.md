@@ -1,18 +1,92 @@
-# SQLite performance model: reads and writes are not symmetric
+# `lunet.sqlite3`
 
-This note explains how to get the best out of `lunet.sqlite3`, and why the
-driver's `open` returns two connections instead of one pool. For the API
-reference see the [README](README.md); this page is about the *why*.
+SQLite driver. Either `require("lunet.sqlite3")` a prebuilt module straight
+from a release archive (`lunet/sqlite3.lua` + `lunet/sqlite3core.so`; see the
+archive layout in [docs/RELEASE-LAYOUT.md](../docs/RELEASE-LAYOUT.md)), or
+build it yourself with `xmake build lunet-sqlite3`. This page is the complete
+reference: the API, the handle lifetimes, and the performance model — the
+*why* behind the shape.
 
-## What the tuning showed
+Placeholders are `?`. Parameters are bound natively via `sqlite3_bind_*`, so
+values are never concatenated into SQL. There is deliberately no `db.escape`.
+
+## Surface
+
+| Function | Notes |
+|---|---|
+| `open(config)` | `{ path = "app.db" }` or `{ path = ":memory:" }`; **caches** the `(rw, ro)` pair keyed on the path string |
+| `open_raw(config)` | same as `open`, but always opens a fresh pair; the cache is bypassed |
+| `destroy(path)` | close both cached handles for a path and clear the cache entry; no-op if none |
+| `close(conn)` | close a single handle (the `open_raw` lifetime) |
+| `query(conn, sql, ...)` | returns array of row tables |
+| `exec(conn, sql, ...)` | returns `{ affected_rows, last_insert_id }` |
+| `query_params` / `exec_params` | same behaviour as the above |
+
+The split of responsibilities: the binary (`lunet.sqlite3core`) owns the
+async I/O — one worker-hop open returning `(rw, ro, err)`, statements
+dispatched to the uv worker pool on `rw`, executed inline on the loop thread
+on `ro`. The Lua loader owns the policy — the path-keyed cache, `open_raw`,
+`destroy`. Neither reaches into the other's job; the Lua cache cannot
+mis-handle the C stack and the C core cannot grow cache policy. All calls
+must run inside a coroutine spawned via `lunet.spawn`.
+
+## Reads and writes
+
+`open` returns two connections:
+
+```lua
+local db = require("lunet.sqlite3")
+
+lunet.spawn(function()
+  local rw, ro, err = db.open({ path = "app.db" })
+  if not rw then error(err) end
+
+  -- One-time setup on the writer: WAL makes readers uncontended
+  -- against the single writer.
+  assert(db.exec(rw, "PRAGMA journal_mode=WAL"))
+
+  -- Writes go to rw (worker pool, as always)...
+  assert(db.exec(rw, "INSERT INTO t VALUES (?)", 1))
+
+  -- ...reads go to ro: they execute inline on the loop thread —
+  -- no worker hop, no yield.
+  local rows = assert(db.query(ro, "SELECT * FROM t"))
+
+  db.destroy("app.db")
+end)
+```
+
+- `rw` — the read-write connection: one writer, per-connection mutex,
+  statements dispatched to the uv worker pool.
+- `ro` — a second connection opened with `SQLITE_OPEN_READONLY`, for read
+  traffic. Queries and execs on it run inline on the loop thread. In WAL
+  mode readers never contend with the writer, so the loop-thread hop is the
+  fast path.
+- **Failure shape:** on open failure both handles are `nil` and the error is
+  the third return — `local rw, ro, err = db.open(...)`. This is a
+  sqlite3-specific shape: the network drivers keep `(conn, err)`.
+- **Handle lifetimes:** handles from `open` are closed via `destroy(path)`
+  (both together, cache entry cleared); handles from `open_raw` are closed
+  per-handle via `close`. A cached handle closed via `close` leaves the
+  cache entry holding a dead pair — don't.
+- A consumer who ignores `ro` gets the old single-connection behaviour.
+- **Routing is build-time correctness the consumer owns.** There is no
+  read/write tagging and no dispatch machinery. A write mis-routed to `ro`
+  parses fine at `prepare` (cheap, no locks) and fails loudly at `step` with
+  `SQLITE_READONLY` ("attempt to write a readonly database") — it can never
+  commit silently. `sqlite3_db_readonly(ro, "main")` stays available
+  underneath for tests that want the invariant as a first-class assertion.
+
+## The performance model
 
 A performance-tuning exercise on a fixed-API SQLite-backed HTTP service —
 [lua-lunet/twelve-dollar-server-challenge](https://github.com/lua-lunet/twelve-dollar-server-challenge)
-— demonstrated the shape of the optimal setup:
+— demonstrated the shape of the optimal setup, and this driver is that
+shape:
 
-- **Separate reads from writes.** One connection owns writes; a second,
-  read-only connection serves reads. In WAL mode readers never contend with
-  the single writer, so the two paths never block each other.
+- **Separate reads from writes.** One connection owns writes; the read-only
+  connection serves reads. In WAL mode readers never contend with the
+  single writer, so the two paths never block each other.
 - **A single thread for writes.** SQLite allows exactly one writer at a
   time; more writer connections buy nothing and only add contention.
 - **Concurrent reads on the read-only connection, executed on the loop
@@ -23,54 +97,88 @@ A performance-tuning exercise on a fixed-API SQLite-backed HTTP service —
   the load band than routing every statement through a single pooled
   handle, with zero `SQLITE_BUSY` events in every configuration.
 
-That measured setup is what the driver gives you by default: `open` returns
-`(rw, ro, err)` — one writer, one read-only connection whose queries run
-inline on the loop thread.
+The failure mode to avoid: the inverse routing — sending a read-heavy load
+down the `rw` connection — is potentially suboptimal: every read pays the
+worker-pool hop and the cross-thread handoff, and reads queue behind writes
+on the same connection. If you see mediocre latency, check which handle
+your reads are on before anything else.
 
-## The failure mode to avoid
+There is deliberately **no pooling on this driver**. The single write path
+IS the design: to go faster, route reads to `ro` — never widen a pool. The
+`open`/`open_raw`/`destroy` trio exists so the right shape is also the
+easy shape: open once per path (cached), read from `ro`, destroy when done.
 
-The inverse routing — sending a read-heavy load down the `rw` connection —
-is potentially suboptimal: every read pays the worker-pool hop and the
-cross-thread handoff, and reads queue behind writes on the same connection.
-If you see mediocre latency with the driver, check which handle your reads
-are on before anything else.
+## Transactions
 
-## `pool_size`: an escape hatch, not a performance knob
+Use `lunet.sqlite3_tx` (`sqlite3_tx.lua`, shipped next to the binary).
+Transactions belong on the `rw` handle.
 
-`open` accepts `pool_size` (default **1**), which sets how many connections
-sit behind the `rw` handle. One statement → one member, picked round-robin
-at dispatch. With the default, `rw` is exactly one connection — the tuned
-setup — and the knob is invisible.
+```lua
+local sqlite = require("lunet.sqlite3")
+local tx = require("lunet.sqlite3_tx")
 
-**The expected behaviour is to leave it at the default** and route reads
-down the `ro` connection. There is no point increasing the rw pool size
-above 1 in order to improve performance: SQLite commits one write at a
-time, so a wider writer pool does not parallelise the write path, and it
-does nothing for the read path either — reads belong on `ro`, where they
-already run concurrently on the loop thread. `ro` is always a single
-connection; it does not honour `pool_size`, because read concurrency comes
-from coroutines, not connections.
+local ok, err = tx.transaction(rw, function(t)
+    t.exec("DELETE FROM nodes WHERE path = ?", dst)
+    local r = t.exec("UPDATE nodes SET path=? WHERE path=? AND version=?",
+                     dst, src, version)
+    if r.affected_rows == 0 then return nil, "version conflict" end
+    return true
+end, "IMMEDIATE")
 
-The knob exists purely as an escape hatch for a programmer who does not
-want peak performance — who wants to use SQLite in a sloppy mode: code that
-assumes a pool of interchangeable connections, a port from a network
-driver's habits, a quick-and-dirty script. It is there so such code can be
-honest about what it is instead of pretending to be tuned.
+if not ok and err.poisoned then db.destroy(path) end
+```
 
-Two consequences if you raise it:
+Return non-nil to commit; return `nil, reason` or raise to roll back. See the
+header comment in `sqlite3_tx.lua` for the full contract.
 
-- **Transactions lose connection affinity.** `lunet.sqlite3_tx` holds one
-  handle for a whole unit of work; with a multi-member pool each statement
-  may land on a different connection, so `BEGIN` and `COMMIT` can be
-  scattered and commit nothing. Keep `pool_size` at the default if you use
-  transactions. This is the documented rule that a transaction belongs to
-  the *connection*, not the coroutine — a pool violates it by construction.
-- **Writes still serialise.** WAL or not, SQLite allows one writer at a
-  time; the pool only lets sloppy code run at all, not run wider.
+**The rule that matters:** a transaction belongs to the *connection*, not the
+coroutine. A pool that checks a handle out per call and returns it afterwards
+will scatter `BEGIN`, the work, and `COMMIT` across handles and commit nothing.
+`transaction()` holds one handle for the whole unit, which is why it takes a
+`conn` rather than a config.
 
-## Summary
+### Driver-specific facts
 
-| Setup | rw pool | reads | Writes | Reads |
-|---|---|---|---|---|
-| Default (tuned) | 1 connection | `ro` handle, inline on the loop thread | single writer, worker pool | concurrent, uncontended |
-| Escape hatch (sloppy) | `pool_size` > 1, round-robin | wherever the code sends them | still one-at-a-time at SQLite | pay the worker hop |
+- **Pass `"IMMEDIATE"` for anything that writes.** The third argument is the
+  locking mode. SQLite's default `DEFERRED` takes no lock until the first
+  statement, so another writer can grab the write lock first and your `UPDATE`
+  fails with `SQLITE_BUSY` *after* `BEGIN` succeeded. `IMMEDIATE` moves that
+  failure up front. `EXCLUSIVE` also blocks readers.
+- Unlike Postgres, a statement error does not poison the session — SQLite lets
+  you catch a `t.*` error inside `fn` and continue. Usually still wrong, but it
+  will not fail every later statement.
+- **`query`/`exec` bind parameters.** They did not until 2026-07-25: only
+  `query_params`/`exec_params` called `collect_params`, so
+  `db.exec(conn, "INSERT INTO t VALUES (?,?)", a, b)` left both placeholders
+  unbound (i.e. `NULL`) and reported success. If you touch `lunet_db_query` or
+  `lunet_db_exec` in `sqlite3.c`, keep the `collect_params` call — a regression
+  here is silent data loss, not a crash.
+- **The split needs a file path.** `:memory:` cannot be split: a second
+  connection opened `SQLITE_OPEN_READONLY` on `":memory:"` is a new, empty,
+  private database — not a reader on the writer's data. Pass a file path
+  whenever you intend to use `ro`; on `:memory:` simply use `rw` alone.
+
+## How the pinning was verified
+
+SQLite needs no server, so this one *is* a committed test:
+`test/smoke_sqlite3_tx.lua` (21 checks). Run it with
+`lunet-run test/smoke_sqlite3_tx.lua` after
+`xmake build lunet-sqlite3 && xmake build-release`.
+
+The methodology, which is the part worth keeping — mirroring what was done by
+hand for the postgres and mysql drivers (see their READMEs):
+
+1. Cover both outcomes and both abort routes: commit, abort-by-nil, raise
+   inside `fn`, and a statement error inside `fn`. Each abort must leave the
+   pre-transaction state intact.
+2. Assert on `affected_rows` from `t.exec` inside the transaction — that is the
+   compare-and-set signal, and `t.query` does not report it.
+3. Assert `err.poisoned == false` after a clean rollback, and prove the
+   connection still works afterwards.
+4. Cover the guards: invalid locking mode, nil connection, non-function body.
+5. Because SQLite is single-file, there is no second-session observer as there
+   is for postgres/mysql. That is the one thing this test *cannot* show, so
+   treat the postgres run as the real proof of isolation and this as the proof
+   of the wrapper's control flow.
+
+Last run: 21/21 checks passed (2026-07-25).

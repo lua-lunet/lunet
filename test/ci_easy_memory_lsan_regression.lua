@@ -32,7 +32,9 @@ local function sqlite_probe()
     end
 
     for i = 1, ITERATIONS do
-        local conn, ro, err = db.open({ path = ":memory:" })
+        -- open_raw: each iteration needs a fresh pair; the cached open()
+        -- would return the same (now closed) handles after the first pass.
+        local conn, ro, err = db.open_raw({ path = ":memory:" })
         if not conn then
             fail("sqlite open failed (iter " .. i .. "): " .. tostring(err))
             return

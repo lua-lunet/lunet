@@ -34,7 +34,8 @@ end
 
 lunet.spawn(function()
     local path = os.tmpname() .. ".db"
-    local conn, ro, err = db.open({ path = path })
+    -- the cached convenience open: the smoke closes via destroy(path)
+    local conn, _, err = db.open({ path = path })
     if not conn then
         print("cannot open sqlite db: " .. tostring(err))
         os.exit(1)
@@ -122,8 +123,7 @@ lunet.spawn(function()
     print("\n=== connection still usable after all that ===")
     check(count("/src") == 1, "connection works after aborted transactions")
 
-    db.close(conn)
-    db.close(ro)
+    db.destroy(path)
     os.remove(path)
 
     print(string.format("\n%d checks, %d failures", steps, failures))

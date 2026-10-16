@@ -7,7 +7,8 @@ describe("sqlite3 module #native", function()
 
   it("exports the driver surface", function()
     assert.are.equal("table", type(db))
-    for _, fn in ipairs({ "open", "close", "query", "exec", "query_params", "exec_params" }) do
+    for _, fn in ipairs({ "open", "open_raw", "destroy", "close", "query", "exec",
+                          "query_params", "exec_params" }) do
       assert.are.equal("function", type(db[fn]))
     end
   end)
@@ -17,6 +18,12 @@ describe("sqlite3 module #native", function()
     -- validating arguments; outside one it errors instead of returning.
     assert.has_error(function()
       db.open({ path = "sqlite3_spec_should_not_exist.db" })
+    end)
+  end)
+
+  it("requires calling open_raw from a coroutine", function()
+    assert.has_error(function()
+      db.open_raw({ path = "sqlite3_spec_should_not_exist.db" })
     end)
   end)
 
@@ -31,31 +38,11 @@ describe("sqlite3 module #native", function()
     assert.is_truthy(err)
   end)
 
-  describe("pool_size validation", function()
-    local function open_error(params)
-      local co = coroutine.create(function()
-        return db.open(params)
-      end)
-      local resumed, err = coroutine.resume(co)
-      return resumed, err
-    end
-
-    it("rejects a non-integer pool_size", function()
-      local resumed, err = open_error({ path = "spec_pool.db", pool_size = "two" })
-      assert.is_false(resumed)
-      assert.matches("pool_size", tostring(err))
-    end)
-
-    it("rejects pool_size below 1", function()
-      local resumed, err = open_error({ path = "spec_pool.db", pool_size = 0 })
-      assert.is_false(resumed)
-      assert.matches("pool_size", tostring(err))
-    end)
-
-    it("rejects pool_size above the cap", function()
-      local resumed, err = open_error({ path = "spec_pool.db", pool_size = 65 })
-      assert.is_false(resumed)
-      assert.matches("pool_size", tostring(err))
+  it("destroy on a never-opened path is a no-op", function()
+    -- destroy is the Lua loader's cache miss + close: with no cache entry
+    -- it touches no C function and needs no runtime.
+    assert.has_no_error(function()
+      db.destroy("sqlite3_spec_never_opened.db")
     end)
   end)
 end)

@@ -23,7 +23,9 @@ local function sqlite_stress()
         return
     end
 
-    local conn, ro, err = db.open({ path = ":memory:" })
+    -- open_raw: the cached open() would return the same (now closed)
+    -- handles on a repeat open of the same path.
+    local conn, ro, err = db.open_raw({ path = ":memory:" })
     if not conn then
         fail("sqlite open failed: " .. tostring(err))
         return

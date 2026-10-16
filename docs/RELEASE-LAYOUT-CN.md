@@ -17,8 +17,10 @@ lunet-run                           # 独立可执行文件（Windows 上为 lun
 lunet.so                            # 核心动态库，用于 require("lunet")
                                     #   （Windows 上为 lunet.dll）
 lunet/                              # 扩展模块
-  sqlite3.so / postgres.so          # 数据库驱动动态库
+  sqlite3core.so / postgres.so      # 数据库驱动动态库
   mysql.so                          #   （Windows 上为 .dll）
+  sqlite3.lua                       # sqlite3 加载器：公开表面 + 按路径的
+                                    #   句柄缓存（二进制注册为 lunet.sqlite3core）
   sqlite3_tx.lua / postgres_tx.lua  # 数据库事务封装
   mysql_tx.lua
   liblnt_shared.so                  # lnt_shared 共享字典（Linux）
@@ -374,6 +376,6 @@ brew install mysql-client   # lunet.mysql
 macOS 上不存在非版本化符号链接问题；Homebrew 已提供正确的 `*.dylib` 名称。
 
 **Windows**：核心运行时无需额外的系统软件包。
-数据库驱动（`postgres.dll`、`mysql.dll`、`sqlite3.dll`）
+数据库驱动（`postgres.dll`、`mysql.dll`、`sqlite3core.dll`）
 链接各自的客户端库，如果你 `require()` 它们，则需要单独安装
 并确保在 `PATH` 中可用。

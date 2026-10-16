@@ -118,10 +118,11 @@ static void db_open_work_cb(uv_work_t* req) {
   db_open_ctx_t* ctx = (db_open_ctx_t*)req->data;
   mysql_thread_init();
 
+  /* pool_n is owned by after_cb (it bounds the library-ref release loops);
+   * work_cb NEVER zeroes it. conns == NULL is the failure signal. */
   ctx->conns = lunet_alloc(sizeof(MYSQL*) * (size_t)ctx->pool_n);
   if (!ctx->conns) {
     snprintf(ctx->err, sizeof(ctx->err), "out of memory");
-    ctx->pool_n = 0;
     mysql_thread_end();
     return;
   }
@@ -137,7 +138,6 @@ static void db_open_work_cb(uv_work_t* req) {
       }
       lunet_free_nonnull(ctx->conns);
       ctx->conns = NULL;
-      ctx->pool_n = 0;
       mysql_thread_end();
       return;
     }
@@ -155,7 +155,6 @@ static void db_open_work_cb(uv_work_t* req) {
       }
       lunet_free_nonnull(ctx->conns);
       ctx->conns = NULL;
-      ctx->pool_n = 0;
       mysql_thread_end();
       return;
     }
@@ -179,8 +178,9 @@ static void db_open_after_cb(uv_work_t* req, int status) {
       }
       lunet_free_nonnull(ctx->conns);
       ctx->conns = NULL;
-      ctx->pool_n = 0;
     }
+    /* Release exactly what the entry acquired; pool_n is still the
+     * original count here (work_cb never zeroes it). */
     for (int i = 0; i < ctx->pool_n; i++) lunet_mysql_library_release();
     ctx->pool_n = 0;
     lunet_free_nonnull(ctx);
@@ -189,7 +189,7 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   lua_State* co = lua_tothread(L, -1);
   lua_pop(L, 1);
 
-  if (ctx->conns && ctx->pool_n > 0) {
+  if (ctx->conns) {
     /* Success shape: (pool handle, nil). Build the pool wrapper and hand
      * the raw connections over to it; each member holds one library ref. */
     lunet_mysql_pool_t* pool =

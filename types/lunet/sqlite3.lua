@@ -1,19 +1,37 @@
 ---@meta
 
 ---@class sqlite3
----SQLite driver. `open` returns two connections: a read-write handle
----(worker-pool dispatch, as always) and a read-only handle whose queries run
----inline on the loop thread. See ext/sqlite3/README.md.
+---SQLite driver with the path-keyed handle cache. The binary module
+---(lunet.sqlite3core) owns the async I/O; this loader owns the policy:
+---open() caches the (rw, ro) pair keyed on the path string, destroy(path)
+---closes both and clears the entry, open_raw() bypasses the cache. See
+---ext/sqlite3/SQLITE.md.
 local db = {}
 
----Open a database file.
----@param params table { path = "app.db" } (":memory:" cannot be split — use the rw handle alone)
+---Convenience open: returns the cached (rw, ro) pair for this path if one
+---exists, otherwise opens a fresh pair and caches it.
+---params: { path = "app.db" } (":memory:" cannot be split — use the rw
+---handle alone).
+---@param params table Connection parameters
 ---@return lightuserdata|nil rw Read-write connection, nil on error
 ---@return lightuserdata|nil ro Read-only connection (reads run inline on the loop thread); nil on error
 ---@return string|nil err Error message if failed (third return, sqlite3-specific shape)
 function db.open(params) end
 
----Close a connection (either handle)
+---Raw open: always opens a fresh (rw, ro, err) pair, bypassing the cache.
+---The caller owns the lifetimes and closes each handle with close().
+---@param params table Connection parameters
+---@return lightuserdata|nil rw Read-write connection, nil on error
+---@return lightuserdata|nil ro Read-only connection; nil on error
+---@return string|nil err Error message if failed
+function db.open_raw(params) end
+
+---Close both cached handles for a path and clear the cache entry. No-op
+---when there is no entry.
+---@param path string The path the handles were opened with
+function db.destroy(path) end
+
+---Close a single handle (the open_raw lifetime)
 ---@param conn lightuserdata The connection to close
 ---@return string|nil error Error message if failed
 function db.close(conn) end

@@ -351,6 +351,9 @@ jobs:
         # lunet.sodium: the primitives loader binds the SAME cdylib through
         # its dylib handle (lunet_sodium_* shims) — no extra artifact.
         cp ext/paxe/sodium.lua "$DIST_DIR/lunet/"
+        # sqlite3 Lua loader: the public lunet.sqlite3 surface + the
+        # path-keyed handle cache (the binary registers as lunet.sqlite3core).
+        cp ext/sqlite3/sqlite3.lua "$DIST_DIR/lunet/"
         # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
@@ -394,6 +397,9 @@ jobs:
         # lunet.sodium: the primitives loader binds the SAME cdylib through
         # its dylib handle (lunet_sodium_* shims) — no extra artifact.
         cp ext/paxe/sodium.lua "$DIST_DIR/lunet/"
+        # sqlite3 Lua loader: the public lunet.sqlite3 surface + the
+        # path-keyed handle cache (the binary registers as lunet.sqlite3core).
+        cp ext/sqlite3/sqlite3.lua "$DIST_DIR/lunet/"
         # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
@@ -463,6 +469,9 @@ jobs:
         # lunet.sodium: the primitives loader binds the SAME cdylib through
         # its dylib handle (lunet_sodium_* shims) — no extra artifact.
         Copy-Item ext\paxe\sodium.lua (Join-Path $dist "lunet")
+        # sqlite3 Lua loader: the public lunet.sqlite3 surface + the
+        # path-keyed handle cache (the binary registers as lunet.sqlite3core).
+        Copy-Item ext\sqlite3\sqlite3.lua (Join-Path $dist "lunet")
         # DB transaction wrappers: one per driver, deliberately not shared.
         Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
         # Documentation: copy every docs\*.md (and its -CN.md counterpart)

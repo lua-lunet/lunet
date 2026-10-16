@@ -153,8 +153,11 @@ static void lunet_init_once(void) {
 }
 
 // Driver-specific module entry points
+/* sqlite3 registers as lunet.sqlite3core: the public lunet.sqlite3 surface
+ * is the Lua loader (ext/sqlite3/sqlite3.lua, shipped beside the binary)
+ * which adds the path-keyed handle cache, open_raw, and destroy on top. */
 #if defined(LUNET_DB_SQLITE3)
-LUNET_API int luaopen_lunet_sqlite3(lua_State *L) {
+LUNET_API int luaopen_lunet_sqlite3core(lua_State *L) {
   lunet_init_once();
   set_default_luaL(L);
   return lunet_open_db(L);

@@ -7,9 +7,9 @@ local db = require("lunet.sqlite3")
 local function test_sqlite3()
     print("=== SQLite3 Smoke Test ===")
 
-    -- Test 1: Open in-memory database
+    -- Test 1: Open in-memory database (raw: the smoke manages lifetimes)
     print("1. Opening in-memory database...")
-    local conn, ro, err = db.open({path = ":memory:"})
+    local conn, ro, err = db.open_raw({path = ":memory:"})
     if not conn then
         print("FAIL: Could not open database: " .. tostring(err))
         __lunet_exit_code = 1

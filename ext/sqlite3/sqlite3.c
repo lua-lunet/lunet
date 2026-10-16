@@ -203,8 +203,8 @@ typedef struct {
   lua_State* waiter_L;
   int co_ref;
 
-  sqlite3* conn;
-  sqlite3* ro_conn;
+  sqlite3* conn;    /* the read-write connection */
+  sqlite3* ro_conn; /* the read-only connection */
   char err[256];
 
   char path[1024];
@@ -271,7 +271,10 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   lua_pop(L, 1);
 
   if (ctx->conn && ctx->ro_conn) {
-    /* Success shape: (rw, ro, nil). */
+    /* Success shape: (rw, ro, nil). The third push is load-bearing:
+     * lua_resume(co, 3) takes the top three values of the coroutine's
+     * stack as the yield's return values — without the nil, stack junk
+     * becomes the first return and every handle shifts. */
     push_conn_wrapper(co, ctx->conn, 0);
     push_conn_wrapper(co, ctx->ro_conn, 1);
     lua_pushnil(co);
@@ -292,6 +295,9 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   lunet_free_nonnull(ctx);
 }
 
+/* The raw open: always opens a fresh (rw, ro) pair in one worker hop. The
+ * path-keyed convenience cache lives in the Lua loader (sqlite3.lua), not
+ * here — C owns the async I/O, Lua owns the policy. */
 int lunet_db_open(lua_State* L) {
   if (lunet_ensure_coroutine(L, "db.open")) {
     return lua_error(L);

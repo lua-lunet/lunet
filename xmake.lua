@@ -417,13 +417,15 @@ target_end()
 -- Usage: xmake build lunet-sqlite3  (or lunet-mysql, lunet-postgres)
 -- Lua:   local db = require("lunet.sqlite3")
 
--- SQLite3 driver: require("lunet.sqlite3")
+-- SQLite3 driver: require("lunet.sqlite3") — the Lua loader (sqlite3.lua,
+-- copied beside the binary) owns the public surface; the binary registers as
+-- lunet.sqlite3core and owns only the async I/O.
 target("lunet-sqlite3")
     set_default(false)  -- Only build when explicitly requested
     set_kind("shared")
     add_rules("lunet.c_safety_lint")
     set_prefixname("")
-    set_basename("sqlite3")  -- Output: lunet/sqlite3.so
+    set_basename("sqlite3core")  -- Output: lunet/sqlite3core.so
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/lunet")
     if is_plat("windows") then
         set_extension(".dll")
@@ -438,6 +440,11 @@ target("lunet-sqlite3")
     lunet_apply_asan_flags("shared")
     lunet_apply_easy_memory()
     add_defines("LUNET_HAS_DB", "LUNET_DB_SQLITE3")
+    -- Copy the Lua loader beside the binary so require("lunet.sqlite3")
+    -- resolves it via the runtime's lunet/?.lua path entry.
+    after_build(function (target)
+        os.cp("ext/sqlite3/sqlite3.lua", target:targetdir())
+    end)
     
     if is_plat("macosx") then
         add_ldflags("-bundle", "-undefined", "dynamic_lookup", {force = true})
@@ -735,11 +742,13 @@ task("test")
     on_run(function ()
         -- Type checking runs first; type errors abort before busted.
         os.exec("xmake check-types")
-        -- Build the httpc and sqlite3 C modules up front so their specs can
-        -- always run. A platform that cannot build them must surface red
-        -- here, not skip.
+        -- Build the httpc and DB driver C modules up front so their specs
+        -- can always run. A platform that cannot build them must surface
+        -- red here, not skip.
         os.exec("xmake build lunet-httpc")
         os.exec("xmake build lunet-sqlite3")
+        os.exec("xmake build lunet-postgres")
+        os.exec("xmake build lunet-mysql")
         local mode = get_config("mode") or "release"
         local dirs = os.dirs("build/**/" .. mode .. "/lunet")
         local cpath = os.getenv("LUA_CPATH") or ""
@@ -779,6 +788,14 @@ task("test")
         end }
         if lr_path and #lr_path:trim() > 0 then
             lua_path = lr_path:trim() .. ";" .. (lua_path or ";")
+        end
+        -- The sqlite3 Lua loader (lunet/sqlite3.lua) is copied beside the
+        -- binary by its target's after_build; put the release directory on
+        -- the path (module "lunet.sqlite3" expands against it to
+        -- release/lunet/sqlite3.lua).
+        local build_dirs = os.dirs("build/**/" .. (get_config("mode") or "release") .. "/lunet")
+        if #build_dirs > 0 then
+            lua_path = path.join(os.projectdir(), path.directory(build_dirs[1]), "?.lua") .. ";" .. (lua_path or ";")
         end
         local lr_cpath = try { function ()
             return os.iorunv("luarocks", {"--lua-version=5.1", "path", "--lr-cpath"})

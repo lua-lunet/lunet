@@ -10,6 +10,8 @@
 #include "uv.h"
 
 #define LUNET_PG_CONN_MT "lunet.pg.conn"
+#define LUNET_PG_POOL_MT "lunet.pg.pool"
+#define LUNET_PG_POOL_MAX 64
 
 static char* lunet_strdup_local(const char* s) {
   if (!s) return NULL;
@@ -25,6 +27,17 @@ typedef struct {
   uv_mutex_t mutex;
   int closed;
 } lunet_pg_conn_t;
+
+/* The handle open() returns: a pool of pool_size connections, one statement
+ * -> one member, picked round-robin at dispatch. Default pool_size is 1 —
+ * exactly one connection, as before. The server genuinely serves concurrent
+ * client connections, so a wider pool parallelises real work. */
+typedef struct {
+  lunet_pg_conn_t** members;
+  int n;
+  int next; /* round-robin cursor; picked on the loop thread only */
+  int closed;
+} lunet_pg_pool_t;
 
 /* Close the PG connection but don't destroy the mutex (caller may still hold it). */
 static void lunet_pg_conn_close(lunet_pg_conn_t* wrapper) {
@@ -50,9 +63,33 @@ static int conn_gc(lua_State* L) {
   return 0;
 }
 
+/* Full pool teardown: close every member, destroy its mutex, free the array. */
+static int pool_gc(lua_State* L) {
+  lunet_pg_pool_t* pool = (lunet_pg_pool_t*)luaL_checkudata(L, 1, LUNET_PG_POOL_MT);
+  if (pool->members) {
+    for (int i = 0; i < pool->n; i++) {
+      if (pool->members[i]) {
+        lunet_pg_conn_close(pool->members[i]);
+        uv_mutex_destroy(&pool->members[i]->mutex);
+        lunet_free_nonnull(pool->members[i]);
+        pool->members[i] = NULL;
+      }
+    }
+    lunet_free_nonnull(pool->members);
+    pool->members = NULL;
+  }
+  pool->closed = 1;
+  return 0;
+}
+
 static void register_conn_metatable(lua_State* L) {
   if (luaL_newmetatable(L, LUNET_PG_CONN_MT)) {
     lua_pushcfunction(L, conn_gc);
+    lua_setfield(L, -2, "__gc");
+  }
+  lua_pop(L, 1);
+  if (luaL_newmetatable(L, LUNET_PG_POOL_MT)) {
+    lua_pushcfunction(L, pool_gc);
     lua_setfield(L, -2, "__gc");
   }
   lua_pop(L, 1);
@@ -165,7 +202,8 @@ typedef struct {
   lua_State* waiter_L;
   int co_ref;
 
-  PGconn* conn;
+  PGconn** conns; /* pool_n connections; handed to the pool on success */
+  int pool_n;
   char err[256];
 
   char conninfo[1024];
@@ -174,12 +212,29 @@ typedef struct {
 static void db_open_work_cb(uv_work_t* req) {
   db_open_ctx_t* ctx = (db_open_ctx_t*)req->data;
 
-  ctx->conn = PQconnectdb(ctx->conninfo);
-  if (PQstatus(ctx->conn) != CONNECTION_OK) {
-    snprintf(ctx->err, sizeof(ctx->err), "%s", PQerrorMessage(ctx->conn));
-    PQfinish(ctx->conn);
-    ctx->conn = NULL;
+  /* pool_n is owned by after_cb; work_cb NEVER zeroes it. conns == NULL is
+   * the failure signal. */
+  ctx->conns = lunet_alloc(sizeof(PGconn*) * (size_t)ctx->pool_n);
+  if (!ctx->conns) {
+    snprintf(ctx->err, sizeof(ctx->err), "out of memory");
     return;
+  }
+  memset(ctx->conns, 0, sizeof(PGconn*) * (size_t)ctx->pool_n);
+
+  for (int i = 0; i < ctx->pool_n; i++) {
+    ctx->conns[i] = PQconnectdb(ctx->conninfo);
+    if (PQstatus(ctx->conns[i]) != CONNECTION_OK) {
+      snprintf(ctx->err, sizeof(ctx->err), "%s", PQerrorMessage(ctx->conns[i]));
+      PQfinish(ctx->conns[i]);
+      ctx->conns[i] = NULL;
+      for (int j = 0; j < i; j++) {
+        PQfinish(ctx->conns[j]);
+        ctx->conns[j] = NULL;
+      }
+      lunet_free_nonnull(ctx->conns);
+      ctx->conns = NULL;
+      return;
+    }
   }
 }
 
@@ -192,22 +247,57 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.open\n");
-    if (ctx->conn) PQfinish(ctx->conn);
-    ctx->conn = NULL;
+    if (ctx->conns) {
+      for (int i = 0; i < ctx->pool_n; i++) {
+        if (ctx->conns[i]) PQfinish(ctx->conns[i]);
+        ctx->conns[i] = NULL;
+      }
+      lunet_free_nonnull(ctx->conns);
+      ctx->conns = NULL;
+    }
     lunet_free_nonnull(ctx);
     return;
   }
   lua_State* co = lua_tothread(L, -1);
   lua_pop(L, 1);
 
-  if (ctx->conn) {
-    lunet_pg_conn_t* wrapper = (lunet_pg_conn_t*)lua_newuserdata(co, sizeof(lunet_pg_conn_t));
-    wrapper->conn = ctx->conn;
-    wrapper->closed = 0;
-    uv_mutex_init(&wrapper->mutex);
-    luaL_getmetatable(co, LUNET_PG_CONN_MT);
-    lua_setmetatable(co, -2);
-    lua_pushnil(co);
+  if (ctx->conns) {
+    /* Success shape: (pool handle, nil). Build the pool wrapper and hand
+     * the raw connections over to it. */
+    lunet_pg_pool_t* pool =
+        (lunet_pg_pool_t*)lua_newuserdata(co, sizeof(lunet_pg_pool_t));
+    pool->members = lunet_alloc(sizeof(lunet_pg_conn_t*) * (size_t)ctx->pool_n);
+    if (!pool->members) {
+      pool->n = 0;
+      pool->closed = 1;
+      for (int i = 0; i < ctx->pool_n; i++) {
+        if (ctx->conns[i]) PQfinish(ctx->conns[i]);
+        ctx->conns[i] = NULL;
+      }
+      lunet_free_nonnull(ctx->conns);
+      ctx->conns = NULL;
+      ctx->pool_n = 0;
+      lua_pushnil(co);
+      lua_pushstring(co, "out of memory");
+    } else {
+      pool->n = ctx->pool_n;
+      pool->next = 0;
+      pool->closed = 0;
+      for (int i = 0; i < pool->n; i++) {
+        lunet_pg_conn_t* member = lunet_alloc(sizeof(lunet_pg_conn_t));
+        member->conn = ctx->conns[i];
+        member->closed = 0;
+        uv_mutex_init(&member->mutex);
+        pool->members[i] = member;
+        ctx->conns[i] = NULL;
+      }
+      lunet_free_nonnull(ctx->conns);
+      ctx->conns = NULL;
+      ctx->pool_n = 0;
+      luaL_getmetatable(co, LUNET_PG_POOL_MT);
+      lua_setmetatable(co, -2);
+      lua_pushnil(co);
+    }
   } else {
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
@@ -263,8 +353,28 @@ int lunet_db_open(lua_State* L) {
   snprintf(ctx->conninfo, sizeof(ctx->conninfo),
            "host='%s' port='%d' user='%s' password='%s' dbname='%s'",
            host, port, user, password, database);
-  
-  /* printf("DEBUG: conninfo='%s'\n", ctx->conninfo); */
+
+  /* pool_size: how many connections sit behind the returned handle
+   * (round-robin pick at dispatch). Default 1 — exactly one connection,
+   * as before. */
+  ctx->pool_n = 1;
+  lua_getfield(L, 1, "pool_size");
+  if (!lua_isnil(L, -1)) {
+    if (!lua_isnumber(L, -1)) {
+      lua_pop(L, 1);
+      lunet_free_nonnull(ctx);
+      lua_pushstring(L, "db.open: pool_size must be a number");
+      return lua_error(L);
+    }
+    ctx->pool_n = (int)lua_tointeger(L, -1);
+    if (ctx->pool_n < 1 || ctx->pool_n > LUNET_PG_POOL_MAX) {
+      lua_pop(L, 1);
+      lunet_free_nonnull(ctx);
+      lua_pushstring(L, "db.open: pool_size must be between 1 and 64");
+      return lua_error(L);
+    }
+  }
+  lua_pop(L, 1);
 
   lunet_coref_create(L, ctx->co_ref);
 
@@ -288,6 +398,15 @@ int lunet_db_close(lua_State* L) {
     lua_pushstring(L, "db.close requires a connection");
     return 1;
   }
+  lunet_pg_pool_t* pool = (lunet_pg_pool_t*)luaL_testudata(L, 1, LUNET_PG_POOL_MT);
+  if (pool) {
+    for (int i = 0; i < pool->n; i++) {
+      if (pool->members[i]) lunet_pg_conn_close(pool->members[i]);
+    }
+    pool->closed = 1;
+    lua_pushnil(L);
+    return 1;
+  }
   lunet_pg_conn_t* wrapper = (lunet_pg_conn_t*)luaL_testudata(L, 1, LUNET_PG_CONN_MT);
   if (!wrapper) {
     lua_pushstring(L, "db.close requires a valid connection");
@@ -300,6 +419,21 @@ int lunet_db_close(lua_State* L) {
 
   lua_pushnil(L);
   return 1;
+}
+
+/* Resolve the statement target: a pool handle round-robins to its next
+ * member; a bare connection handle is itself. Returns NULL for anything
+ * else. The cursor is touched only on the loop thread, where every entry
+ * point runs. */
+static lunet_pg_conn_t* pick_statement_target(lua_State* L, int idx) {
+  lunet_pg_pool_t* pool = (lunet_pg_pool_t*)luaL_testudata(L, idx, LUNET_PG_POOL_MT);
+  if (pool) {
+    if (!pool->members || pool->n < 1) return NULL;
+    lunet_pg_conn_t* member = pool->members[pool->next];
+    pool->next = (pool->next + 1) % pool->n;
+    return member; /* closed pools surface "connection is closed" downstream */
+  }
+  return (lunet_pg_conn_t*)luaL_testudata(L, idx, LUNET_PG_CONN_MT);
 }
 
 typedef struct {
@@ -475,7 +609,7 @@ int lunet_db_query(lua_State* L) {
     return 2;
   }
 
-  lunet_pg_conn_t* wrapper = (lunet_pg_conn_t*)luaL_testudata(L, 1, LUNET_PG_CONN_MT);
+  lunet_pg_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
     lua_pushnil(L);
     lua_pushstring(L, "db.query requires a valid connection");
@@ -673,7 +807,7 @@ int lunet_db_exec(lua_State* L) {
     lua_pushstring(L, "db.exec requires connection and sql string");
     return 2;
   }
-  lunet_pg_conn_t* wrapper = (lunet_pg_conn_t*)luaL_testudata(L, 1, LUNET_PG_CONN_MT);
+  lunet_pg_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
     lua_pushnil(L);
     lua_pushstring(L, "db.exec requires a valid connection");
@@ -741,7 +875,7 @@ int lunet_db_query_params(lua_State* L) {
     return 2;
   }
 
-  lunet_pg_conn_t* wrapper = (lunet_pg_conn_t*)luaL_testudata(L, 1, LUNET_PG_CONN_MT);
+  lunet_pg_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
     lua_pushnil(L);
     lua_pushstring(L, "db.query_params requires a valid connection");
@@ -808,7 +942,7 @@ int lunet_db_exec_params(lua_State* L) {
     return 2;
   }
 
-  lunet_pg_conn_t* wrapper = (lunet_pg_conn_t*)luaL_testudata(L, 1, LUNET_PG_CONN_MT);
+  lunet_pg_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
     lua_pushnil(L);
     lua_pushstring(L, "db.exec_params requires a valid connection");

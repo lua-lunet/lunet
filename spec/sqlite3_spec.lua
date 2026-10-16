@@ -7,7 +7,8 @@ describe("sqlite3 module #native", function()
 
   it("exports the driver surface", function()
     assert.are.equal("table", type(db))
-    for _, fn in ipairs({ "open", "close", "query", "exec", "query_params", "exec_params" }) do
+    for _, fn in ipairs({ "open", "open_raw", "destroy", "close", "query", "exec",
+                          "query_params", "exec_params" }) do
       assert.are.equal("function", type(db[fn]))
     end
   end)
@@ -20,6 +21,12 @@ describe("sqlite3 module #native", function()
     end)
   end)
 
+  it("requires calling open_raw from a coroutine", function()
+    assert.has_error(function()
+      db.open_raw({ path = "sqlite3_spec_should_not_exist.db" })
+    end)
+  end)
+
   it("requires a params table to open", function()
     local co = coroutine.create(function()
       return db.open("not-a-table")
@@ -29,5 +36,13 @@ describe("sqlite3 module #native", function()
     local resumed, err = coroutine.resume(co)
     assert.is_false(resumed)
     assert.is_truthy(err)
+  end)
+
+  it("destroy on a never-opened path is a no-op", function()
+    -- destroy is the Lua loader's cache miss + close: with no cache entry
+    -- it touches no C function and needs no runtime.
+    assert.has_no_error(function()
+      db.destroy("sqlite3_spec_never_opened.db")
+    end)
   end)
 end)

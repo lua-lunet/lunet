@@ -2,7 +2,7 @@
 
 MySQL driver (libmysqlclient). Either `require("lunet.mysql")` a prebuilt
 module straight from a release archive (`lunet/mysql.so`; see the archive
-layout in [docs/RELEASE-LAYOUT.md](docs/RELEASE-LAYOUT.md)), or build it
+layout in [docs/RELEASE-LAYOUT.md](../docs/RELEASE-LAYOUT.md)), or build it
 yourself with `xmake build lunet-mysql`; output is `lunet/mysql.so`.
 
 Placeholders are `?`. Parameters are bound natively via

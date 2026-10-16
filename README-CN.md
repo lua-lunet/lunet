@@ -45,7 +45,7 @@ SQLite 驱动装 `libsqlite3-0`，`lunet.httpc` 装 `libcurl4`）。完整的依
 |------|--------|
 | `lunet-run` | 独立可执行文件 —— 直接运行 Lua 应用 |
 | `lunet.so` | `require("lunet")` 使用的核心共享库 |
-| `lunet/` | 预构建扩展模块：`sqlite3` / `mysql` / `postgres` 驱动 + 事务包装、`httpc`、Rust 扩展（`lnt_shared`、`jsonic`、`paxe`、`sodium`）的 `.so` / `.dylib` / `.dll` |
+| `lunet/` | 预构建扩展模块：`sqlite3` 驱动为 `sqlite3core.so` + 其 `sqlite3.lua` 加载器（完整参考：`ext/sqlite3/SQLITE-CN.md`）、`mysql` / `postgres` 驱动 + 事务包装、`httpc`、Rust 扩展（`lnt_shared`、`jsonic`、`paxe`、`sodium`）的 `.so` / `.dylib` / `.dll` —— 规范清单见 [docs/RELEASE-LAYOUT-CN.md](docs/RELEASE-LAYOUT-CN.md) |
 | `types/` | 用于编辑器补全的 LuaCATS 注解 |
 | `*.md` | 随附文档 |
 
@@ -103,13 +103,66 @@ xmake build-debug
 
 LuaJIT、libuv 和 zlib 是必需依赖；每个驱动只增加自己的客户端库。发布档位默认会剥离 EasyMem。若需 EasyMem 诊断，请使用 debug/ASan 档位。
 
-## 示例应用
+## 示例：MCP-SSE 服务器
 
-最小入门示例请见 [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) —— 一个通过 `lunet.httpc` 调用 [OpenAlex](https://openalex.org/) 学术 API 的 SSE 传输 MCP 服务器，无数据库、无文件状态。
+仓内最小入门示例见 [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) —— 一个通过 `lunet.httpc` 调用 [OpenAlex](https://openalex.org/) 学术 API 的 SSE 传输 MCP 服务器，无数据库、无文件系统状态。
+
+[lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) 是一个更完整的 MCP（Model Context Protocol）服务器，带 Tavily 网络搜索，展示：
+
+- **SSE 传输** —— 用于实时流式的 Server-Sent Events
+- **HTTP 上的 JSON-RPC** —— 有状态的会话管理
+- **外部 API 调用** —— 通过 curl 集成 Tavily 搜索
+- **零开销追踪** —— 生产环境零代价的调试日志
+
+**为什么 MCP 服务器选 lunet？**
+
+MCP 服务器常常以 sidecar 进程部署。Lunet 的依赖（libuv、LuaJIT）都是成熟、稳定、有 Debian LTS 支持的库——没有 npm/pip 的反复变更，也不用没完没了地打安全补丁。
+
+| 实现 | 镜像大小 | 运行内存 |
+|----------------|------------|----------------|
+| **lunet-mcp-sse** | **171 MB** | **7 MB** |
+| tavily-mcp (Node.js) | 420 MB | 18 MB |
+| tavily-mcp (Bun) | 382 MB | 14 MB |
+| FastMCP (Python) | 367 MB | 28 MB |
+
+```bash
+# 快速开始
+curl -L -o lunet-mcp-sse.tar.gz \
+  https://github.com/lua-lunet/lunet-mcp-sse/releases/download/nightly/lunet-mcp-sse-linux-arm64.tar.gz
+tar -xzf lunet-mcp-sse.tar.gz
+echo "TAVILY_API_KEY=your_key" > .env
+./run.sh
+```
 
 [`examples/realworld/README-CN.md`](examples/realworld/README-CN.md) 是路标：完整的 RealWorld "Conduit" 实现位于
 [lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua)，演示如何
 用 Lunet 构建更典型的应用，同时保持更小的内存占用与更快的启动时间。
+
+## How-To 示例
+
+先构建运行器：
+
+```bash
+xmake build-release
+LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1)
+```
+
+如果你下载的是预构建的发布压缩包而不是自己构建，把 `LUNET_BIN` 指向压缩包里的
+`lunet-run` 即可：旁边的 `lunet/` 目录已经把下表中「需要」列的每个扩展都作为预构
+建二进制一并携带 —— 只有从源码构建时才需要 `xmake build <target>`。
+
+| # | 示例 | 演示内容 | 需要 | 运行 |
+|---:|---------|---------------|----------|-----|
+| 01 | [`examples/01_http_json.lua`](examples/01_http_json.lua) | 极简 HTTP 服务器，返回 JSON | 核心（`lunet`、`lunet.socket`） | `"$LUNET_BIN" examples/01_http_json.lua` |
+| 02 | [`examples/02_http_routing.lua`](examples/02_http_routing.lua) | 带路径 `:params` 的微型路由 | 核心（`lunet`、`lunet.socket`） | `"$LUNET_BIN" examples/02_http_routing.lua` |
+| 03 | [`examples/03_db_sqlite3.lua`](examples/03_db_sqlite3.lua) | SQLite3 CRUD + `(rw, ro)` 读写拆分（读在循环线程内联执行） | `xmake build lunet-sqlite3` | `"$LUNET_BIN" examples/03_db_sqlite3.lua` |
+| 04 | [`examples/04_db_mysql.lua`](examples/04_db_mysql.lua) | MySQL CRUD + 预处理语句（`?`） | `xmake build lunet-mysql` + MySQL 服务器 | `"$LUNET_BIN" examples/04_db_mysql.lua` |
+| 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + 预处理语句（`$1`） | `xmake build lunet-postgres` + Postgres 服务器 | `"$LUNET_BIN" examples/05_db_postgres.lua` |
+| 08 | [`examples/08_lnt_shared.lua`](examples/08_lnt_shared.lua) | 经 Rust FFI 的 lunet 风格共享字典 | `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_lnt_shared.lua` |
+| 09 | [`examples/09_jsonic_demo.lua`](examples/09_jsonic_demo.lua) | 经 Rust FFI 的 dkjson 风格 JSON 编解码 | `xmake build-jsonic` | `"$LUNET_BIN" examples/09_jsonic_demo.lua` |
+| 10 | [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) | **规范级微型 MCP 服务器**：SSE 传输 + 经 `lunet.httpc` 的 OpenAlex API，无数据库、仅回环 | `xmake build lunet-httpc` + `.env` 中的 `OPEN_ALEX_API_KEY` | `"$LUNET_BIN" examples/mcp_openalex_sse/main.lua` |
+
+## 核心模块
 
 ## 核心模块
 
@@ -172,25 +225,29 @@ xmake build lunet-postgres  # PostgreSQL
 ```lua
 local db = require("lunet.sqlite3")
 
--- 打开数据库（文件路径或 ":memory:"）
-local conn = db.open("myapp.db")
+-- 打开：返回两个连接 —— rw（worker 池）+ ro（读在循环线程内联执行）。
+-- 调用对按路径缓存；完整参考见 ext/sqlite3/SQLITE-CN.md
+local rw, ro, err = db.open({ path = "myapp.db" })
+if not rw then error(err) end
+assert(db.exec(rw, "PRAGMA journal_mode=WAL"))
 
 -- 执行语句（INSERT/UPDATE/DELETE）- 返回结果元数据
-local result = db.exec(conn, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+local result = db.exec(rw, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
 print(result.affected_rows)
 
--- 查询（SELECT）- 返回行表数组
-local users = db.query(conn, "SELECT * FROM users WHERE active = 1")
+-- 通过只读句柄查询（SELECT）- 返回行表数组
+local users = db.query(ro, "SELECT * FROM users WHERE active = 1")
 for _, user in ipairs(users) do
     print(user.id, user.name)
 end
 
 -- 参数化查询（防止 SQL 注入）
-local results = db.query(conn, "SELECT * FROM users WHERE name = ?", "alice")
-db.exec(conn, "INSERT INTO users (name) VALUES (?)", "bob")
+local results = db.query(ro, "SELECT * FROM users WHERE name = ?", "alice")
+db.exec(rw, "INSERT INTO users (name) VALUES (?)", "bob")
 
--- 关闭连接
-db.close(conn)
+-- 缓存对经 destroy(path) 关闭；open_raw() 打开未缓存的一对，
+-- 其句柄经 db.close() 逐个关闭
+db.destroy("myapp.db")
 ```
 
 ### MySQL/MariaDB (`lunet.mysql`)
@@ -239,7 +296,7 @@ db.close(conn)
 
 | 函数 | 描述 | 返回值 |
 |------|------|--------|
-| `db.open(path_or_config)` | 打开连接 | 连接句柄 |
+| `db.open(config)` | 打开连接：sqlite3 返回按路径缓存的 `(rw, ro)` 对；postgres/mysql 返回单个连接（可用 `pool_size` 池化，默认 1） | 连接句柄 |
 | `db.close(conn)` | 关闭连接 | - |
 | `db.query(conn, sql, ...)` | 执行 SELECT（可带参数） | 行表数组 |
 | `db.exec(conn, sql, ...)` | 执行 INSERT/UPDATE/DELETE（可带参数） | 结果表（`affected_rows`、`last_insert_id`） |
@@ -372,6 +429,138 @@ xmake test    # 单元测试
 xmake stress  # 带追踪的并发负载测试
 xmake ci      # 完整的本地 CI 一致性检查
 ```
+
+## 调试
+
+Lunet 对运行期崩溃有分层的调试策略。请按顺序使用——每一级都更昂贵，但给出更多细节。
+
+### 快速参考
+
+| 层级 | 工具 | 能捕获什么 | 构建命令 |
+|-------|------|----------------|---------------|
+| 1 | 领域追踪 | 逻辑错误、操作序列 | `xmake f --lunet_trace=y --lunet_verbose_trace=y` |
+| 2 | 内存追踪 + EasyMem | UAF、双重释放、泄漏、分配器完整性 | `xmake f --lunet_trace=y`（自动启用 EasyMem） |
+| 3 | Address Sanitizer + EasyMem | 编译器级内存错误 + 分配器诊断 | `xmake f -m debug --asan=y` |
+| 4 | lldb / 核心转储 | 寄存器级检查、完整回溯 | `lldb -- ./build/.../lunet-run app.lua` |
+
+### 领域追踪（第 1 层）
+
+每个模块（socket、timer、fs、udp、signal）都有 `*_TRACE_*` 宏，输出到 stderr。启用详细追踪构建：
+
+```bash
+xmake f -c -y --lunet_trace=y --lunet_verbose_trace=y
+xmake build lunet-bin
+./build/.../lunet-run app.lua 2> trace.log
+```
+
+当追踪日志戛然而止时，崩溃发生在最后打印的行与下一个操作之间。用它来锁定是哪个回调、哪一行。
+
+### Address Sanitizer（第 3 层）
+
+ASan 是对付内存损坏 bug 最有效的工具。它为每一次内存访问插桩，并带精确源码位置地捕获 use-after-free、缓冲区溢出和栈损坏：
+
+```bash
+xmake f -c -y -m debug --lunet_trace=y --asan=y
+xmake build lunet-bin
+./build/.../lunet-run app.lua 2> asan.log
+```
+
+`--asan=y` 时，Lunet 还会同时启用带诊断模式的 EasyMem 后端（`LUNET_EASY_MEMORY_DIAGNOSTICS`），分配器级完整性检查与性能画像与 ASan 并行运行。
+
+ASan 输出到 stderr。进程以 `Abort trap: 6` 而不是 `Segmentation fault: 11` 退出。在日志里找 `ERROR: AddressSanitizer:`。
+
+#### 完整 LuaJIT + Lunet ASan（Debian Trixie 源码包）
+
+要同时插桩 Lunet 与 LuaJIT（不只是 Lunet 的 C 代码），构建 Debian Trixie 使用的 OpenResty LuaJIT 源码包，并把 Lunet 链接到它：
+
+```bash
+xmake luajit-asan
+xmake build-debug-asan-luajit
+xmake repro-50-asan-luajit
+```
+
+这些辅助目标现在自动继承 EasyMem，因为它们配置了 `--asan=y --lunet_trace=y`。
+
+这里使用 Debian 源码包 `luajit_2.1.0+openresty20250117-2`，并把本地 ASan 版 LuaJIT 装到 `.tmp/luajit-asan/install/2.1.0+openresty20250117/`。
+
+版本钉子配置在 `xmake.lua` 的选项里（`luajit_snapshot`、`luajit_debian_version`）。覆盖：
+
+```bash
+xmake f --luajit_snapshot=2.1.0+openresty20250117 --luajit_debian_version=2.1.0+openresty20250117-2 -y
+```
+
+#### macOS / Xcode：符号化的 ASan 输出
+
+在 macOS 上，确保 Xcode 工具链就绪，ASan 报告才会带文件/行号符号：
+
+```bash
+xcode-select -p
+xcrun --find clang
+xcrun --find llvm-symbolizer
+export ASAN_SYMBOLIZER_PATH="$(xcrun --find llvm-symbolizer)"
+export ASAN_OPTIONS="abort_on_error=1,halt_on_error=1,fast_unwind_on_malloc=0,detect_leaks=0"
+```
+
+如果 `xmake luajit-asan` 报 `missing: export MACOSX_DEPLOYMENT_TARGET=XX.YY`，设置：
+
+```bash
+export MACOSX_DEPLOYMENT_TARGET="$(sw_vers -productVersion | awk -F. '{print $1 "." $2}')"
+```
+
+#### ASan 优先的崩溃追捕（强制快速退出）
+
+不要只靠边界追踪去推断故障位置。先让 LuaJIT/Lunet 在 ASan 下立刻崩：
+
+```bash
+xmake build-debug-asan-luajit
+xmake repro-50-asan-luajit
+```
+
+如果 bug 对时序敏感，多跑几轮：
+
+```bash
+ITERATIONS=100 REQUESTS=100 CONCURRENCY=8 WORKERS=8 xmake repro-50-asan-luajit
+```
+
+为了在隔离 yield/resume 记账类 bug 时降低 JIT 侧的非确定性，可以在 repro 的 Lua 入口里关掉 JIT：
+
+```lua
+local ok, jit = pcall(require, "jit")
+if ok and jit then jit.off() end
+```
+
+这让执行留在解释器模式，常能让协程/状态机类故障在 ASan 下更快复现。
+
+### 协程 Resume 追踪
+
+`lunet_co_resume()` 包装器会在每次 `lua_resume` 前后记录 `[CO_TRACE] RESUME` / `[CO_TRACE] RESUMED`（启用详细追踪时）。它证明崩溃是在 Lua VM 内部，还是在其周围 C 代码里。
+
+### 等待/Resume 记账断言（仅调试构建）
+
+`LUNET_TRACE=ON` 时，socket 与 UDP 路径会为以下操作跟踪等待/resume 序号与在途状态：
+
+- socket：`accept`、`read`、`write`
+- udp：`recv`
+
+任何非法迁移（重复等待、没有等待就 resume、resume 序号越过等待序号）会打印 `BK_FAIL` 并立刻触发断言。它把协程泵/状态机记账类 bug 在第一次违规时当场抓住，而不需要从边界追踪里推断。
+
+### 零开销发布保证
+
+所有记账、追踪计数器、金丝雀和断言都只在 `LUNET_TRACE` 下编译。发布构建（`--lunet_trace=n`）把这些检查完全编译掉，调试插桩不给运行期留下任何代价。
+
+### 常见崩溃签名：回调里的 `lua_rawgeti`
+
+如果崩溃发生在 libuv 回调里的 `lua_rawgeti`，通常意味着用于注册表操作的 `lua_State*` 无效（悬空或已损坏）。不要把短命的协程 `lua_State*` 指针存进长寿命句柄；注册表访问使用拥有它的主状态，等待中的协程用 coref 跟踪。
+
+### 内存追踪
+
+`LUNET_TRACE` 启用时，所有经 `lunet_alloc()` / `lunet_free()` 的分配都带金丝雀头与释放投毒。trace 构建也会自动启用 EasyMem，提供分配器级完整性检查和内存可视化。关机时 `lunet_mem_assert_balanced()` 检查泄漏。在所有 lunet C 代码里请用 `lunet_alloc` / `lunet_free`，不要裸用 `malloc` / `free`。
+
+## 下游集成
+
+- **[集成指南](docs/XMAKE_INTEGRATION-CN.md)** —— 构建 Lunet 并集成进你的项目（对新手友好）
+- **[Badge 指南](docs/BADGES-CN.md)** —— 在项目 README 中添加徽章（构建状态、Lunet 版本）
+- **[EasyMem 报告](docs/EASY_MEMORY_REPORT-CN.md)** —— 性能画像发现与下一步内存建议
 
 ## 许可证
 

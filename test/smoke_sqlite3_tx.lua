@@ -11,7 +11,7 @@
 local lunet = require("lunet")
 
 -- Resolve the wrapper from the source tree. In a release archive it sits
--- next to sqlite3.so as lunet/sqlite3_tx.lua and plain require() finds it.
+-- next to sqlite3core.so as lunet/sqlite3_tx.lua and plain require() finds it.
 local script_dir = debug.getinfo(1, "S").source:match("^@(.+)/[^/]+$") or "."
 local wrapper = script_dir .. "/../ext/sqlite3/sqlite3_tx.lua"
 package.preload["lunet.sqlite3_tx"] = assert(loadfile(wrapper))

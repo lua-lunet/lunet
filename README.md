@@ -47,7 +47,7 @@ What is inside the archive:
 |------|-----------|
 | `lunet-run` | standalone executable — run Lua apps directly |
 | `lunet.so` | core shared library for `require("lunet")` |
-| `lunet/` | prebuilt extension modules: `sqlite3` / `mysql` / `postgres` drivers + transaction wrappers, `httpc`, the Rust extensions (`lnt_shared`, `jsonic`, `paxe`, `sodium`) as `.so` / `.dylib` / `.dll` |
+| `lunet/` | prebuilt extension modules: the `sqlite3` driver as `sqlite3core.so` + its `sqlite3.lua` loader (full reference: `ext/sqlite3/SQLITE.md`), `mysql` / `postgres` drivers + transaction wrappers, `httpc`, the Rust extensions (`lnt_shared`, `jsonic`, `paxe`, `sodium`) as `.so` / `.dylib` / `.dll` — canonical list: [docs/RELEASE-LAYOUT.md](docs/RELEASE-LAYOUT.md) |
 | `types/` | LuaCATS annotations for editor completion |
 | `*.md` | bundled docs |
 
@@ -229,25 +229,30 @@ xmake build lunet-postgres  # PostgreSQL
 ```lua
 local db = require("lunet.sqlite3")
 
--- Open database (file path or ":memory:")
-local conn = db.open("myapp.db")
+-- Open: returns TWO connections — rw (worker pool) + ro (reads run
+-- inline on the loop thread). The pair is cached per path; full
+-- reference: ext/sqlite3/SQLITE.md
+local rw, ro, err = db.open({ path = "myapp.db" })
+if not rw then error(err) end
+assert(db.exec(rw, "PRAGMA journal_mode=WAL"))
 
 -- Execute (INSERT/UPDATE/DELETE) - returns metadata
-local result = db.exec(conn, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+local result = db.exec(rw, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
 print(result.affected_rows)
 
--- Query (SELECT) - returns array of row tables
-local users = db.query(conn, "SELECT * FROM users WHERE active = 1")
+-- Query (SELECT) via the read-only handle - returns array of row tables
+local users = db.query(ro, "SELECT * FROM users WHERE active = 1")
 for _, user in ipairs(users) do
     print(user.id, user.name)
 end
 
 -- Parameterized queries (safe from SQL injection)
-local results = db.query(conn, "SELECT * FROM users WHERE name = ?", "alice")
-db.exec(conn, "INSERT INTO users (name) VALUES (?)", "bob")
+local results = db.query(ro, "SELECT * FROM users WHERE name = ?", "alice")
+db.exec(rw, "INSERT INTO users (name) VALUES (?)", "bob")
 
--- Close connection
-db.close(conn)
+-- Close the cached pair via destroy(path); open_raw() opens an
+-- uncached pair whose handles close individually via db.close()
+db.destroy("myapp.db")
 ```
 
 ### MySQL/MariaDB (`lunet.mysql`)
@@ -296,7 +301,7 @@ db.close(conn)
 
 | Function | Description | Returns |
 |----------|-------------|---------|
-| `db.open(path_or_config)` | Open connection | connection handle |
+| `db.open(config)` | Open connection(s): sqlite3 returns the cached `(rw, ro)` pair per path; postgres/mysql return one connection (optionally pooled via `pool_size`, default 1) | connection handle(s) |
 | `db.close(conn)` | Close connection | - |
 | `db.query(conn, sql, ...)` | Execute SELECT (with optional parameters) | array of row tables |
 | `db.exec(conn, sql, ...)` | Execute INSERT/UPDATE/DELETE (with optional parameters) | result table (`affected_rows`, `last_insert_id`) |

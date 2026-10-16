@@ -10,15 +10,59 @@ SQLite 驱动。可以直接 `require("lunet.sqlite3")` 发布压缩包中的预
 
 | 函数 | 说明 |
 |---|---|
-| `open(config)` | `{ path = "app.db" }` 或 `{ path = ":memory:" }` |
-| `close(conn)` | |
+| `open(config)` | `{ path = "app.db" }` 或 `{ path = ":memory:" }`；返回**两个**连接 —— `(rw, ro, err)` |
+| `close(conn)` | 可独立关闭任一句柄 |
 | `query(conn, sql, ...)` | 返回行表数组 |
 | `exec(conn, sql, ...)` | 返回 `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | 与上述行为一致 |
 
+## 读与写
+
+`open` 返回两个连接：
+
+```lua
+local db = require("lunet.sqlite3")
+
+lunet.spawn(function()
+  local rw, ro, err = db.open({ path = "app.db" })
+  if not rw then error(err) end
+
+  -- 写者上的一次性设置：WAL 让读者与唯一的写者互不阻塞。
+  assert(db.exec(rw, "PRAGMA journal_mode=WAL"))
+
+  -- 写入走 rw（照旧进入 worker 池）……
+  assert(db.exec(rw, "INSERT INTO t VALUES (?)", 1))
+
+  -- ……读取走 ro：在读句柄上语句在循环线程内联执行——
+  -- 不经过 worker，不发生 yield。
+  local rows = assert(db.query(ro, "SELECT * FROM t"))
+
+  db.close(rw)
+  db.close(ro)
+end)
+```
+
+- `rw` —— 读写连接，即本变更之前 `open` 返回的唯一句柄：单写者、每连接互斥锁、
+  语句派发到 uv worker 池。
+- `ro` —— 以 `SQLITE_OPEN_READONLY` 打开的第二个连接，用于读流量。其上的
+  `query`/`exec` 在循环线程内联执行。WAL 模式下读者与写者互不阻塞，因此
+  循环线程路径就是快路径；同样的负载按此路由实测 p95 比全部语句挤进一个
+  池化句柄快约 4 倍。
+- **失败形态：** 打开失败时两个句柄均为 `nil`，错误是第三个返回值 ——
+  `local rw, ro, err = db.open(...)`。这是 sqlite3 驱动特有的形态：网络驱动
+  仍保持 `(conn, err)`。
+- 忽略 `ro`、只使用 `rw` 的消费者，行为与从前完全一致。
+- **路由是消费者在构建期拥有的正确性。** 没有读写语句标记，也没有派发机制。
+  误路由到 `ro` 的写语句在 `prepare` 阶段成功（廉价解析，不加锁），在 `step`
+  阶段响亮失败并返回 `SQLITE_READONLY`（"attempt to write a readonly
+  database"）——绝不可能静默提交。`sqlite3_db_readonly(ro, "main")` 仍在底层
+  可用，供测试把不变量当一等断言使用。
+- 用完请分别对两个句柄调用 `db.close`；它们是相互独立的连接。
+
 ## 事务
 
-使用 `lunet.sqlite3_tx`（`sqlite3_tx.lua`，与 `sqlite3.so` 一同发布）：
+使用 `lunet.sqlite3_tx`（`sqlite3_tx.lua`，与 `sqlite3.so` 一同发布）。
+事务请放在 `rw` 句柄上。
 
 ```lua
 local sqlite = require("lunet.sqlite3")
@@ -57,6 +101,10 @@ if not ok and err.poisoned then sqlite.close(conn) end
   （即 `NULL`）却报告成功。如果你改动 `sqlite3.c` 中的 `lunet_db_query` 或
   `lunet_db_exec`，请保留 `collect_params` 调用——此处的回归是静默的数据丢失，
   而不是崩溃。
+- **读写拆分需要文件路径。** `:memory:` 无法拆分：对 `":memory:"` 以
+  `SQLITE_OPEN_READONLY` 再开的第二个连接是一个全新、空、私有的数据库——
+  不是写者数据的读者。打算使用 `ro` 时请传文件路径；在 `:memory:` 上只用
+  `rw` 即可。
 
 ## 固定连接（pinning）是如何被人工验证的
 

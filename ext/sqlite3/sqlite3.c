@@ -24,6 +24,10 @@ typedef struct {
   sqlite3* conn;
   uv_mutex_t mutex;
   int closed;
+  /* Set on the read-only handle returned as open()'s second connection.
+   * Queries and execs on it run inline on the loop thread (no worker hop,
+   * no yield); writes fail loudly at step with SQLITE_READONLY. */
+  int readonly;
 } lunet_sqlite_conn_t;
 
 /* Close the SQLite connection but don't destroy the mutex (caller may still hold it). */
@@ -200,6 +204,7 @@ typedef struct {
   int co_ref;
 
   sqlite3* conn;
+  sqlite3* ro_conn;
   char err[256];
 
   char path[1024];
@@ -208,13 +213,42 @@ typedef struct {
 static void db_open_work_cb(uv_work_t* req) {
   db_open_ctx_t* ctx = (db_open_ctx_t*)req->data;
 
-  int rc = sqlite3_open(ctx->path, &ctx->conn);
+  /* Open the writer first: READWRITE|CREATE materialises the file (or the
+   * private :memory: database) so the READONLY open that follows sees a
+   * database to read. */
+  int rc = sqlite3_open_v2(ctx->path, &ctx->conn,
+                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
   if (rc != SQLITE_OK) {
-    snprintf(ctx->err, sizeof(ctx->err), "%s", sqlite3_errmsg(ctx->conn));
+    snprintf(ctx->err, sizeof(ctx->err), "%s",
+             ctx->conn ? sqlite3_errmsg(ctx->conn) : "cannot open database");
+    if (ctx->conn) sqlite3_close(ctx->conn);
+    ctx->conn = NULL;
+    return;
+  }
+
+  rc = sqlite3_open_v2(ctx->path, &ctx->ro_conn, SQLITE_OPEN_READONLY, NULL);
+  if (rc != SQLITE_OK) {
+    snprintf(ctx->err, sizeof(ctx->err), "%s",
+             ctx->ro_conn ? sqlite3_errmsg(ctx->ro_conn)
+                          : "cannot open read-only connection");
+    if (ctx->ro_conn) sqlite3_close(ctx->ro_conn);
+    ctx->ro_conn = NULL;
     sqlite3_close(ctx->conn);
     ctx->conn = NULL;
     return;
   }
+}
+
+/* Wrap a raw sqlite3 handle in the connection userdata. */
+static void push_conn_wrapper(lua_State* co, sqlite3* conn, int readonly) {
+  lunet_sqlite_conn_t* wrapper =
+      (lunet_sqlite_conn_t*)lua_newuserdata(co, sizeof(lunet_sqlite_conn_t));
+  wrapper->conn = conn;
+  wrapper->closed = 0;
+  wrapper->readonly = readonly;
+  uv_mutex_init(&wrapper->mutex);
+  luaL_getmetatable(co, LUNET_SQLITE_CONN_MT);
+  lua_setmetatable(co, -2);
 }
 
 static void db_open_after_cb(uv_work_t* req, int status) {
@@ -228,25 +262,28 @@ static void db_open_after_cb(uv_work_t* req, int status) {
     fprintf(stderr, "invalid coroutine in db.open\n");
     if (ctx->conn) sqlite3_close(ctx->conn);
     ctx->conn = NULL;
+    if (ctx->ro_conn) sqlite3_close(ctx->ro_conn);
+    ctx->ro_conn = NULL;
     lunet_free_nonnull(ctx);
     return;
   }
   lua_State* co = lua_tothread(L, -1);
   lua_pop(L, 1);
 
-  if (ctx->conn) {
-    lunet_sqlite_conn_t* wrapper = (lunet_sqlite_conn_t*)lua_newuserdata(co, sizeof(lunet_sqlite_conn_t));
-    wrapper->conn = ctx->conn;
-    wrapper->closed = 0;
-    uv_mutex_init(&wrapper->mutex);
-    luaL_getmetatable(co, LUNET_SQLITE_CONN_MT);
-    lua_setmetatable(co, -2);
+  if (ctx->conn && ctx->ro_conn) {
+    /* Success shape: (rw, ro, nil). */
+    push_conn_wrapper(co, ctx->conn, 0);
+    push_conn_wrapper(co, ctx->ro_conn, 1);
     lua_pushnil(co);
+    ctx->conn = NULL;
+    ctx->ro_conn = NULL;
   } else {
+    /* Failure shape: (nil, nil, err) — both handles nil, error third. */
+    lua_pushnil(co);
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
   }
-  int rc = lunet_co_resume(co, 2);
+  int rc = lunet_co_resume(co, 3);
   if (rc != 0 && rc != LUA_YIELD) {
     const char* err = lua_tostring(co, -1);
     if (err) fprintf(stderr, "lua_resume error in db.open: %s\n", err);
@@ -474,30 +511,14 @@ static void db_query_work_cb(uv_work_t* req) {
   uv_mutex_unlock(&ctx->wrapper->mutex);
 }
 
-static void db_query_after_cb(uv_work_t* req, int status) {
-  db_query_ctx_t* ctx = (db_query_ctx_t*)req->data;
-  lua_State* L = ctx->waiter_L;
-
-  lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  lunet_coref_release(L, ctx->co_ref);
-  if (!lua_isthread(L, -1)) {
-    lua_pop(L, 1);
-    fprintf(stderr, "invalid coroutine in db.query\n");
-    goto cleanup;
-  }
-  lua_State* co = lua_tothread(L, -1);
-  lua_pop(L, 1);
-
+/* Push the query outcome as two Lua values: (rows, nil) on success or
+ * (nil, err) on failure. Shared by the worker-pool after-callback and the
+ * read-only handle's inline path. */
+static void db_query_push_values(lua_State* co, db_query_ctx_t* ctx) {
   if (ctx->err[0] != '\0') {
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
-    int rc = lunet_co_resume(co, 2);
-    if (rc != 0 && rc != LUA_YIELD) {
-      const char* err = lua_tostring(co, -1);
-      if (err) fprintf(stderr, "lua_resume error in db.query: %s\n", err);
-      lua_pop(co, 1);
-    }
-    goto cleanup;
+    return;
   }
 
   lua_newtable(co);
@@ -529,16 +550,9 @@ static void db_query_after_cb(uv_work_t* req, int status) {
   }
 
   lua_pushnil(co);
-  {
-    int rc = lunet_co_resume(co, 2);
-    if (rc != 0 && rc != LUA_YIELD) {
-      const char* err = lua_tostring(co, -1);
-      if (err) fprintf(stderr, "lua_resume error in db.query: %s\n", err);
-      lua_pop(co, 1);
-    }
-  }
+}
 
-cleanup:
+static void db_query_ctx_free(db_query_ctx_t* ctx) {
   for (int i = 0; i < ctx->nrows; i++) {
     for (int j = 0; j < ctx->ncols; j++) {
       lunet_free_nonnull(ctx->rows[i][j]);
@@ -554,6 +568,34 @@ cleanup:
   lunet_free_nonnull(ctx->query);
   free_params(ctx->params, ctx->nparams);
   lunet_free_nonnull(ctx);
+}
+
+static void db_query_after_cb(uv_work_t* req, int status) {
+  db_query_ctx_t* ctx = (db_query_ctx_t*)req->data;
+  lua_State* L = ctx->waiter_L;
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
+  if (!lua_isthread(L, -1)) {
+    lua_pop(L, 1);
+    fprintf(stderr, "invalid coroutine in db.query\n");
+    db_query_ctx_free(ctx);
+    return;
+  }
+  lua_State* co = lua_tothread(L, -1);
+  lua_pop(L, 1);
+
+  db_query_push_values(co, ctx);
+  {
+    int rc = lunet_co_resume(co, 2);
+    if (rc != 0 && rc != LUA_YIELD) {
+      const char* err = lua_tostring(co, -1);
+      if (err) fprintf(stderr, "lua_resume error in db.query: %s\n", err);
+      lua_pop(co, 1);
+    }
+  }
+
+  db_query_ctx_free(ctx);
 }
 
 int lunet_db_query(lua_State* L) {
@@ -607,6 +649,15 @@ int lunet_db_query(lua_State* L) {
     lunet_free_nonnull(ctx);
     lua_pushnil(L);
     lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  /* Read-only handle: run inline on the loop thread — no worker hop, no
+   * yield. A mis-routed write fails loudly at step with SQLITE_READONLY. */
+  if (wrapper->readonly) {
+    db_query_work_cb(&ctx->req);
+    db_query_push_values(L, ctx);
+    db_query_ctx_free(ctx);
     return 2;
   }
 
@@ -690,32 +741,13 @@ static void db_exec_work_cb(uv_work_t* req) {
   uv_mutex_unlock(&ctx->wrapper->mutex);
 }
 
-static void db_exec_after_cb(uv_work_t* req, int status) {
-  db_exec_ctx_t* ctx = (db_exec_ctx_t*)req->data;
-  lua_State* L = ctx->waiter_L;
-
-  lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
-  lunet_coref_release(L, ctx->co_ref);
-  if (!lua_isthread(L, -1)) {
-    lua_pop(L, 1);
-    fprintf(stderr, "invalid coroutine in db.exec\n");
-    lunet_free_nonnull(ctx->query);
-    free_params(ctx->params, ctx->nparams);
-    lunet_free_nonnull(ctx);
-    return;
-  }
-  lua_State* co = lua_tothread(L, -1);
-  lua_pop(L, 1);
-
+/* Push the exec outcome as two Lua values: (result, nil) on success or
+ * (nil, err) on failure. Shared by the worker-pool after-callback and the
+ * read-only handle's inline path. */
+static void db_exec_push_values(lua_State* co, db_exec_ctx_t* ctx) {
   if (ctx->err[0] != '\0') {
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
-    int rc = lunet_co_resume(co, 2);
-    if (rc != 0 && rc != LUA_YIELD) {
-      const char* err = lua_tostring(co, -1);
-      if (err) fprintf(stderr, "lua_resume error in db.exec: %s\n", err);
-      lua_pop(co, 1);
-    }
   } else {
     lua_newtable(co);
     lua_pushstring(co, "affected_rows");
@@ -725,6 +757,32 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
     lua_pushinteger(co, ctx->insert_id);
     lua_settable(co, -3);
     lua_pushnil(co);
+  }
+}
+
+static void db_exec_ctx_free(db_exec_ctx_t* ctx) {
+  lunet_free_nonnull(ctx->query);
+  free_params(ctx->params, ctx->nparams);
+  lunet_free_nonnull(ctx);
+}
+
+static void db_exec_after_cb(uv_work_t* req, int status) {
+  db_exec_ctx_t* ctx = (db_exec_ctx_t*)req->data;
+  lua_State* L = ctx->waiter_L;
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
+  if (!lua_isthread(L, -1)) {
+    lua_pop(L, 1);
+    fprintf(stderr, "invalid coroutine in db.exec\n");
+    db_exec_ctx_free(ctx);
+    return;
+  }
+  lua_State* co = lua_tothread(L, -1);
+  lua_pop(L, 1);
+
+  db_exec_push_values(co, ctx);
+  {
     int rc = lunet_co_resume(co, 2);
     if (rc != 0 && rc != LUA_YIELD) {
       const char* err = lua_tostring(co, -1);
@@ -733,9 +791,7 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
     }
   }
 
-  lunet_free_nonnull(ctx->query);
-  free_params(ctx->params, ctx->nparams);
-  lunet_free_nonnull(ctx);
+  db_exec_ctx_free(ctx);
 }
 
 int lunet_db_exec(lua_State* L) {
@@ -790,6 +846,15 @@ int lunet_db_exec(lua_State* L) {
     lunet_free_nonnull(ctx);
     lua_pushnil(L);
     lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  /* Read-only handle: run inline on the loop thread — no worker hop, no
+   * yield. A mis-routed write fails loudly at step with SQLITE_READONLY. */
+  if (wrapper->readonly) {
+    db_exec_work_cb(&ctx->req);
+    db_exec_push_values(L, ctx);
+    db_exec_ctx_free(ctx);
     return 2;
   }
 
@@ -860,6 +925,15 @@ int lunet_db_query_params(lua_State* L) {
     return 2;
   }
 
+  /* Read-only handle: run inline on the loop thread — no worker hop, no
+   * yield. A mis-routed write fails loudly at step with SQLITE_READONLY. */
+  if (wrapper->readonly) {
+    db_query_work_cb(&ctx->req);
+    db_query_push_values(L, ctx);
+    db_query_ctx_free(ctx);
+    return 2;
+  }
+
   lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_query_work_cb, db_query_after_cb);
@@ -925,6 +999,15 @@ int lunet_db_exec_params(lua_State* L) {
     lunet_free_nonnull(ctx);
     lua_pushnil(L);
     lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  /* Read-only handle: run inline on the loop thread — no worker hop, no
+   * yield. A mis-routed write fails loudly at step with SQLITE_READONLY. */
+  if (wrapper->readonly) {
+    db_exec_work_cb(&ctx->req);
+    db_exec_push_values(L, ctx);
+    db_exec_ctx_free(ctx);
     return 2;
   }
 

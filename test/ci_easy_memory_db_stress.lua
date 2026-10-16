@@ -23,7 +23,7 @@ local function sqlite_stress()
         return
     end
 
-    local conn, err = db.open({ path = ":memory:" })
+    local conn, ro, err = db.open({ path = ":memory:" })
     if not conn then
         fail("sqlite open failed: " .. tostring(err))
         return
@@ -66,6 +66,7 @@ local function sqlite_stress()
     end
 
     db.close(conn)
+    db.close(ro)
     log("sqlite stress completed (" .. OPS .. " ops)")
 end
 

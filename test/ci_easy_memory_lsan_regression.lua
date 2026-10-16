@@ -32,7 +32,7 @@ local function sqlite_probe()
     end
 
     for i = 1, ITERATIONS do
-        local conn, err = db.open({ path = ":memory:" })
+        local conn, ro, err = db.open({ path = ":memory:" })
         if not conn then
             fail("sqlite open failed (iter " .. i .. "): " .. tostring(err))
             return
@@ -44,6 +44,7 @@ local function sqlite_probe()
         end
 
         db.close(conn)
+        db.close(ro)
     end
     info("sqlite probe completed (" .. ITERATIONS .. " iterations)")
 end

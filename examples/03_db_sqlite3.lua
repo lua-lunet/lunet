@@ -7,7 +7,7 @@ Prerequisites:
     xmake build
     xmake build lunet-sqlite3
 
-Schema (created automatically in-memory):
+Schema (created automatically):
   CREATE TABLE users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -18,24 +18,40 @@ Schema (created automatically in-memory):
 Usage:
   LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1)
   "$LUNET_BIN" examples/03_db_sqlite3.lua
+
+Demonstrates the read/write split: open() returns TWO connections — a
+read-write handle (worker pool) and a read-only handle (queries run inline
+on the loop thread). The split needs a file path: on ":memory:" a second
+READONLY connection is a new empty database, not a reader on the writer's
+data.
 ]]
 
 local lunet = require("lunet")
 local db = require("lunet.sqlite3")
 
+local DB_PATH = "03_db_sqlite3_demo.db"
+
 lunet.spawn(function()
     print("=== SQLite3 Database Demo ===")
     print()
 
-    local conn, err = db.open({ path = ":memory:" })
-    if not conn then
-        print("Failed to open database:", err)
-        return
+    os.remove(DB_PATH)
+
+    local rw, ro, err = db.open({ path = DB_PATH })
+    if not rw then
+        error("Failed to open database: " .. tostring(err))
     end
-    print("Connected to in-memory SQLite database")
+    assert(type(rw) == "userdata" and type(ro) == "userdata",
+        "open must return two connections (rw, ro)")
+    print("Opened " .. DB_PATH .. " (rw + read-only ro)")
+
+    -- One-time setup on the writer: WAL makes readers uncontended
+    -- against the single writer.
+    local wal = db.exec(rw, "PRAGMA journal_mode=WAL")
+    if wal then print("Journal mode: WAL") end
 
     local _, result
-    _, err = db.exec(conn, [[
+    _, err = db.exec(rw, [[
         CREATE TABLE users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -45,7 +61,8 @@ lunet.spawn(function()
     ]])
     if err then
         print("Failed to create table:", err)
-        db.close(conn)
+        db.close(rw)
+        db.close(ro)
         return
     end
     print("Created users table")
@@ -58,7 +75,7 @@ lunet.spawn(function()
 
     for _, user in ipairs(users) do
         result, err = db.exec_params(
-            conn,
+            rw,
             "INSERT INTO users (name, email, age) VALUES (?, ?, ?)",
             user.name,
             user.email,
@@ -72,31 +89,39 @@ lunet.spawn(function()
     end
     print()
 
-    print("Querying all users:")
+    -- Reads go through the read-only handle: inline on the loop
+    -- thread, no worker hop.
+    print("Querying all users via ro:")
     local rows
-    rows, err = db.query(conn, "SELECT id, name, email, age FROM users ORDER BY id")
-    if err then
-        print("Query failed:", err)
-    else
-        for _, row in ipairs(rows) do
-            print(("  [%d] %s <%s> age=%d"):format(row.id, row.name, row.email, row.age))
-        end
+    rows, err = db.query(ro, "SELECT id, name, email, age FROM users ORDER BY id")
+    assert(not err, "ro query failed: " .. tostring(err))
+    assert(#rows == 3, "expected 3 users, got " .. tostring(#rows))
+    for _, row in ipairs(rows) do
+        print(("  [%d] %s <%s> age=%d"):format(row.id, row.name, row.email, row.age))
     end
     print()
 
-    print("Querying users older than 30 (query_params):")
-    rows, err = db.query_params(conn, "SELECT id, name, age FROM users WHERE age > ? ORDER BY age", 30)
-    if err then
-        print("Query failed:", err)
-    else
-        for _, row in ipairs(rows) do
-            print(("  [%d] %s age=%d"):format(row.id, row.name, row.age))
-        end
+    print("Querying users older than 30 via ro (query_params):")
+    rows, err = db.query_params(ro, "SELECT id, name, age FROM users WHERE age > ? ORDER BY age", 30)
+    assert(not err, "ro query_params failed: " .. tostring(err))
+    for _, row in ipairs(rows) do
+        print(("  [%d] %s age=%d"):format(row.id, row.name, row.age))
     end
     print()
 
-    print("Updating Bob's age to 36...")
-    result, err = db.exec_params(conn, "UPDATE users SET age = ? WHERE name = ?", 36, "Bob")
+    -- A write mis-routed to ro parses at prepare and fails LOUDLY at
+    -- step with SQLITE_READONLY — it can never commit silently.
+    print("Mis-routed write via ro (must fail loudly):")
+    local _, werr = db.exec(ro, "INSERT INTO users (name, email, age) VALUES (?, ?, ?)",
+                            "Mallory", "mallory@example.com", 99)
+    assert(werr, "write on ro must fail (SQLITE_READONLY)")
+    print("  Rejected as expected: " .. werr)
+    rows, err = db.query(ro, "SELECT COUNT(*) AS n FROM users")
+    assert(not err and rows[1].n == 3, "mis-routed write must not commit")
+    print()
+
+    print("Updating Bob's age to 36 (via rw)...")
+    result, err = db.exec_params(rw, "UPDATE users SET age = ? WHERE name = ?", 36, "Bob")
     if err then
         print("Update failed:", err)
     else
@@ -104,26 +129,16 @@ lunet.spawn(function()
     end
     print()
 
-    print("Deleting O'Brien...")
-    result, err = db.exec_params(conn, "DELETE FROM users WHERE name = ?", "O'Brien")
-    if err then
-        print("Delete failed:", err)
-    else
-        print(("  Affected rows: %d"):format(result.affected_rows))
-    end
-    print()
-
-    print("Final user list:")
-    rows, err = db.query(conn, "SELECT id, name, email, age FROM users ORDER BY id")
-    if err then
-        print("Query failed:", err)
-    else
-        for _, row in ipairs(rows) do
-            print(("  [%d] %s <%s> age=%d"):format(row.id, row.name, row.email, row.age))
-        end
+    print("Final user list (via ro):")
+    rows, err = db.query(ro, "SELECT id, name, email, age FROM users ORDER BY id")
+    assert(not err, "ro query failed: " .. tostring(err))
+    for _, row in ipairs(rows) do
+        print(("  [%d] %s <%s> age=%d"):format(row.id, row.name, row.email, row.age))
     end
 
-    db.close(conn)
+    db.close(rw)
+    db.close(ro)
+    os.remove(DB_PATH)
     print()
     print("Database closed. Demo complete!")
 end)

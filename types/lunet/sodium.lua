@@ -59,4 +59,50 @@ function sodium.hmac_sha256(data, key) end
 ---```
 function sodium.random(n) end
 
+---Encode `data` to base64 with the linked library's own transform.
+---`variant` selects the alphabet and padding policy from the
+---`sodium.BASE64_VARIANT_*` constants. Malformed arguments (non-string
+---data, unknown variant) raise; an operational failure returns
+---`nil, message`.
+---@param data string Bytes to encode
+---@param variant integer One of the BASE64_VARIANT constants
+---@return string b64 Encoded text
+---@return string|nil error Set only on operational failure
+---@usage
+---```lua
+---local sodium = require("lunet.sodium")
+---local b64 = sodium.base64_encode(data, sodium.BASE64_VARIANT_URLSAFE_NO_PADDING)
+---```
+function sodium.base64_encode(data, variant) end
+
+---Decode base64 back to bytes with the linked library's own transform.
+---The URL-safe variants accept either padded or unpadded input, per the
+---library. Malformed input or an unknown variant raises with the
+---library's diagnostic. The result is binary: its length, not a NUL,
+---says where it ends.
+---@param data string Encoded text
+---@param variant integer One of the BASE64_VARIANT constants
+---@return string bytes Decoded bytes
+---@return string|nil error Set only on operational failure
+---@usage
+---```lua
+---local sodium = require("lunet.sodium")
+---local bin = sodium.base64_decode(token, sodium.BASE64_VARIANT_URLSAFE_NO_PADDING)
+---```
+function sodium.base64_decode(data, variant) end
+
+---Base64 variant selection for `base64_encode` / `base64_decode`, with
+---values fixed by libsodium itself.
+---@type integer
+sodium.BASE64_VARIANT_ORIGINAL = nil
+
+---@type integer
+sodium.BASE64_VARIANT_ORIGINAL_NO_PADDING = nil
+
+---@type integer
+sodium.BASE64_VARIANT_URLSAFE = nil
+
+---@type integer
+sodium.BASE64_VARIANT_URLSAFE_NO_PADDING = nil
+
 return sodium

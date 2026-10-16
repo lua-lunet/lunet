@@ -138,4 +138,91 @@ describe("Sodium Module #native", function()
     assert.truthy(#sodium.sha256("standalone") == 32)
     assert.truthy(#sodium.random(8) == 8)
   end)
+
+  describe("base64", function()
+    -- RFC 4648 test vectors (standard alphabet); the unpadded forms are
+    -- the same strings with the '=' removed.
+    local vectors = {
+      { raw = "", padded = "", unpadded = "" },
+      { raw = "f", padded = "Zg==", unpadded = "Zg" },
+      { raw = "fo", padded = "Zm8=", unpadded = "Zm8" },
+      { raw = "foo", padded = "Zm9v", unpadded = "Zm9v" },
+      { raw = "foob", padded = "Zm9vYg==", unpadded = "Zm9vYg" },
+      { raw = "fooba", padded = "Zm9vYmE=", unpadded = "Zm9vYmE" },
+      { raw = "foobar", padded = "Zm9vYmFy", unpadded = "Zm9vYmFy" },
+    }
+
+    it("uses libsodium's own variant macro values", function()
+      assert.equals(1, sodium.BASE64_VARIANT_ORIGINAL)
+      assert.equals(3, sodium.BASE64_VARIANT_ORIGINAL_NO_PADDING)
+      assert.equals(5, sodium.BASE64_VARIANT_URLSAFE)
+      assert.equals(7, sodium.BASE64_VARIANT_URLSAFE_NO_PADDING)
+    end)
+
+    it("round-trips the RFC 4648 vectors in every variant", function()
+      for _, v in ipairs(vectors) do
+        assert.equals(v.padded,
+          sodium.base64_encode(v.raw, sodium.BASE64_VARIANT_ORIGINAL),
+          "ORIGINAL of " .. #v.raw .. " bytes")
+        assert.equals(v.unpadded,
+          sodium.base64_encode(v.raw, sodium.BASE64_VARIANT_ORIGINAL_NO_PADDING),
+          "ORIGINAL_NO_PADDING of " .. #v.raw .. " bytes")
+        assert.equals(v.padded,
+          sodium.base64_encode(v.raw, sodium.BASE64_VARIANT_URLSAFE),
+          "URLSAFE of " .. #v.raw .. " bytes")
+        assert.equals(v.unpadded,
+          sodium.base64_encode(v.raw, sodium.BASE64_VARIANT_URLSAFE_NO_PADDING),
+          "URLSAFE_NO_PADDING of " .. #v.raw .. " bytes")
+
+        assert.equals(v.raw, sodium.base64_decode(v.padded, sodium.BASE64_VARIANT_ORIGINAL))
+        assert.equals(v.raw, sodium.base64_decode(v.unpadded, sodium.BASE64_VARIANT_ORIGINAL_NO_PADDING))
+        assert.equals(v.raw, sodium.base64_decode(v.padded, sodium.BASE64_VARIANT_URLSAFE))
+        assert.equals(v.raw, sodium.base64_decode(v.unpadded, sodium.BASE64_VARIANT_URLSAFE_NO_PADDING))
+      end
+    end)
+
+    it("round-trips binary data and multi-block payloads", function()
+      -- NUL bytes, high bytes, and a payload spanning many base64 groups.
+      local blob = "\0\1\255\128caf\195\169"
+      local b64 = sodium.base64_encode(blob, sodium.BASE64_VARIANT_URLSAFE)
+      assert.equals(blob, sodium.base64_decode(b64, sodium.BASE64_VARIANT_URLSAFE))
+      local big = string.rep("x", 500)
+      assert.equals(big, sodium.base64_decode(
+        sodium.base64_encode(big, sodium.BASE64_VARIANT_ORIGINAL),
+        sodium.BASE64_VARIANT_ORIGINAL))
+    end)
+
+    it("decodes the empty string to the empty string", function()
+      assert.equals("", sodium.base64_decode("", sodium.BASE64_VARIANT_ORIGINAL))
+      assert.equals("", sodium.base64_encode("", sodium.BASE64_VARIANT_ORIGINAL))
+    end)
+
+    it("collapses every malformed input to a raise that names the failure", function()
+      for _, bad in ipairs({ "!!!!", "Zg===", "Z=g==", "Zm9vYmFyX" }) do
+        local raised, err = pcall(sodium.base64_decode, bad, sodium.BASE64_VARIANT_ORIGINAL)
+        assert.is_false(raised, "malformed input " .. bad .. " must raise")
+        -- Two reject kinds: the library refuses to decode outright, or
+        -- parses only a prefix and names the first bad byte.
+        assert.truthy(
+          tostring(err):find("unparseable", 1, true) or
+          tostring(err):find("malformed", 1, true),
+          "message should name the failure, got: " .. tostring(err))
+      end
+    end)
+
+    it("raises on an unknown variant, naming the value", function()
+      local raised, err = pcall(sodium.base64_encode, "x", 99)
+      assert.is_false(raised)
+      assert.truthy(tostring(err):find("unknown base64 variant 99", 1, true))
+      raised, err = pcall(sodium.base64_decode, "x", 0)
+      assert.is_false(raised)
+      assert.truthy(tostring(err):find("unknown base64 variant 0", 1, true))
+    end)
+
+    it("raises on a non-string payload, naming the argument", function()
+      local raised, err = pcall(sodium.base64_encode, nil, sodium.BASE64_VARIANT_ORIGINAL)
+      assert.is_false(raised)
+      assert.truthy(tostring(err):find("string expected", 1, true))
+    end)
+  end)
 end)

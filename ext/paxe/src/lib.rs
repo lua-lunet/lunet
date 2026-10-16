@@ -869,10 +869,10 @@ const SHA256BYTES: usize = 32;
 /// paxe-core's vendored tree is byte-exact upstream output and is not
 /// modified for this surface, so its `sodium.rs` cannot host them; this
 /// private module mirrors its declaration discipline (contract comments,
-/// pointer+length never allowed to disagree) on the three primitives.
+/// pointer+length never allowed to disagree) on the five primitives.
 #[allow(unsafe_code)]
 mod sodium_ffi {
-    use std::os::raw::{c_int, c_uchar, c_ulonglong};
+    use std::os::raw::{c_char, c_int, c_uchar, c_ulonglong};
 
     extern "C" {
         /// CONTRACT (libsodium docs, "SHA-2"): one-shot SHA-256. Writes
@@ -909,6 +909,40 @@ mod sodium_ffi {
         /// return). The same RNG PAXE draws nonces and DEKs from, so a
         /// process never mixes two RNGs.
         pub fn randombytes_buf(buf: *mut c_uchar, size: usize);
+
+        /// CONTRACT (libsodium docs, "Base64"): encodes `bin_len` bytes
+        /// from `bin` into `b64`, which must have room for at least
+        /// `b64_maxlen` bytes. Writes the NUL terminator and returns
+        /// `b64` on success. Returns NULL only when `b64_maxlen` is too
+        /// small for the encoded result.
+        pub fn sodium_bin2base64(
+            b64: *mut c_char,
+            b64_maxlen: usize,
+            bin: *const c_uchar,
+            bin_len: usize,
+            variant: c_int,
+        ) -> *mut c_char;
+
+        /// CONTRACT (libsodium docs, "Base64"): decodes `b64_len` bytes
+        /// of `b64` (skipping any byte listed in `ignore`) directly into
+        /// `bin`, which must have room for at least `bin_maxlen` bytes.
+        /// Returns 0 and writes the decoded byte count to `*bin_len` on
+        /// success; `*b64_end` (if non-NULL) is set to the first byte
+        /// after the last valid parsed character — after the input's end
+        /// only when the whole string parsed. Returns -1 when the parsed
+        /// string would need more than `bin_maxlen` bytes (never
+        /// truncating), and for malformed input. There is no diagnostic
+        /// string: the error is the binary result.
+        pub fn sodium_base642bin(
+            bin: *mut c_uchar,
+            bin_maxlen: usize,
+            b64: *const c_char,
+            b64_len: usize,
+            ignore: *const c_char,
+            bin_len: *mut usize,
+            b64_end: *mut *mut c_char,
+            variant: c_int,
+        ) -> c_int;
     }
 }
 
@@ -1031,6 +1065,183 @@ pub extern "C" fn lunet_sodium_randombytes(out: *mut u8, out_len: usize) -> c_in
     // SAFETY: out non-null checked above; the caller contract guarantees
     // out_len writable bytes.
     unsafe { sodium_ffi::randombytes_buf(out, out_len) };
+    RC_OK
+}
+
+/// Base64 variant selection. The values are libsodium's own macro
+/// values, mirrored here and in the Lua loader.
+/// URLs need `URLSAFE_NO_PADDING` — 7 — the JWT profile, because tokens
+/// travel in headers and never carry `=`.
+pub const BASE64_VARIANT_ORIGINAL: c_int = 1;
+pub const BASE64_VARIANT_ORIGINAL_NO_PADDING: c_int = 3;
+pub const BASE64_VARIANT_URLSAFE: c_int = 5;
+pub const BASE64_VARIANT_URLSAFE_NO_PADDING: c_int = 7;
+
+/// Encoded length of `bin_len` raw bytes under ANY variant, NUL included:
+/// ((bin_len) / 3) * 4 + 5 — the maximum over all variants of the linked
+/// library's per-variant `sodium_base64_encoded_len(bin_len, variant)`,
+/// so one bound serves every call.
+fn base64_encoded_len(bin_len: usize) -> usize {
+    (bin_len / 3) * 4 + 5
+}
+
+/// Decoded upper bound of `b64_len` encoded bytes under any variant:
+/// every 4 encoded characters carry at most 3 raw bytes. Equals the
+/// library's own `b64_len / 4 * 3` bound for aligned lengths and exceeds
+/// it only to cover the final unpadded group — never below the actual
+/// output for any variant.
+fn base64_decoded_len(b64_len: usize) -> usize {
+    ((b64_len + 3) / 4) * 3
+}
+
+/// Encode `input_len` raw bytes under `variant` into `out`, which must
+/// have room for `base64_encoded_len(input_len)` bytes. The caller owns
+/// the buffer; the result is NUL-terminated by the library, but the
+/// caller reads the table value or the return contract, not a NUL.
+/// RC_OK on success; RC_INVAL for a null `out`, a null input with a
+/// non-zero length, an unknown variant, or a short buffer (a caller bug,
+/// loud); RC_ERR only when libsodium could not be initialised.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_sodium_base64_encode(
+    input: *const u8,
+    input_len: usize,
+    variant: c_int,
+    out: *mut u8,
+    out_cap: usize,
+) -> c_int {
+    if let Err(m) = sodium_ready() {
+        return fail(&m);
+    }
+    let input = match buf_in(input, input_len, "base64_encode input") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    match variant {
+        BASE64_VARIANT_ORIGINAL
+        | BASE64_VARIANT_ORIGINAL_NO_PADDING
+        | BASE64_VARIANT_URLSAFE
+        | BASE64_VARIANT_URLSAFE_NO_PADDING => {}
+        other => {
+            return invalid(format!("base64_encode: unknown variant {other}"));
+        }
+    }
+    if out.is_null() {
+        return invalid(format!(
+            "base64_encode output pointer must not be null ({} bytes required)",
+            base64_encoded_len(input_len)
+        ));
+    }
+    if out_cap < base64_encoded_len(input_len) {
+        return invalid(format!(
+            "base64_encode output buffer too small: {} bytes required (NUL included), got {out_cap}",
+            base64_encoded_len(input_len)
+        ));
+    }
+    // SAFETY: out non-null checked above with the encoded-length contract
+    // verified; input pointer/length derive from one slice.
+    let end = unsafe {
+        sodium_ffi::sodium_bin2base64(
+            out as *mut c_char,
+            base64_encoded_len(input_len),
+            input.as_ptr(),
+            input_len,
+            variant,
+        )
+    };
+    if end.is_null() {
+        return fail("sodium_bin2base64 returned NULL (unsupported variant is pre-validated; this is an undocumented libsodium failure)");
+    }
+    RC_OK
+}
+
+/// Decode `input_len` bytes of base64 under `variant` into `out`, which
+/// must have room for `base64_decoded_len(input_len)` bytes; the actual
+/// byte count is written to `written` (the decoded bytes are binary —
+/// length, never a NUL, says where they end). The library decodes
+/// directly into the caller's buffer — no transient allocation, no
+/// freeing — and `written` is the library's own decoded-byte count. The
+/// full input must parse (b64_end must land on the input's end) or the
+/// call is invalid — a whole-string decode, no tail. RC_OK on success;
+/// RC_INVAL for malformed input (one opaque reject — wrong alphabet, bad
+/// length, stray characters, unknown variant — the error is the binary
+/// result, no per-reason message), a null `out`, a null input with a
+/// non-zero length, or a short buffer; RC_ERR only when libsodium could
+/// not be initialised.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_sodium_base64_decode(
+    input: *const u8,
+    input_len: usize,
+    variant: c_int,
+    out: *mut u8,
+    out_cap: usize,
+    written: *mut usize,
+) -> c_int {
+    if let Err(m) = sodium_ready() {
+        return fail(&m);
+    }
+    if written.is_null() {
+        return invalid("base64_decode written pointer must not be null".to_string());
+    }
+    let input = match buf_in(input, input_len, "base64_decode input") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    match variant {
+        BASE64_VARIANT_ORIGINAL
+        | BASE64_VARIANT_ORIGINAL_NO_PADDING
+        | BASE64_VARIANT_URLSAFE
+        | BASE64_VARIANT_URLSAFE_NO_PADDING => {}
+        other => {
+            return invalid(format!("base64_decode: unknown variant {other}"));
+        }
+    }
+    if out.is_null() {
+        return invalid(format!(
+            "base64_decode output pointer must not be null ({} bytes required)",
+            base64_decoded_len(input_len)
+        ));
+    }
+    if out_cap < base64_decoded_len(input_len) {
+        return invalid(format!(
+            "base64_decode output buffer too small: {} bytes required, got {out_cap}",
+            base64_decoded_len(input_len)
+        ));
+    }
+    let mut count: usize = 0;
+    let mut end: *mut c_char = std::ptr::null_mut();
+    // SAFETY: bin/b64 pointers and lengths are consistent (slice-derived
+    // or pre-validated), bin_maxlen matches the documented upper bound,
+    // and out is within the bounds checked above.
+    let rc = unsafe {
+        sodium_ffi::sodium_base642bin(
+            out,
+            base64_decoded_len(input_len),
+            input.as_ptr() as *const c_char,
+            input_len,
+            std::ptr::null(),
+            &mut count,
+            &mut end,
+            variant,
+        )
+    };
+    if rc != 0 {
+        return invalid(
+            "base64_decode: malformed base64 (the library refused to decode)".to_string(),
+        );
+    }
+    // Full consumption: a whole-string decode, no tail. b64_end has been
+    // set and points within the input slice just passed.
+    let consumed = end as usize - input.as_ptr() as usize;
+    if consumed != input_len {
+        return invalid(format!(
+            "base64_decode: unparseable input at byte {} (of {input_len})",
+            consumed
+        ));
+    }
+    // SAFETY: the contract guarantees `written` is writable.
+    unsafe { *written = count };
     RC_OK
 }
 
@@ -1840,6 +2051,143 @@ mod ffi_tests {
             out.as_mut_ptr(),
         );
         (rc, out)
+    }
+
+    fn base64_encode(input: &[u8], variant: c_int) -> (c_int, String) {
+        let mut out = vec![0u8; base64_encoded_len(input.len())];
+        let rc =
+            lunet_sodium_base64_encode(input.as_ptr(), input.len(), variant, out.as_mut_ptr(), out.len());
+        (rc, cstring(&out))
+    }
+
+    fn base64_decode(input: &[u8], variant: c_int) -> (c_int, Vec<u8>, usize) {
+        let mut out = vec![0u8; base64_decoded_len(input.len())];
+        let mut written: usize = 0;
+        let rc = lunet_sodium_base64_decode(
+            input.as_ptr(),
+            input.len(),
+            variant,
+            out.as_mut_ptr(),
+            out.len(),
+            &mut written,
+        );
+        (rc, out, written)
+    }
+
+    /// Read a NUL-terminated string from a buffer that was just written.
+    /// Test-only; the returned pointer is always within the owned vec.
+    fn cstring(buf: &[u8]) -> String {
+        let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        String::from_utf8_lossy(&buf[..len]).into_owned()
+    }
+
+    #[test]
+    fn base64_encode_decode_known_answers_all_variants() {
+        let vectors: &[(&str, &str, &str)] = &[
+            // (raw, padded base64, unpadded base64)
+            ("", "", ""),
+            ("f", "Zg==", "Zg"),
+            ("fo", "Zm8=", "Zm8"),
+            ("foo", "Zm9v", "Zm9v"),
+            ("foob", "Zm9vYg==", "Zm9vYg"),
+            ("fooba", "Zm9vYmE=", "Zm9vYmE"),
+            ("foobar", "Zm9vYmFy", "Zm9vYmFy"),
+        ];
+        for &(raw, padded, unpadded) in vectors {
+            let padded = padded.as_bytes();
+            let unpadded = unpadded.as_bytes();
+
+            let (rc, got) = base64_encode(raw.as_bytes(), BASE64_VARIANT_ORIGINAL);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(got.as_bytes(), padded);
+
+            let (rc, got) = base64_encode(raw.as_bytes(), BASE64_VARIANT_ORIGINAL_NO_PADDING);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(got.as_bytes(), unpadded);
+
+            let (rc, got) = base64_encode(raw.as_bytes(), BASE64_VARIANT_URLSAFE);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(got.as_bytes(), padded);
+
+            let (rc, got) = base64_encode(raw.as_bytes(), BASE64_VARIANT_URLSAFE_NO_PADDING);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(got.as_bytes(), unpadded);
+
+            let (rc, _buf, n) = base64_decode(padded, BASE64_VARIANT_ORIGINAL);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(&_buf[..n], raw.as_bytes());
+
+            let (rc, _buf, n) = base64_decode(unpadded, BASE64_VARIANT_ORIGINAL_NO_PADDING);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(&_buf[..n], raw.as_bytes());
+
+            let (rc, _buf, n) = base64_decode(padded, BASE64_VARIANT_URLSAFE);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(&_buf[..n], raw.as_bytes());
+
+            let (rc, _buf, n) = base64_decode(unpadded, BASE64_VARIANT_URLSAFE_NO_PADDING);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(&_buf[..n], raw.as_bytes());
+        }
+    }
+
+    #[test]
+    fn base64_binary_roundtrip_and_error_conventions() {
+        // Raw bytes spanning the alphabet table (NUL, high bytes).
+        let blob: Vec<u8> = (0..=255).collect();
+        for variant in [
+            BASE64_VARIANT_ORIGINAL,
+            BASE64_VARIANT_ORIGINAL_NO_PADDING,
+            BASE64_VARIANT_URLSAFE,
+            BASE64_VARIANT_URLSAFE_NO_PADDING,
+        ] {
+            let (rc, encoding) = base64_encode(&blob, variant);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            let (rc, buf, n) = base64_decode(encoding.as_bytes(), variant);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert!(buf[..n] == blob, "roundtrip variant {variant}");
+        }
+
+        // Malformed input: one opaque RC_INVAL, reported through
+        // last_error, nothing decoded.
+        let mut buf = [0u8; 8];
+        let mut w = 0usize;
+        assert_eq!(
+            lunet_sodium_base64_decode(
+                b"!!!!".as_ptr(),
+                4,
+                BASE64_VARIANT_ORIGINAL,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut w
+            ),
+            RC_INVAL
+        );
+        assert!(!last_error_string().is_empty());
+        assert!(buf.iter().all(|&b| b == 0));
+
+        // Unknown variant: RC_INVAL, loud message, both directions.
+        assert_eq!(lunet_sodium_base64_encode(b"z".as_ptr(), 1, 99, buf.as_mut_ptr(), buf.len()), RC_INVAL);
+        assert!(last_error_string().contains("unknown"));
+        assert_eq!(
+            lunet_sodium_base64_decode(b"z".as_ptr(), 1, 0, buf.as_mut_ptr(), buf.len(), &mut w),
+            RC_INVAL
+        );
+        assert!(last_error_string().contains("unknown"));
+
+        // Trailing garbage rejects with full-consumption contract.
+        assert_eq!(
+            lunet_sodium_base64_decode(
+                b"Zm9v!!".as_ptr(),
+                6,
+                BASE64_VARIANT_ORIGINAL,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut w
+            ),
+            RC_INVAL
+        );
+        assert!(last_error_string().contains("unparseable"));
     }
 
     #[test]

@@ -30,4 +30,32 @@ describe("sqlite3 module #native", function()
     assert.is_false(resumed)
     assert.is_truthy(err)
   end)
+
+  describe("pool_size validation", function()
+    local function open_error(params)
+      local co = coroutine.create(function()
+        return db.open(params)
+      end)
+      local resumed, err = coroutine.resume(co)
+      return resumed, err
+    end
+
+    it("rejects a non-integer pool_size", function()
+      local resumed, err = open_error({ path = "spec_pool.db", pool_size = "two" })
+      assert.is_false(resumed)
+      assert.matches("pool_size", tostring(err))
+    end)
+
+    it("rejects pool_size below 1", function()
+      local resumed, err = open_error({ path = "spec_pool.db", pool_size = 0 })
+      assert.is_false(resumed)
+      assert.matches("pool_size", tostring(err))
+    end)
+
+    it("rejects pool_size above the cap", function()
+      local resumed, err = open_error({ path = "spec_pool.db", pool_size = 65 })
+      assert.is_false(resumed)
+      assert.matches("pool_size", tostring(err))
+    end)
+  end)
 end)

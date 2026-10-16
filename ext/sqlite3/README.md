@@ -10,7 +10,7 @@ values are never concatenated into SQL. There is deliberately no `db.escape`.
 
 | Function | Notes |
 |---|---|
-| `open(config)` | `{ path = "app.db" }` or `{ path = ":memory:" }`; returns **two** connections — `(rw, ro, err)` |
+| `open(config)` | `{ path = "app.db" }` or `{ path = ":memory:" }`, optional `pool_size` (default 1); returns **two** connections — `(rw, ro, err)` |
 | `close(conn)` | close either handle independently |
 | `query(conn, sql, ...)` | returns array of row tables |
 | `exec(conn, sql, ...)` | returns `{ affected_rows, last_insert_id }` |
@@ -50,7 +50,9 @@ end)
   traffic. Queries and execs on it run inline on the loop thread. In WAL
   mode readers never contend with the writer, so the loop-thread hop is the
   fast path; the same workload routed this way measured ~4x better p95 than
-  routing every statement through a single pooled handle.
+  routing every statement through a single pooled handle. The reasoning and
+  the measurements live in [SQLITE.md](SQLITE.md) (Chinese:
+  [SQLITE-CN.md](SQLITE-CN.md)).
 - **Failure shape:** on open failure both handles are `nil` and the error is
   the third return — `local rw, ro, err = db.open(...)`. This is a
   sqlite3-specific shape: the network drivers keep `(conn, err)`.
@@ -64,10 +66,26 @@ end)
 - Close each handle with `db.close` when done; they are independent
   connections.
 
+### `pool_size`: an escape hatch, not a performance knob
+
+`open` accepts `pool_size` (default **1**): how many connections sit behind
+the `rw` handle, one statement → one member, picked round-robin at dispatch.
+Leave it at the default — the single-writer tuned setup — and route reads
+down `ro`. Raising it is **never** for performance: SQLite commits one write
+at a time, and reads already run concurrently on the loop thread. It exists
+so sloppy code (a pool of interchangeable connections, a port from a network
+driver's habits) can run at all. `ro` never honours it. Two consequences:
+`sqlite3_tx` requires the default `pool_size = 1` (a multi-member pool
+breaks connection affinity — `BEGIN` and `COMMIT` can land on different
+connections and commit nothing), and writes still serialise. Full reasoning
+in [SQLITE.md](SQLITE.md).
+
 ## Transactions
 
 Use `lunet.sqlite3_tx` (`sqlite3_tx.lua`, shipped next to `sqlite3.so`).
-Transactions belong on the `rw` handle.
+Transactions belong on the `rw` handle — which means `pool_size` at its
+default of 1: a transaction belongs to the *connection*, and a multi-member
+pool violates that by construction.
 
 ```lua
 local sqlite = require("lunet.sqlite3")

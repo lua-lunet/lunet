@@ -7,8 +7,12 @@
 local db = {}
 
 ---Open a database file.
----@param params table { path = "app.db" } (":memory:" cannot be split — use the rw handle alone)
----@return lightuserdata|nil rw Read-write connection, nil on error
+---params: { path = "app.db" } (":memory:" cannot be split — use the rw handle
+---alone), optional pool_size (default 1): how many connections sit behind the
+---rw handle, round-robin. An escape hatch, never for performance — see
+---ext/sqlite3/SQLITE.md.
+---@param params table Connection parameters
+---@return lightuserdata|nil rw Read-write handle (a pool of pool_size connections), nil on error
 ---@return lightuserdata|nil ro Read-only connection (reads run inline on the loop thread); nil on error
 ---@return string|nil err Error message if failed (third return, sqlite3-specific shape)
 function db.open(params) end

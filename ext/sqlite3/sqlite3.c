@@ -10,6 +10,8 @@
 #include "uv.h"
 
 #define LUNET_SQLITE_CONN_MT "lunet.sqlite.conn"
+#define LUNET_SQLITE_POOL_MT "lunet.sqlite.pool"
+#define LUNET_SQLITE_POOL_MAX 64
 
 static char* lunet_strdup_local(const char* s) {
   if (!s) return NULL;
@@ -29,6 +31,18 @@ typedef struct {
    * no yield); writes fail loudly at step with SQLITE_READONLY. */
   int readonly;
 } lunet_sqlite_conn_t;
+
+/* The rw handle: a pool of pool_size connections, one statement -> one
+ * member, picked round-robin at dispatch. Default pool_size is 1, which is
+ * exactly the tuned single-writer setup. An escape hatch for sloppy mode,
+ * never for performance: SQLite commits one write at a time. ro never
+ * honours it. */
+typedef struct {
+  lunet_sqlite_conn_t** members;
+  int n;
+  int next; /* round-robin cursor; picked on the loop thread only */
+  int closed;
+} lunet_sqlite_pool_t;
 
 /* Close the SQLite connection but don't destroy the mutex (caller may still hold it). */
 static void lunet_sqlite_conn_close(lunet_sqlite_conn_t* wrapper) {
@@ -54,9 +68,33 @@ static int conn_gc(lua_State* L) {
   return 0;
 }
 
+/* Full pool teardown: close every member, destroy its mutex, free the array. */
+static int pool_gc(lua_State* L) {
+  lunet_sqlite_pool_t* pool = (lunet_sqlite_pool_t*)luaL_checkudata(L, 1, LUNET_SQLITE_POOL_MT);
+  if (pool->members) {
+    for (int i = 0; i < pool->n; i++) {
+      if (pool->members[i]) {
+        lunet_sqlite_conn_close(pool->members[i]);
+        uv_mutex_destroy(&pool->members[i]->mutex);
+        lunet_free_nonnull(pool->members[i]);
+        pool->members[i] = NULL;
+      }
+    }
+    lunet_free_nonnull(pool->members);
+    pool->members = NULL;
+  }
+  pool->closed = 1;
+  return 0;
+}
+
 static void register_conn_metatable(lua_State* L) {
   if (luaL_newmetatable(L, LUNET_SQLITE_CONN_MT)) {
     lua_pushcfunction(L, conn_gc);
+    lua_setfield(L, -2, "__gc");
+  }
+  lua_pop(L, 1);
+  if (luaL_newmetatable(L, LUNET_SQLITE_POOL_MT)) {
+    lua_pushcfunction(L, pool_gc);
     lua_setfield(L, -2, "__gc");
   }
   lua_pop(L, 1);
@@ -203,7 +241,8 @@ typedef struct {
   lua_State* waiter_L;
   int co_ref;
 
-  sqlite3* conn;
+  sqlite3** rw_conns; /* pool_n writer handles; handed to the pool on success */
+  int pool_n;
   sqlite3* ro_conn;
   char err[256];
 
@@ -213,28 +252,51 @@ typedef struct {
 static void db_open_work_cb(uv_work_t* req) {
   db_open_ctx_t* ctx = (db_open_ctx_t*)req->data;
 
-  /* Open the writer first: READWRITE|CREATE materialises the file (or the
+  /* Open the writers first: READWRITE|CREATE materialises the file (or the
    * private :memory: database) so the READONLY open that follows sees a
    * database to read. */
-  int rc = sqlite3_open_v2(ctx->path, &ctx->conn,
-                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
-  if (rc != SQLITE_OK) {
-    snprintf(ctx->err, sizeof(ctx->err), "%s",
-             ctx->conn ? sqlite3_errmsg(ctx->conn) : "cannot open database");
-    if (ctx->conn) sqlite3_close(ctx->conn);
-    ctx->conn = NULL;
+  ctx->rw_conns = lunet_alloc(sizeof(sqlite3*) * (size_t)ctx->pool_n);
+  if (!ctx->rw_conns) {
+    snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+    ctx->pool_n = 0;
     return;
   }
+  memset(ctx->rw_conns, 0, sizeof(sqlite3*) * (size_t)ctx->pool_n);
 
-  rc = sqlite3_open_v2(ctx->path, &ctx->ro_conn, SQLITE_OPEN_READONLY, NULL);
+  for (int i = 0; i < ctx->pool_n; i++) {
+    int rc = sqlite3_open_v2(ctx->path, &ctx->rw_conns[i],
+                             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
+    if (rc != SQLITE_OK) {
+      snprintf(ctx->err, sizeof(ctx->err), "%s",
+               ctx->rw_conns[i] ? sqlite3_errmsg(ctx->rw_conns[i])
+                                : "cannot open database");
+      sqlite3_close(ctx->rw_conns[i]);
+      ctx->rw_conns[i] = NULL;
+      for (int j = 0; j < i; j++) {
+        sqlite3_close(ctx->rw_conns[j]);
+        ctx->rw_conns[j] = NULL;
+      }
+      lunet_free_nonnull(ctx->rw_conns);
+      ctx->rw_conns = NULL;
+      ctx->pool_n = 0;
+      return;
+    }
+  }
+
+  int rc = sqlite3_open_v2(ctx->path, &ctx->ro_conn, SQLITE_OPEN_READONLY, NULL);
   if (rc != SQLITE_OK) {
     snprintf(ctx->err, sizeof(ctx->err), "%s",
              ctx->ro_conn ? sqlite3_errmsg(ctx->ro_conn)
                           : "cannot open read-only connection");
     if (ctx->ro_conn) sqlite3_close(ctx->ro_conn);
     ctx->ro_conn = NULL;
-    sqlite3_close(ctx->conn);
-    ctx->conn = NULL;
+    for (int j = 0; j < ctx->pool_n; j++) {
+      sqlite3_close(ctx->rw_conns[j]);
+      ctx->rw_conns[j] = NULL;
+    }
+    lunet_free_nonnull(ctx->rw_conns);
+    ctx->rw_conns = NULL;
+    ctx->pool_n = 0;
     return;
   }
 }
@@ -260,8 +322,15 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.open\n");
-    if (ctx->conn) sqlite3_close(ctx->conn);
-    ctx->conn = NULL;
+    if (ctx->rw_conns) {
+      for (int i = 0; i < ctx->pool_n; i++) {
+        if (ctx->rw_conns[i]) sqlite3_close(ctx->rw_conns[i]);
+        ctx->rw_conns[i] = NULL;
+      }
+      lunet_free_nonnull(ctx->rw_conns);
+      ctx->rw_conns = NULL;
+      ctx->pool_n = 0;
+    }
     if (ctx->ro_conn) sqlite3_close(ctx->ro_conn);
     ctx->ro_conn = NULL;
     lunet_free_nonnull(ctx);
@@ -270,13 +339,51 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   lua_State* co = lua_tothread(L, -1);
   lua_pop(L, 1);
 
-  if (ctx->conn && ctx->ro_conn) {
-    /* Success shape: (rw, ro, nil). */
-    push_conn_wrapper(co, ctx->conn, 0);
-    push_conn_wrapper(co, ctx->ro_conn, 1);
-    lua_pushnil(co);
-    ctx->conn = NULL;
-    ctx->ro_conn = NULL;
+  if (ctx->rw_conns && ctx->pool_n > 0 && ctx->ro_conn) {
+    /* Success shape: (rw pool, ro, nil). Build the pool wrapper, hand the
+     * raw writer handles over to it, then wrap the read-only handle. */
+    lunet_sqlite_pool_t* pool =
+        (lunet_sqlite_pool_t*)lua_newuserdata(co, sizeof(lunet_sqlite_pool_t));
+    pool->members = lunet_alloc(sizeof(lunet_sqlite_conn_t*) * (size_t)ctx->pool_n);
+    if (!pool->members) {
+      /* OOM after udata push: unwind everything, resume with the failure
+       * shape so the caller sees an error rather than a half-open pool. */
+      pool->n = 0;
+      pool->closed = 1;
+      for (int i = 0; i < ctx->pool_n; i++) {
+        if (ctx->rw_conns[i]) sqlite3_close(ctx->rw_conns[i]);
+        ctx->rw_conns[i] = NULL;
+      }
+      lunet_free_nonnull(ctx->rw_conns);
+      ctx->rw_conns = NULL;
+      ctx->pool_n = 0;
+      sqlite3_close(ctx->ro_conn);
+      ctx->ro_conn = NULL;
+      lua_pushnil(co);
+      lua_pushnil(co);
+      lua_pushstring(co, "out of memory");
+    } else {
+      pool->n = ctx->pool_n;
+      pool->next = 0;
+      pool->closed = 0;
+      for (int i = 0; i < pool->n; i++) {
+        lunet_sqlite_conn_t* member = lunet_alloc(sizeof(lunet_sqlite_conn_t));
+        member->conn = ctx->rw_conns[i];
+        member->closed = 0;
+        member->readonly = 0;
+        uv_mutex_init(&member->mutex);
+        pool->members[i] = member;
+        ctx->rw_conns[i] = NULL;
+      }
+      lunet_free_nonnull(ctx->rw_conns);
+      ctx->rw_conns = NULL;
+      ctx->pool_n = 0;
+      luaL_getmetatable(co, LUNET_SQLITE_POOL_MT);
+      lua_setmetatable(co, -2);
+      push_conn_wrapper(co, ctx->ro_conn, 1);
+      ctx->ro_conn = NULL;
+      lua_pushnil(co);
+    }
   } else {
     /* Failure shape: (nil, nil, err) — both handles nil, error third. */
     lua_pushnil(co);
@@ -318,6 +425,28 @@ int lunet_db_open(lua_State* L) {
   snprintf(ctx->path, sizeof(ctx->path), "%s", path);
   lua_pop(L, 1);
 
+  /* pool_size: how many writer connections sit behind the rw handle
+   * (round-robin pick at dispatch). Default 1 — the tuned single-writer
+   * setup. An escape hatch for sloppy mode, never for performance. */
+  ctx->pool_n = 1;
+  lua_getfield(L, 1, "pool_size");
+  if (!lua_isnil(L, -1)) {
+    if (!lua_isnumber(L, -1)) {
+      lua_pop(L, 1);
+      lunet_free_nonnull(ctx);
+      lua_pushstring(L, "db.open: pool_size must be a number");
+      return lua_error(L);
+    }
+    ctx->pool_n = (int)lua_tointeger(L, -1);
+    if (ctx->pool_n < 1 || ctx->pool_n > LUNET_SQLITE_POOL_MAX) {
+      lua_pop(L, 1);
+      lunet_free_nonnull(ctx);
+      lua_pushstring(L, "db.open: pool_size must be between 1 and 64");
+      return lua_error(L);
+    }
+  }
+  lua_pop(L, 1);
+
   lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_open_work_cb, db_open_after_cb);
@@ -338,6 +467,15 @@ int lunet_db_close(lua_State* L) {
   }
   if (lua_gettop(L) < 1) {
     lua_pushstring(L, "db.close requires a connection");
+    return 1;
+  }
+  lunet_sqlite_pool_t* pool = (lunet_sqlite_pool_t*)luaL_testudata(L, 1, LUNET_SQLITE_POOL_MT);
+  if (pool) {
+    for (int i = 0; i < pool->n; i++) {
+      if (pool->members[i]) lunet_sqlite_conn_close(pool->members[i]);
+    }
+    pool->closed = 1;
+    lua_pushnil(L);
     return 1;
   }
   lunet_sqlite_conn_t* wrapper = (lunet_sqlite_conn_t*)luaL_testudata(L, 1, LUNET_SQLITE_CONN_MT);
@@ -598,6 +736,21 @@ static void db_query_after_cb(uv_work_t* req, int status) {
   db_query_ctx_free(ctx);
 }
 
+/* Resolve the statement target: a pool handle round-robins to its next
+ * member; a bare connection handle (the ro side) is itself. Returns NULL
+ * for anything else. The cursor is touched only on the loop thread, where
+ * every entry point runs. */
+static lunet_sqlite_conn_t* pick_statement_target(lua_State* L, int idx) {
+  lunet_sqlite_pool_t* pool = (lunet_sqlite_pool_t*)luaL_testudata(L, idx, LUNET_SQLITE_POOL_MT);
+  if (pool) {
+    if (!pool->members || pool->n < 1) return NULL;
+    lunet_sqlite_conn_t* member = pool->members[pool->next];
+    pool->next = (pool->next + 1) % pool->n;
+    return member; /* closed pools surface "connection is closed" downstream */
+  }
+  return (lunet_sqlite_conn_t*)luaL_testudata(L, idx, LUNET_SQLITE_CONN_MT);
+}
+
 int lunet_db_query(lua_State* L) {
   if (lunet_ensure_coroutine(L, "db.query")) {
     return lua_error(L);
@@ -608,7 +761,7 @@ int lunet_db_query(lua_State* L) {
     return 2;
   }
 
-  lunet_sqlite_conn_t* wrapper = (lunet_sqlite_conn_t*)luaL_testudata(L, 1, LUNET_SQLITE_CONN_MT);
+  lunet_sqlite_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
     lua_pushnil(L);
     lua_pushstring(L, "db.query requires a valid connection");
@@ -804,7 +957,7 @@ int lunet_db_exec(lua_State* L) {
     return 2;
   }
 
-  lunet_sqlite_conn_t* wrapper = (lunet_sqlite_conn_t*)luaL_testudata(L, 1, LUNET_SQLITE_CONN_MT);
+  lunet_sqlite_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
     lua_pushnil(L);
     lua_pushstring(L, "db.exec requires a valid connection");
@@ -884,7 +1037,7 @@ int lunet_db_query_params(lua_State* L) {
     return 2;
   }
 
-  lunet_sqlite_conn_t* wrapper = (lunet_sqlite_conn_t*)luaL_testudata(L, 1, LUNET_SQLITE_CONN_MT);
+  lunet_sqlite_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
     lua_pushnil(L);
     lua_pushstring(L, "db.query_params requires a valid connection");
@@ -960,7 +1113,7 @@ int lunet_db_exec_params(lua_State* L) {
     return 2;
   }
 
-  lunet_sqlite_conn_t* wrapper = (lunet_sqlite_conn_t*)luaL_testudata(L, 1, LUNET_SQLITE_CONN_MT);
+  lunet_sqlite_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
     lua_pushnil(L);
     lua_pushstring(L, "db.exec_params requires a valid connection");

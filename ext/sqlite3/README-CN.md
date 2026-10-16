@@ -10,7 +10,7 @@ SQLite 驱动。可以直接 `require("lunet.sqlite3")` 发布压缩包中的预
 
 | 函数 | 说明 |
 |---|---|
-| `open(config)` | `{ path = "app.db" }` 或 `{ path = ":memory:" }`；返回**两个**连接 —— `(rw, ro, err)` |
+| `open(config)` | `{ path = "app.db" }` 或 `{ path = ":memory:" }`，可选 `pool_size`（默认 1）；返回**两个**连接 —— `(rw, ro, err)` |
 | `close(conn)` | 可独立关闭任一句柄 |
 | `query(conn, sql, ...)` | 返回行表数组 |
 | `exec(conn, sql, ...)` | 返回 `{ affected_rows, last_insert_id }` |
@@ -47,7 +47,8 @@ end)
 - `ro` —— 以 `SQLITE_OPEN_READONLY` 打开的第二个连接，用于读流量。其上的
   `query`/`exec` 在循环线程内联执行。WAL 模式下读者与写者互不阻塞，因此
   循环线程路径就是快路径；同样的负载按此路由实测 p95 比全部语句挤进一个
-  池化句柄快约 4 倍。
+  池化句柄快约 4 倍。推理与实测数据见 [SQLITE-CN.md](SQLITE-CN.md)
+  （英文：[SQLITE.md](SQLITE.md)）。
 - **失败形态：** 打开失败时两个句柄均为 `nil`，错误是第三个返回值 ——
   `local rw, ro, err = db.open(...)`。这是 sqlite3 驱动特有的形态：网络驱动
   仍保持 `(conn, err)`。
@@ -59,10 +60,22 @@ end)
   可用，供测试把不变量当一等断言使用。
 - 用完请分别对两个句柄调用 `db.close`；它们是相互独立的连接。
 
+### `pool_size`：逃生舱口，不是性能旋钮
+
+`open` 接受 `pool_size`（默认 **1**）：`rw` 句柄背后的连接数，一条语句 →
+一个成员，派发时轮转选取。请保持默认值——单写者的已调优配置——并把读交给
+`ro`。调高它**永远不是为了性能**：SQLite 同一时刻只提交一个写，而读本来就在
+循环线程上并发。它存在的意义是让马虎代码（假设有一池可互换连接、从网络驱动
+习惯移植的代码）至少能跑起来。`ro` 永远不遵守它。两个后果：`sqlite3_tx`
+要求默认 `pool_size = 1`（多成员池破坏连接亲和性——`BEGIN` 与 `COMMIT`
+可能落在不同连接上，最终什么也没提交），且写依然串行。完整推理见
+[SQLITE-CN.md](SQLITE-CN.md)。
+
 ## 事务
 
 使用 `lunet.sqlite3_tx`（`sqlite3_tx.lua`，与 `sqlite3.so` 一同发布）。
-事务请放在 `rw` 句柄上。
+事务请放在 `rw` 句柄上——也就是说 `pool_size` 保持默认值 1：事务属于
+*连接*，而多成员池在构造上就违反了这一点。
 
 ```lua
 local sqlite = require("lunet.sqlite3")

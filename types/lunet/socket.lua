@@ -107,6 +107,20 @@ function socket.close(handle) end
 ---```
 function socket.set_read_buffer_size(size) end
 
+---Enable or disable TCP_NODELAY (Nagle's algorithm) on a TCP socket.
+---TCP data sockets from accept() and connect() start with NODELAY enabled.
+---Unix sockets ignore the setting and report an error.
+---@param handle lightuserdata The socket handle
+---@param enabled boolean true to disable Nagle, false to re-enable it
+---@return nil|nil ok nil on success (error-only convention)
+---@return string|nil error Error message on failure
+---@usage
+---```lua
+---local socket = require('lunet.socket')
+---socket.set_nodelay(conn, false)  -- re-enable Nagle on this one socket
+---```
+function socket.set_nodelay(handle, enabled) end
+
 ---Connect to a server
 ---@param host string The server host
 ---@param port integer The server port

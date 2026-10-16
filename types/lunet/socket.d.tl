@@ -9,5 +9,8 @@ global record socket
     write: function(client: Handle, data: string): string
     close: function(handle: Handle)
     set_read_buffer_size: function(size: integer)
+    -- TCP sockets from accept/connect start with TCP_NODELAY enabled;
+    -- unix sockets report an error instead of changing anything
+    set_nodelay: function(handle: Handle, enabled: boolean): string
     connect: function(host: string, port: integer): Handle, string
 end

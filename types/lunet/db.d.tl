@@ -7,7 +7,7 @@ global type Conn = userdata
 -- (conn, err). This record keeps the network shape; the {path} variant is
 -- annotated as the sqlite3 3-return split.
 global record db
-    open: function(params: {host: string, port: integer, user: string, password: string, database: string, charset: string}): Conn, string
+    open: function(params: {host: string, port: integer, user: string, password: string, database: string, charset: string, pool_size: integer}): Conn, string
     open: function(params: {path: string, pool_size: integer}): Conn, Conn, string
     close: function(conn: Conn): string
     query: function(conn: Conn, sql: string): {any}, string

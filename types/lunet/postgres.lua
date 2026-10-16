@@ -10,7 +10,9 @@ local postgres = {}
 --- - user: string? (default "")
 --- - password: string? (default "")
 --- - database: string? (default "")
----@return lightuserdata|nil conn The connection handle, or nil on error
+--- - pool_size: integer? (default 1) connections behind the returned handle,
+---   round-robin; postgres_tx requires the default
+---@return lightuserdata|nil conn The connection handle (a pool of pool_size connections), or nil on error
 ---@return string|nil error Error message if failed
 ---@usage
 ---```lua

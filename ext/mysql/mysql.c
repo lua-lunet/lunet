@@ -21,6 +21,8 @@
 #include "uv.h"
 
 #define LUNET_MYSQL_CONN_MT "lunet.mysql.conn"
+#define LUNET_MYSQL_POOL_MT "lunet.mysql.pool"
+#define LUNET_MYSQL_POOL_MAX 64
 
 static int g_mysql_library_initialized = 0;
 static int g_mysql_library_refcount = 0;
@@ -63,6 +65,17 @@ typedef struct {
   int library_ref_held;
 } lunet_mysql_conn_t;
 
+/* The handle open() returns: a pool of pool_size connections, one statement
+ * -> one member, picked round-robin at dispatch. Default pool_size is 1 —
+ * exactly one connection, as before. The server genuinely serves concurrent
+ * client connections, so a wider pool parallelises real work. */
+typedef struct {
+  lunet_mysql_conn_t** members;
+  int n;
+  int next; /* round-robin cursor; picked on the loop thread only */
+  int closed;
+} lunet_mysql_pool_t;
+
 /* Close connection but keep mutex intact (for explicit db.close()). */
 static void lunet_mysql_conn_close(lunet_mysql_conn_t* wrapper) {
   if (!wrapper || wrapper->closed) return;
@@ -89,7 +102,8 @@ typedef struct {
   lua_State* waiter_L;
   int co_ref;
 
-  MYSQL* conn;
+  MYSQL** conns; /* pool_n connections; handed to the pool on success */
+  int pool_n;
   char err[256];
 
   char host[256];
@@ -103,21 +117,48 @@ typedef struct {
 static void db_open_work_cb(uv_work_t* req) {
   db_open_ctx_t* ctx = (db_open_ctx_t*)req->data;
   mysql_thread_init();
-  ctx->conn = mysql_init(NULL);
-  if (!ctx->conn) {
-    snprintf(ctx->err, sizeof(ctx->err), "mysql_init failed");
+
+  ctx->conns = lunet_alloc(sizeof(MYSQL*) * (size_t)ctx->pool_n);
+  if (!ctx->conns) {
+    snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+    ctx->pool_n = 0;
     mysql_thread_end();
     return;
   }
+  memset(ctx->conns, 0, sizeof(MYSQL*) * (size_t)ctx->pool_n);
 
-  mysql_options(ctx->conn, MYSQL_SET_CHARSET_NAME, ctx->charset);
+  for (int i = 0; i < ctx->pool_n; i++) {
+    ctx->conns[i] = mysql_init(NULL);
+    if (!ctx->conns[i]) {
+      snprintf(ctx->err, sizeof(ctx->err), "mysql_init failed");
+      for (int j = 0; j < i; j++) {
+        mysql_close(ctx->conns[j]);
+        ctx->conns[j] = NULL;
+      }
+      lunet_free_nonnull(ctx->conns);
+      ctx->conns = NULL;
+      ctx->pool_n = 0;
+      mysql_thread_end();
+      return;
+    }
 
-  if (!mysql_real_connect(ctx->conn, ctx->host, ctx->user, ctx->password, ctx->database, ctx->port, NULL, 0)) {
-    snprintf(ctx->err, sizeof(ctx->err), "%s", mysql_error(ctx->conn));
-    mysql_close(ctx->conn);
-    ctx->conn = NULL;
-    mysql_thread_end();
-    return;
+    mysql_options(ctx->conns[i], MYSQL_SET_CHARSET_NAME, ctx->charset);
+
+    if (!mysql_real_connect(ctx->conns[i], ctx->host, ctx->user, ctx->password,
+                            ctx->database, ctx->port, NULL, 0)) {
+      snprintf(ctx->err, sizeof(ctx->err), "%s", mysql_error(ctx->conns[i]));
+      mysql_close(ctx->conns[i]);
+      ctx->conns[i] = NULL;
+      for (int j = 0; j < i; j++) {
+        mysql_close(ctx->conns[j]);
+        ctx->conns[j] = NULL;
+      }
+      lunet_free_nonnull(ctx->conns);
+      ctx->conns = NULL;
+      ctx->pool_n = 0;
+      mysql_thread_end();
+      return;
+    }
   }
   mysql_thread_end();
 }
@@ -131,29 +172,67 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.open\n");
-    if (ctx->conn) mysql_close(ctx->conn);
-    lunet_mysql_library_release();
+    if (ctx->conns) {
+      for (int i = 0; i < ctx->pool_n; i++) {
+        if (ctx->conns[i]) mysql_close(ctx->conns[i]);
+        ctx->conns[i] = NULL;
+      }
+      lunet_free_nonnull(ctx->conns);
+      ctx->conns = NULL;
+      ctx->pool_n = 0;
+    }
+    for (int i = 0; i < ctx->pool_n; i++) lunet_mysql_library_release();
+    ctx->pool_n = 0;
     lunet_free_nonnull(ctx);
     return;
   }
   lua_State* co = lua_tothread(L, -1);
   lua_pop(L, 1);
 
-  if (ctx->conn) {
-    lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)lua_newuserdata(co, sizeof(lunet_mysql_conn_t));
-    wrapper->conn = ctx->conn;
-    wrapper->closed = 0;
-    wrapper->library_ref_held = 1;
-    uv_mutex_init(&wrapper->mutex);
-
-    luaL_getmetatable(co, LUNET_MYSQL_CONN_MT);
-    lua_setmetatable(co, -2);
-
-    lua_pushnil(co);
+  if (ctx->conns && ctx->pool_n > 0) {
+    /* Success shape: (pool handle, nil). Build the pool wrapper and hand
+     * the raw connections over to it; each member holds one library ref. */
+    lunet_mysql_pool_t* pool =
+        (lunet_mysql_pool_t*)lua_newuserdata(co, sizeof(lunet_mysql_pool_t));
+    pool->members = lunet_alloc(sizeof(lunet_mysql_conn_t*) * (size_t)ctx->pool_n);
+    if (!pool->members) {
+      pool->n = 0;
+      pool->closed = 1;
+      for (int i = 0; i < ctx->pool_n; i++) {
+        if (ctx->conns[i]) mysql_close(ctx->conns[i]);
+        ctx->conns[i] = NULL;
+      }
+      lunet_free_nonnull(ctx->conns);
+      ctx->conns = NULL;
+      for (int i = 0; i < ctx->pool_n; i++) lunet_mysql_library_release();
+      ctx->pool_n = 0;
+      lua_pushnil(co);
+      lua_pushstring(co, "out of memory");
+    } else {
+      pool->n = ctx->pool_n;
+      pool->next = 0;
+      pool->closed = 0;
+      for (int i = 0; i < pool->n; i++) {
+        lunet_mysql_conn_t* member = lunet_alloc(sizeof(lunet_mysql_conn_t));
+        member->conn = ctx->conns[i];
+        member->closed = 0;
+        member->library_ref_held = 1;
+        uv_mutex_init(&member->mutex);
+        pool->members[i] = member;
+        ctx->conns[i] = NULL;
+      }
+      lunet_free_nonnull(ctx->conns);
+      ctx->conns = NULL;
+      ctx->pool_n = 0;
+      luaL_getmetatable(co, LUNET_MYSQL_POOL_MT);
+      lua_setmetatable(co, -2);
+      lua_pushnil(co);
+    }
   } else {
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
-    lunet_mysql_library_release();
+    for (int i = 0; i < ctx->pool_n; i++) lunet_mysql_library_release();
+    ctx->pool_n = 0;
   }
   int rc = lunet_co_resume(co, 2);
   if (rc != 0 && rc != LUA_YIELD) {
@@ -170,9 +249,32 @@ static int conn_gc(lua_State* L) {
   return 0;
 }
 
+/* Full pool teardown: close every member (releasing its library ref),
+ * destroy its mutex, free the array. */
+static int pool_gc(lua_State* L) {
+  lunet_mysql_pool_t* pool = (lunet_mysql_pool_t*)luaL_checkudata(L, 1, LUNET_MYSQL_POOL_MT);
+  if (pool->members) {
+    for (int i = 0; i < pool->n; i++) {
+      if (pool->members[i]) {
+        lunet_mysql_conn_destroy(pool->members[i]);
+        pool->members[i] = NULL;
+      }
+    }
+    lunet_free_nonnull(pool->members);
+    pool->members = NULL;
+  }
+  pool->closed = 1;
+  return 0;
+}
+
 static void register_conn_metatable(lua_State* L) {
   if (luaL_newmetatable(L, LUNET_MYSQL_CONN_MT)) {
     lua_pushcfunction(L, conn_gc);
+    lua_setfield(L, -2, "__gc");
+  }
+  lua_pop(L, 1);
+  if (luaL_newmetatable(L, LUNET_MYSQL_POOL_MT)) {
+    lua_pushcfunction(L, pool_gc);
     lua_setfield(L, -2, "__gc");
   }
   lua_pop(L, 1);
@@ -359,13 +461,47 @@ int lunet_db_open(lua_State* L) {
   snprintf(ctx->charset, sizeof(ctx->charset), "%s", luaL_optstring(L, -1, "utf8mb4"));
   lua_pop(L, 6);
 
+  /* pool_size: how many connections sit behind the returned handle
+   * (round-robin pick at dispatch). Default 1 — exactly one connection,
+   * as before. Each pool member holds one mysql library ref, so top the
+   * refcount up to pool_n; every failure path releases the full count. */
+  ctx->pool_n = 1;
+  lua_getfield(L, 1, "pool_size");
+  if (!lua_isnil(L, -1)) {
+    if (!lua_isnumber(L, -1)) {
+      lua_pop(L, 1);
+      lunet_mysql_library_release();
+      lunet_free_nonnull(ctx);
+      lua_pushstring(L, "db.open: pool_size must be a number");
+      return lua_error(L);
+    }
+    ctx->pool_n = (int)lua_tointeger(L, -1);
+    if (ctx->pool_n < 1 || ctx->pool_n > LUNET_MYSQL_POOL_MAX) {
+      lua_pop(L, 1);
+      lunet_mysql_library_release();
+      lunet_free_nonnull(ctx);
+      lua_pushstring(L, "db.open: pool_size must be between 1 and 64");
+      return lua_error(L);
+    }
+  }
+  lua_pop(L, 1);
+  for (int i = 1; i < ctx->pool_n; i++) {
+    if (lunet_mysql_library_acquire() != 0) {
+      for (int j = 1; j < i; j++) lunet_mysql_library_release();
+      lunet_mysql_library_release();
+      lunet_free_nonnull(ctx);
+      lua_pushstring(L, "db.open: mysql_library_init failed");
+      return lua_error(L);
+    }
+  }
+
   lunet_coref_create(L, ctx->co_ref);
 
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_open_work_cb, db_open_after_cb);
   if (ret < 0) {
     lunet_coref_release(L, ctx->co_ref);
     lunet_free_nonnull(ctx);
-    lunet_mysql_library_release();
+    for (int i = 0; i < ctx->pool_n; i++) lunet_mysql_library_release();
     lua_pushnil(L);
     lua_pushfstring(L, "db.open: uv_queue_work failed: %s", uv_strerror(ret));
     return lua_error(L);
@@ -383,6 +519,16 @@ int lunet_db_close(lua_State* L) {
     return 1;
   }
 
+  lunet_mysql_pool_t* pool = (lunet_mysql_pool_t*)luaL_testudata(L, 1, LUNET_MYSQL_POOL_MT);
+  if (pool) {
+    for (int i = 0; i < pool->n; i++) {
+      if (pool->members[i]) lunet_mysql_conn_close(pool->members[i]);
+    }
+    pool->closed = 1;
+    lua_pushnil(L);
+    return 1;
+  }
+
   lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)luaL_testudata(L, 1, LUNET_MYSQL_CONN_MT);
   if (!wrapper) {
     lua_pushstring(L, "db.close requires a valid connection");
@@ -395,6 +541,21 @@ int lunet_db_close(lua_State* L) {
 
   lua_pushnil(L);
   return 1;
+}
+
+/* Resolve the statement target: a pool handle round-robins to its next
+ * member; a bare connection handle is itself. Returns NULL for anything
+ * else. The cursor is touched only on the loop thread, where every entry
+ * point runs. */
+static lunet_mysql_conn_t* pick_statement_target(lua_State* L, int idx) {
+  lunet_mysql_pool_t* pool = (lunet_mysql_pool_t*)luaL_testudata(L, idx, LUNET_MYSQL_POOL_MT);
+  if (pool) {
+    if (!pool->members || pool->n < 1) return NULL;
+    lunet_mysql_conn_t* member = pool->members[pool->next];
+    pool->next = (pool->next + 1) % pool->n;
+    return member; /* closed pools surface "connection is closed" downstream */
+  }
+  return (lunet_mysql_conn_t*)luaL_testudata(L, idx, LUNET_MYSQL_CONN_MT);
 }
 
 typedef struct {
@@ -771,7 +932,7 @@ int lunet_db_query(lua_State* L) {
     return 2;
   }
 
-  lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)luaL_testudata(L, 1, LUNET_MYSQL_CONN_MT);
+  lunet_mysql_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
     lua_pushnil(L);
     lua_pushstring(L, "db.query requires a valid connection");
@@ -982,7 +1143,7 @@ int lunet_db_exec(lua_State* L) {
     return 2;
   }
 
-  lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)luaL_testudata(L, 1, LUNET_MYSQL_CONN_MT);
+  lunet_mysql_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
     lua_pushnil(L);
     lua_pushstring(L, "db.exec requires a valid connection");
@@ -1062,7 +1223,7 @@ int lunet_db_query_params(lua_State* L) {
     return 2;
   }
   
-  lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)luaL_testudata(L, 1, LUNET_MYSQL_CONN_MT);
+  lunet_mysql_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
     lua_pushnil(L);
     lua_pushstring(L, "db.query requires a valid connection");
@@ -1132,7 +1293,7 @@ int lunet_db_exec_params(lua_State* L) {
     return 2;
   }
   
-  lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)luaL_testudata(L, 1, LUNET_MYSQL_CONN_MT);
+  lunet_mysql_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
     lua_pushnil(L);
     lua_pushstring(L, "db.exec requires a valid connection");

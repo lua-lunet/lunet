@@ -12,6 +12,8 @@ local db = {}
 ---@field password string Password to use (default: "")
 ---@field database string Database to use (default: "")
 ---@field charset string Charset to use (MySQL only, default: "utf8mb4")
+---@field pool_size integer Connections behind the returned handle, round-robin
+---(default 1; postgres_tx/mysql_tx require the default)
 
 ---Connection parameters for the SQLite3 backend.
 ---The sqlite3 driver's open returns TWO connections: prefer

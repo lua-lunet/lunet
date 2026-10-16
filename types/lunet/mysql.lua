@@ -11,7 +11,8 @@ local mysql = {}
 --- - password: The password to use
 --- - database: The database to use
 --- - charset: The charset to use
----@return lightuserdata|nil conn The connection or nil on error
+--- - pool_size: integer? (default 1) connections behind the returned handle, round-robin; mysql_tx requires the default
+---@return lightuserdata|nil conn The connection (a pool of pool_size connections) or nil on error
 ---@return string|nil error Error message if failed
 function mysql.open(params) end
 

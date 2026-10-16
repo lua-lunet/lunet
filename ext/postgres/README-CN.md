@@ -10,11 +10,20 @@ SQL。本项目有意不提供 `db.escape`。
 
 | 函数 | 说明 |
 |---|---|
-| `open(config)` | `host`、`port`、`user`、`password`、`database` |
+| `open(config)` | `host`、`port`、`user`、`password`、`database`，可选 `pool_size`（默认 1） |
 | `close(conn)` | |
 | `query(conn, sql, ...)` | 返回行表数组 |
 | `exec(conn, sql, ...)` | 返回 `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | 与上述行为一致 |
+
+### `pool_size`
+
+`open` 接受 `pool_size`（默认 **1**）：返回句柄背后的服务器连接数。一条语句 →
+一个成员，派发时轮转选取；`close` 关闭全部成员。Postgres 本就服务并发的客户
+端连接，因此更宽的池能并行化真实工作——在这里这是正经特性，不是逃生舱口。
+
+**`postgres_tx` 要求默认 `pool_size = 1`。** 事务属于*连接*；多成员池在构造上
+就违反了这一点——`BEGIN` 与 `COMMIT` 可能落在不同会话上，最终什么也没提交。
 
 ## 事务
 

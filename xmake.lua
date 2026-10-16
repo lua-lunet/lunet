@@ -735,11 +735,13 @@ task("test")
     on_run(function ()
         -- Type checking runs first; type errors abort before busted.
         os.exec("xmake check-types")
-        -- Build the httpc and sqlite3 C modules up front so their specs can
-        -- always run. A platform that cannot build them must surface red
-        -- here, not skip.
+        -- Build the httpc and DB driver C modules up front so their specs
+        -- can always run. A platform that cannot build them must surface
+        -- red here, not skip.
         os.exec("xmake build lunet-httpc")
         os.exec("xmake build lunet-sqlite3")
+        os.exec("xmake build lunet-postgres")
+        os.exec("xmake build lunet-mysql")
         local mode = get_config("mode") or "release"
         local dirs = os.dirs("build/**/" .. mode .. "/lunet")
         local cpath = os.getenv("LUA_CPATH") or ""

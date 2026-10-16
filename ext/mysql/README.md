@@ -11,11 +11,23 @@ deliberately no `db.escape`.
 
 | Function | Notes |
 |---|---|
-| `open(config)` | `host`, `port`, `user`, `password`, `database`, `charset` |
+| `open(config)` | `host`, `port`, `user`, `password`, `database`, `charset`, optional `pool_size` (default 1) |
 | `close(conn)` | |
 | `query(conn, sql, ...)` | returns array of row tables |
 | `exec(conn, sql, ...)` | returns `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | same behaviour as the above |
+
+### `pool_size`
+
+`open` accepts `pool_size` (default **1**): how many server connections sit
+behind the returned handle. One statement → one member, picked round-robin
+at dispatch; `close` closes all members. MySQL genuinely serves concurrent
+client connections, so a wider pool parallelises real work — this is a
+feature here, not an escape hatch.
+
+**`mysql_tx` requires the default `pool_size = 1`.** A transaction belongs
+to the *connection*; a multi-member pool violates that by construction —
+`BEGIN` and `COMMIT` can land on different sessions and commit nothing.
 
 ## Transactions
 

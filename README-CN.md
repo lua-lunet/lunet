@@ -133,6 +133,15 @@ socket.write(conn, "hello")
 socket.close(conn)
 ```
 
+TCP 数据套接字（`accept` 与 `connect` 的返回结果）默认启用 `TCP_NODELAY`：本运行时的目标负载是
+小型单次写入的请求/响应流量，Nagle 在这种场景下只会带来 delayed-ACK 尾延迟，没有任何收益。
+对特定套接字重新启用 Nagle（多小帧写协议）用 `socket.set_nodelay(handle, false)`；
+`socket.set_nodelay(handle, true)` 再关回去。Unix 套接字忽略该设置。
+
+```lua
+socket.set_nodelay(conn, false)  -- 对该套接字重新启用 Nagle
+```
+
 ### UDP (`lunet.udp`)
 
 ```lua

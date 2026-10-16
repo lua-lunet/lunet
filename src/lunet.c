@@ -77,6 +77,7 @@ int lunet_open_socket(lua_State *L) {
                       {"write", lunet_socket_write},
                       {"connect", lunet_socket_connect},
                       {"set_read_buffer_size", lunet_socket_set_read_buffer_size},
+                      {"set_nodelay", lunet_socket_set_nodelay},
                       {NULL, NULL}};
   luaL_newlib(L, funcs);
   return 1;

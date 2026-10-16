@@ -39,6 +39,11 @@ ffi.cdef[[
   int lunet_sodium_hmac_sha256(const uint8_t* input, size_t input_len,
                                const uint8_t* key, size_t key_len, uint8_t* out);
   int lunet_sodium_randombytes(uint8_t* out, size_t out_len);
+  int lunet_sodium_base64_encode(const uint8_t* input, size_t input_len,
+                                 int variant, uint8_t* out, size_t out_cap);
+  int lunet_sodium_base64_decode(const uint8_t* input, size_t input_len,
+                                 int variant, uint8_t* out, size_t out_cap,
+                                 size_t* written);
   const uint8_t* lunet_paxe_last_error(size_t* len);
 ]]
 
@@ -180,6 +185,95 @@ function M.random(n)
   if rc == RC_INVAL then error(last_error(), 2) end
   if rc ~= RC_OK then return nil, last_error() end
   return ffi.string(out, n)
+end
+
+--- Base64 variant selection. The values are libsodium's own macro
+--- values, mirrored here and in the Rust constants.
+--- URLSAFE_NO_PADDING (7) is the JWT profile: tokens travel in headers
+--- and never carry `=`.
+M.BASE64_VARIANT_ORIGINAL = 1
+M.BASE64_VARIANT_ORIGINAL_NO_PADDING = 3
+M.BASE64_VARIANT_URLSAFE = 5
+M.BASE64_VARIANT_URLSAFE_NO_PADDING = 7
+
+--- Encoded length of `n` raw bytes under ANY variant, NUL included: the
+--- linked library's `sodium_base64_ENCODE_LEN` formula. The 4-byte slack
+--- covers the per-group padding maximum across all variants.
+local function base64_encoded_len(n)
+  return math.floor(n / 3) * 4 + 5
+end
+
+--- Decoded upper bound of `n` encoded bytes under ANY variant: every 4
+--- encoded characters carry at most 3 raw bytes, plus headroom for the
+--- trailing group.
+local function base64_decoded_len(n)
+  return (math.floor(n / 4) + 1) * 3
+end
+
+local function check_variant(v, name)
+  check_count(v, name)
+  if v ~= M.BASE64_VARIANT_ORIGINAL and
+     v ~= M.BASE64_VARIANT_ORIGINAL_NO_PADDING and
+     v ~= M.BASE64_VARIANT_URLSAFE and
+     v ~= M.BASE64_VARIANT_URLSAFE_NO_PADDING then
+    error(("bad argument '%s' (unknown base64 variant %d)"):format(name, v), 3)
+  end
+  return v
+end
+
+--- Encode `data` with the linked library's own base64 under `variant`
+--- (one of the BASE64_VARIANT_* constants above; an unknown variant
+--- raises — a bug in the calling script). URLSAFE_NO_PADDING is the JWT
+--- profile. Returns the encoded text.
+---
+--- SECURITY: base64 crosses no secrets — a plain, stateless transform;
+--- bytes that are secret remain secret while encoded.
+---@param data string Bytes to encode
+---@param variant integer One of the BASE64_VARIANT_* constants
+---@return string b64 Encoded text
+---@return string|nil error Set only on operational failure
+---@usage
+---```lua
+---local sodium = require("lunet.sodium")
+---local b64 = sodium.base64_encode(data, sodium.BASE64_VARIANT_URLSAFE_NO_PADDING)
+---```
+function M.base64_encode(data, variant)
+  data = check_string(data, "data")
+  variant = check_variant(variant, "variant")
+  local needed = base64_encoded_len(#data)
+  local out = ffi.new("uint8_t[?]", needed)
+  local rc = C.lunet_sodium_base64_encode(data, #data, variant, out, needed)
+  if rc == RC_INVAL then error(last_error(), 2) end
+  if rc ~= RC_OK then return nil, last_error() end
+  return ffi.string(out)
+end
+
+--- Decode base64 back to bytes with the linked library's own transform
+--- under the same `variant` selection. Decode failures — malformed input
+--- for the variant, unknown variant, or trailing garbage after the
+--- payload — raise with the library's own diagnostic (a bug in the
+--- calling script). Returns the decoded bytes; the result is binary, so
+--- length — not a NUL — says where it ends.
+---@param data string Encoded text
+---@param variant integer One of the BASE64_VARIANT_* constants
+---@return string bytes Decoded bytes
+---@return string|nil error Set only on operational failure
+---@usage
+---```lua
+---local sodium = require("lunet.sodium")
+---local bin = sodium.base64_decode(token, sodium.BASE64_VARIANT_URLSAFE_NO_PADDING)
+---```
+function M.base64_decode(data, variant)
+  data = check_string(data, "data")
+  variant = check_variant(variant, "variant")
+  if #data == 0 then return "" end
+  local out = ffi.new("uint8_t[?]", base64_decoded_len(#data))
+  local written = ffi.new("size_t[1]")
+  local rc = C.lunet_sodium_base64_decode(data, #data, variant, out,
+    base64_decoded_len(#data), written)
+  if rc == RC_INVAL then error(last_error(), 2) end
+  if rc ~= RC_OK then return nil, last_error() end
+  return ffi.string(out, tonumber(written[0]))
 end
 
 return M

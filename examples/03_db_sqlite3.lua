@@ -29,12 +29,15 @@ data.
 local lunet = require("lunet")
 local db = require("lunet.sqlite3")
 
-local DB_PATH = "03_db_sqlite3_demo.db"
+-- The demo database lives in the repo-local gitignored scratch dir so a
+-- run from the repo root never litters it with db artefacts.
+local DB_PATH = ".tmp/03_db_sqlite3_demo.db"
 
 lunet.spawn(function()
     print("=== SQLite3 Database Demo ===")
     print()
 
+    os.execute("mkdir -p .tmp")
     os.remove(DB_PATH)
     os.remove(DB_PATH .. "-wal")
     os.remove(DB_PATH .. "-shm")

@@ -226,10 +226,10 @@ xmake build lunet-postgres  # PostgreSQL
 local db = require("lunet.sqlite3")
 
 -- 打开：返回两个连接 —— rw（worker 池）+ ro（读在循环线程内联执行）。
--- 调用对按路径缓存；完整参考见 ext/sqlite3/SQLITE-CN.md
-local rw, ro, err = db.open({ path = "myapp.db" })
+-- 调用对按路径缓存；create="WAL" 一步完成建文件并设上持久的 WAL 日志
+-- 模式。完整参考见 ext/sqlite3/SQLITE-CN.md
+local rw, ro, err = db.open({ path = "myapp.db", create = "WAL" })
 if not rw then error(err) end
-assert(db.exec(rw, "PRAGMA journal_mode=WAL"))
 
 -- 执行语句（INSERT/UPDATE/DELETE）- 返回结果元数据
 local result = db.exec(rw, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
@@ -296,7 +296,7 @@ db.close(conn)
 
 | 函数 | 描述 | 返回值 |
 |------|------|--------|
-| `db.open(config)` | 打开连接：sqlite3 返回按路径缓存的 `(rw, ro)` 对；postgres/mysql 返回单个连接（可用 `pool_size` 池化，默认 1） | 连接句柄 |
+| `db.open(config)` | 打开连接：sqlite3 返回按路径缓存的 `(rw, ro)` 对——`create = "WAL"\|"NORMAL"` 允许驱动创建新文件（不传则文件必须已存在）；postgres/mysql 返回单个连接（可用 `pool_size` 池化，默认 1） | 连接句柄 |
 | `db.close(conn)` | 关闭连接 | - |
 | `db.query(conn, sql, ...)` | 执行 SELECT（可带参数） | 行表数组 |
 | `db.exec(conn, sql, ...)` | 执行 INSERT/UPDATE/DELETE（可带参数） | 结果表（`affected_rows`、`last_insert_id`） |

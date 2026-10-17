@@ -42,18 +42,16 @@ lunet.spawn(function()
     os.remove(DB_PATH .. "-wal")
     os.remove(DB_PATH .. "-shm")
 
-    local rw, ro, err = db.open({ path = DB_PATH })
+    -- create = "WAL": the driver creates the file and sets the sticky
+    -- journal mode in one act. Provisioning an existing database is a
+    -- deployment act instead (sqlite3 app.db "PRAGMA journal_mode=WAL;").
+    local rw, ro, err = db.open({ path = DB_PATH, create = "WAL" })
     if not rw then
         error("Failed to open database: " .. tostring(err))
     end
     assert(type(rw) == "userdata" and type(ro) == "userdata",
         "open must return two connections (rw, ro)")
-    print("Opened " .. DB_PATH .. " (rw + read-only ro)")
-
-    -- One-time setup on the writer: WAL makes readers uncontended
-    -- against the single writer.
-    local wal = db.exec(rw, "PRAGMA journal_mode=WAL")
-    if wal then print("Journal mode: WAL") end
+    print("Opened " .. DB_PATH .. " (rw + read-only ro, journal mode: WAL)")
 
     local _, result
     _, err = db.exec(rw, [[
@@ -71,6 +69,12 @@ lunet.spawn(function()
         return
     end
     print("Created users table")
+
+    -- First use of the read-only handle — read the documentation first.
+    -- ro runs INLINE on the loop thread: no background thread, no yield.
+    -- Under some workloads that is peak performance; whether it is true
+    -- for yours depends on your workload and SQLite version. If in doubt,
+    -- do NOT use the read-only connection — send everything down rw.
 
     local users = {
         { name = "Alice", email = "alice@example.com", age = 28 },

@@ -204,26 +204,111 @@ typedef struct {
   int co_ref;
 
   sqlite3* conn;    /* the read-write connection */
-  sqlite3* ro_conn; /* the read-only connection */
+  sqlite3* ro_conn; /* the read-only connection (NULL for :memory:) */
   char err[256];
 
   char path[1024];
+  int create;        /* open READWRITE|CREATE instead of READWRITE */
+  int set_wal;       /* issue PRAGMA journal_mode=WAL and check the result */
+  int is_memory;     /* path is ":memory:" — one connection, both handles */
+  int busy_timeout;  /* ms; -1 = leave at the SQLite default (no wait) */
+  int foreign_keys;  /* -1 = vendor default, 0 = off, 1 = on */
+  int synchronous;   /* -1 = vendor default, 0 = off, 1 = normal, 2 = full */
 } db_open_ctx_t;
+
+/* Apply the caller's passthrough settings to one connection. Pragmas are
+ * per-connection and last-write-wins: after open the caller can override
+ * any of them on either handle with db.exec(handle, "PRAGMA ..."). */
+static int apply_open_settings(db_open_ctx_t* ctx, sqlite3* conn) {
+  if (ctx->busy_timeout >= 0) {
+    sqlite3_busy_timeout(conn, ctx->busy_timeout);
+  }
+  if (ctx->foreign_keys >= 0) {
+    const char* sql = ctx->foreign_keys ? "PRAGMA foreign_keys=ON"
+                                        : "PRAGMA foreign_keys=OFF";
+    char* errmsg = NULL;
+    if (sqlite3_exec(conn, sql, NULL, NULL, &errmsg) != SQLITE_OK) {
+      snprintf(ctx->err, sizeof(ctx->err), "PRAGMA foreign_keys failed: %s",
+               errmsg ? errmsg : sqlite3_errmsg(conn));
+      if (errmsg) sqlite3_free(errmsg);
+      return -1;
+    }
+  }
+  if (ctx->synchronous >= 0) {
+    static const char* modes[] = { "OFF", "NORMAL", "FULL" };
+    char sql[64];
+    snprintf(sql, sizeof(sql), "PRAGMA synchronous=%s", modes[ctx->synchronous]);
+    char* errmsg = NULL;
+    if (sqlite3_exec(conn, sql, NULL, NULL, &errmsg) != SQLITE_OK) {
+      snprintf(ctx->err, sizeof(ctx->err), "PRAGMA synchronous failed: %s",
+               errmsg ? errmsg : sqlite3_errmsg(conn));
+      if (errmsg) sqlite3_free(errmsg);
+      return -1;
+    }
+  }
+  return 0;
+}
 
 static void db_open_work_cb(uv_work_t* req) {
   db_open_ctx_t* ctx = (db_open_ctx_t*)req->data;
 
-  /* Open the writer first: READWRITE|CREATE materialises the file (or the
-   * private :memory: database) so the READONLY open that follows sees a
-   * database to read. */
+  if (ctx->is_memory) {
+    /* :memory: is one private database: a single connection serves both
+     * handles (the Lua loader documents that ro does not enforce read-only
+     * there — it exists so unit tests can swap the path and keep the same
+     * (rw, ro) code shape). create= and WAL are meaningless for it. */
+    int rc = sqlite3_open_v2(ctx->path, &ctx->conn,
+                             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
+    if (rc != SQLITE_OK) {
+      snprintf(ctx->err, sizeof(ctx->err), "%s",
+               ctx->conn ? sqlite3_errmsg(ctx->conn) : "cannot open database");
+      if (ctx->conn) sqlite3_close(ctx->conn);
+      ctx->conn = NULL;
+      return;
+    }
+    if (apply_open_settings(ctx, ctx->conn) != 0) {
+      sqlite3_close(ctx->conn);
+      ctx->conn = NULL;
+    }
+    return;
+  }
+
+  /* File path. Without create= the file must already exist: provisioning
+   * (creating the database, setting WAL) is a deployment act, and the
+   * driver never makes a sticky change to a file on its own. */
   int rc = sqlite3_open_v2(ctx->path, &ctx->conn,
-                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
+                           ctx->create
+                               ? (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE)
+                               : SQLITE_OPEN_READWRITE,
+                           NULL);
   if (rc != SQLITE_OK) {
     snprintf(ctx->err, sizeof(ctx->err), "%s",
              ctx->conn ? sqlite3_errmsg(ctx->conn) : "cannot open database");
     if (ctx->conn) sqlite3_close(ctx->conn);
     ctx->conn = NULL;
     return;
+  }
+
+  if (ctx->set_wal) {
+    /* journal_mode returns the PRIOR mode string when the conversion does
+     * not take (it does not error), so the result is checked. There is no
+     * cleanup on failure: a filesystem that cannot host WAL is between the
+     * caller and SQLite — the loud open error is the whole story. */
+    sqlite3_stmt* stmt = NULL;
+    rc = sqlite3_prepare_v2(ctx->conn, "PRAGMA journal_mode=WAL", -1, &stmt, NULL);
+    if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
+    const char* mode =
+        (rc == SQLITE_ROW) ? (const char*)sqlite3_column_text(stmt, 0) : NULL;
+    int wal_ok = mode && strcmp(mode, "wal") == 0;
+    sqlite3_finalize(stmt);
+    if (!wal_ok) {
+      snprintf(ctx->err, sizeof(ctx->err),
+               "journal_mode=WAL unavailable (journal mode is %s)",
+               mode ? mode : "unknown");
+      sqlite3_close(ctx->conn);
+      ctx->conn = NULL;
+      return;
+    }
   }
 
   rc = sqlite3_open_v2(ctx->path, &ctx->ro_conn, SQLITE_OPEN_READONLY, NULL);
@@ -236,6 +321,16 @@ static void db_open_work_cb(uv_work_t* req) {
     sqlite3_close(ctx->conn);
     ctx->conn = NULL;
     return;
+  }
+
+  if (apply_open_settings(ctx, ctx->conn) != 0 ||
+      apply_open_settings(ctx, ctx->ro_conn) != 0) {
+    if (ctx->ro_conn) {
+      sqlite3_close(ctx->ro_conn);
+      ctx->ro_conn = NULL;
+    }
+    sqlite3_close(ctx->conn);
+    ctx->conn = NULL;
   }
 }
 
@@ -270,7 +365,15 @@ static void db_open_after_cb(uv_work_t* req, int status) {
   lua_State* co = lua_tothread(L, -1);
   lua_pop(L, 1);
 
-  if (ctx->conn && ctx->ro_conn) {
+  if (ctx->is_memory && ctx->conn) {
+    /* One connection, both handles: the same userdata pushed twice keeps
+     * one mutex and one close guard, so close/destroy cannot double-free
+     * and the engine never sees two wrappers over one connection. */
+    push_conn_wrapper(co, ctx->conn, 0);
+    lua_pushvalue(co, -1);
+    lua_pushnil(co);
+    ctx->conn = NULL;
+  } else if (ctx->conn && ctx->ro_conn) {
     /* Success shape: (rw, ro, nil). The third push is load-bearing:
      * lua_resume(co, 3) takes the top three values of the coroutine's
      * stack as the yield's return values — without the nil, stack junk
@@ -322,6 +425,68 @@ int lunet_db_open(lua_State* L) {
   lua_getfield(L, 1, "path");
   const char* path = luaL_optstring(L, -1, ":memory:");
   snprintf(ctx->path, sizeof(ctx->path), "%s", path);
+  lua_pop(L, 1);
+  ctx->is_memory = strcmp(ctx->path, ":memory:") == 0;
+
+  ctx->create = 0;
+  ctx->set_wal = 0;
+  ctx->busy_timeout = -1;
+  ctx->foreign_keys = -1;
+  ctx->synchronous = -1;
+
+  lua_getfield(L, 1, "create");
+  if (!lua_isnil(L, -1)) {
+    const char* create = luaL_checkstring(L, -1);
+    if (strcmp(create, "WAL") == 0) {
+      ctx->create = 1;
+      ctx->set_wal = 1;
+    } else if (strcmp(create, "NORMAL") == 0) {
+      ctx->create = 1;
+    } else {
+      lunet_free_nonnull(ctx);
+      lua_pushfstring(L, "db.open: create must be \"WAL\" or \"NORMAL\" (got '%s')",
+                      create);
+      return lua_error(L);
+    }
+  }
+  lua_pop(L, 1);
+
+  lua_getfield(L, 1, "busy_timeout");
+  if (!lua_isnil(L, -1)) {
+    lua_Integer ms = luaL_checkinteger(L, -1);
+    if (ms < 0) {
+      lunet_free_nonnull(ctx);
+      lua_pushstring(L, "db.open: busy_timeout must be >= 0");
+      return lua_error(L);
+    }
+    ctx->busy_timeout = (int)ms;
+  }
+  lua_pop(L, 1);
+
+  lua_getfield(L, 1, "foreign_keys");
+  if (!lua_isnil(L, -1)) {
+    luaL_checktype(L, -1, LUA_TBOOLEAN);
+    ctx->foreign_keys = lua_toboolean(L, -1) ? 1 : 0;
+  }
+  lua_pop(L, 1);
+
+  lua_getfield(L, 1, "synchronous");
+  if (!lua_isnil(L, -1)) {
+    const char* sync = luaL_checkstring(L, -1);
+    if (strcmp(sync, "OFF") == 0) {
+      ctx->synchronous = 0;
+    } else if (strcmp(sync, "NORMAL") == 0) {
+      ctx->synchronous = 1;
+    } else if (strcmp(sync, "FULL") == 0) {
+      ctx->synchronous = 2;
+    } else {
+      lunet_free_nonnull(ctx);
+      lua_pushfstring(L,
+                      "db.open: synchronous must be \"OFF\", \"NORMAL\" or \"FULL\" (got '%s')",
+                      sync);
+      return lua_error(L);
+    }
+  }
   lua_pop(L, 1);
 
   lunet_coref_create(L, ctx->co_ref);

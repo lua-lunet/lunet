@@ -1033,6 +1033,9 @@ task("smoke")
         os.exec("xmake build-release")
         local runner = lunet_runner_path("release")
         os.execv(runner, {"test/smoke_sqlite3.lua"})
+        -- The open contract: create=WAL|NORMAL, READWRITE-only default,
+        -- :memory: unit-test swap, passthrough settings.
+        os.execv(runner, {"test/smoke_sqlite3_open.lua"})
 
         local mysql_modules = os.files("build/**/release/lunet/mysql.*")
         if #mysql_modules > 0 then

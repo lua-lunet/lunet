@@ -190,14 +190,14 @@ describe("http extension modules", function()
     end)
 
     it("rejects Host header userinfo with 400", function()
-      local request, err, status = http.parse_request(
+      local request, _, status = http.parse_request(
         "GET / HTTP/1.1\r\nHost: user@example.com\r\n\r\n")
       assert.is_nil(request)
       assert.are.equal(400, status)
     end)
 
     it("rejects Host header path with 400", function()
-      local request, err, status = http.parse_request(
+      local request, _, status = http.parse_request(
         "GET / HTTP/1.1\r\nHost: example.com/x\r\n\r\n")
       assert.is_nil(request)
       assert.are.equal(400, status)

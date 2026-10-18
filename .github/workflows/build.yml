@@ -19,13 +19,14 @@ on:
   # - PR branches: `pull_request` fires on open/synchronize. Do NOT also
   #   `gh workflow run` the branch by hand — that is how double builds
   #   happened (both ran the same head SHA).
-  # - main and v* tags: `push` fires.
+  # - main and xmake: `push` fires.
+  # - v* tags do NOT fire here: the tag-triggered release build and its
+  #   staged publish live in release.yml.
   # - workflow_dispatch exists for manual builds of an arbitrary ref
-  #   (inputs.ref) — e.g. re-running packaging for a branch with no PR.
+  #   (inputs.ref) — e.g. re-running packaging for a branch with no PR,
+  #   or re-publishing a release (a v* ref also runs publish-release).
   push:
     branches: [ main, xmake ]
-    tags:
-      - 'v*'
   pull_request:
     branches: [ main ]
   workflow_dispatch:

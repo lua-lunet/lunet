@@ -117,11 +117,12 @@ describe("http extension modules", function()
       assert.are.equal(400, status)
     end)
 
-    it("rejects Transfer-Encoding (no chunked support)", function()
-      local request, err = http.parse_request(
+    it("rejects Transfer-Encoding with 501", function()
+      local request, err, status = http.parse_request(
         "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n")
       assert.is_nil(request)
       assert.are.equal("Transfer-Encoding is not supported", err)
+      assert.are.equal(501, status)
     end)
 
     it("rejects duplicate headers", function()
@@ -131,11 +132,36 @@ describe("http extension modules", function()
       assert.are.equal("Duplicate HTTP header", err)
     end)
 
-    it("rejects non-HTTP/1.1 versions with 505", function()
+    it("rejects HTTP/1.0 with 400 (same major version, unsupported here)", function()
       local request, err, status = http.parse_request("GET / HTTP/1.0\r\nHost: h\r\n\r\n")
       assert.is_nil(request)
       assert.are.equal("Only HTTP/1.1 is supported", err)
+      assert.are.equal(400, status)
+    end)
+
+    it("rejects a non-1.x version with 505", function()
+      local request, err, status = http.parse_request("GET / HTTP/2.0\r\nHost: h\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal("HTTP version not supported", err)
       assert.are.equal(505, status)
+    end)
+
+    it("rejects a request line over MAX_REQUEST_LINE_BYTES with 414", function()
+      local request, err, status = http.parse_request(
+        "GET /" .. string.rep("a", http.MAX_REQUEST_LINE_BYTES) .. " HTTP/1.1\r\nHost: h\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal("Request line too long", err)
+      assert.are.equal(414, status)
+    end)
+
+    it("answers a wrong method on an existing path with 405 and Allow", function()
+      router.reset()
+      router.route("GET", "/only-get", function() return { ok = true } end)
+      local ctx = http_context.new({ method = "DELETE", path = "/only-get", headers = {} })
+      ctx.env_config = {}
+      router.handle(ctx)
+      assert.are.equal(405, ctx.status)
+      assert.are.equal("GET", ctx.res_headers["Allow"])
     end)
 
     it("rejects a non-numeric Content-Length", function()
@@ -161,6 +187,25 @@ describe("http extension modules", function()
       assert.is_nil(request)
       assert.are.equal("Request headers too large", err)
       assert.are.equal(431, status)
+    end)
+
+    it("rejects Host header userinfo with 400", function()
+      local request, err, status = http.parse_request(
+        "GET / HTTP/1.1\r\nHost: user@example.com\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal(400, status)
+    end)
+
+    it("rejects Host header path with 400", function()
+      local request, err, status = http.parse_request(
+        "GET / HTTP/1.1\r\nHost: example.com/x\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal(400, status)
+    end)
+
+    it("adds a Date header to responses (RFC 9110)", function()
+      local raw = http.response(200, nil, "x", nil, false)
+      assert.matches("\r\ndate: %a%a%a, %d%d %a%a%a %d%d%d%d %d%d:%d%d:%d%d GMT\r\n", raw)
     end)
 
     it("rejects a non-string argument", function()
@@ -629,10 +674,12 @@ describe("http extension modules", function()
       assert.are.truthy(body:find('"path":"/nope"', 1, true))
     end)
 
-    it("answers a method mismatch with 404 (same as an unknown path)", function()
+    it("answers a method mismatch with 405 and an Allow header", function()
       router.route("GET", "/kv/:name", function() return {} end)
+      router.route("POST", "/kv/:name", function() return {} end)
       local ctx = drive("DELETE", "/kv/hits", {})
-      assert.are.equal(404, ctx.status)
+      assert.are.equal(405, ctx.status)
+      assert.are.equal("GET, POST", ctx.res_headers["Allow"])
     end)
 
     it("turns a handler error into the 500 JSON contract", function()

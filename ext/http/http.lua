@@ -60,6 +60,7 @@ local http = {}
 -- that runs past the end of a request body is a hard 400.
 http.MAX_HEADER_BYTES = 16 * 1024
 http.MAX_BODY_BYTES = 1024 * 1024
+http.MAX_REQUEST_LINE_BYTES = 8 * 1024
 
 local function request_error(message, status)
     return nil, message, status or 400
@@ -89,8 +90,15 @@ local function parse_request_head(head)
     if not method or path:sub(1, 1) ~= "/" then
         return request_error("Invalid HTTP request")
     end
+    if #first_line > http.MAX_REQUEST_LINE_BYTES then
+        return request_error("Request line too long", 414)
+    end
+    local major = tonumber(version:match("^HTTP/(%d+)%."))
+    if major ~= 1 then
+        return request_error("HTTP version not supported", 505)
+    end
     if version ~= "HTTP/1.1" then
-        return request_error("Only HTTP/1.1 is supported", 505)
+        return request_error("Only HTTP/1.1 is supported")
     end
 
     local headers = {}
@@ -112,8 +120,11 @@ local function parse_request_head(head)
     if not headers.host or headers.host == "" then
         return request_error("Missing Host header")
     end
+    if headers.host:find("[/@]") then
+        return request_error("Invalid Host header")
+    end
     if headers["transfer-encoding"] then
-        return request_error("Transfer-Encoding is not supported")
+        return request_error("Transfer-Encoding is not supported", 501)
     end
 
     local content_length = 0
@@ -188,7 +199,7 @@ end
 ---@param raw string The raw request bytes
 ---@return lunet.http.Request|nil request The parsed request, or nil on failure
 ---@return string|nil err Error message on failure
----@return integer|nil status HTTP status to answer with on failure (400, 413, 431, 505)
+---@return integer|nil status HTTP status to answer with on failure (400, 413, 414, 431, 501, 505)
 ---@usage
 ---```lua
 ---local http = require("lunet.http")
@@ -341,9 +352,11 @@ function http.response(status, headers, body, cors, persistent)
         [404] = "Not Found",
         [405] = "Method Not Allowed",
         [413] = "Payload Too Large",
+        [414] = "URI Too Long",
         [422] = "Unprocessable Entity",
         [431] = "Request Header Fields Too Large",
         [500] = "Internal Server Error",
+        [501] = "Not Implemented",
         [505] = "HTTP Version Not Supported",
     }
 
@@ -367,6 +380,7 @@ function http.response(status, headers, body, cors, persistent)
         end
     end
     normalized_headers["content-type"] = normalized_headers["content-type"] or "application/json"
+    normalized_headers["date"] = normalized_headers["date"] or os.date("!%a, %d %b %Y %H:%M:%S GMT")
     if persistent == false then
         normalized_headers["connection"] = "close"
     end

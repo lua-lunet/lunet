@@ -37,11 +37,26 @@ close）由调用方负责；JSON 辅助函数仅在被调用时才惰性地依�
   并在写出后结束连接循环
 - 流水线被排除：越过请求体末尾的字节会得到硬性 400
   （`"Unexpected data after request body"`）。读完上一个响应后再发送下一个请求。
-- `MAX_HEADER_BYTES`（16 KiB）与 `MAX_BODY_BYTES`（1 MiB）保护解析器；
-  超大请求头以 431 失败，超大请求体以 413 失败
+- `MAX_HEADER_BYTES`（16 KiB）、`MAX_BODY_BYTES`（1 MiB）与
+  `MAX_REQUEST_LINE_BYTES`（8 KiB）保护解析器
+- 拒绝时携带 RFC 9112 状态码：语法与 Host 违规答 400，非 1.x 大版本答 505，
+  不支持的传输编码答 501，超长请求行答 414，超大请求头答 431，超大请求体答
+  413，仅方法不对时路由器答 405 并带 Allow 头
 
 解析失败遵循 `nil, message, status` 约定，连接循环可以直接用
 `http.error_response(status, { message })` 应答。
+
+这一类解析器不只由规格测试覆盖，还有探针验证：[Http11Probe](https://github.com/uNetworkingAB/Http11Probe)
+探针装置（`ext/http/Dockerfile.http`）对本目录下的快乐路径目标运行它的
+213 例矩阵并固化断言结果。范围之外的用例通过，是因为子集**有意拒绝**该特性
+—— chunked 与任何 `Transfer-Encoding` 答 501，HTTP/1.0 答 400，`OPTIONS *`
+答 400，最小 echo 目标对未注册方法答 405 并带 `Allow` 头。`ext/http`
+代码变更时重跑装置并提交再生成的期望清单：
+
+```sh
+docker build -f ext/http/Dockerfile.http -t lunet-http-probe .
+docker run --rm lunet-http-probe
+```
 
 ## lunet.http — 请求解析与响应构建
 

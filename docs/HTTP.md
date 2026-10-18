@@ -42,11 +42,30 @@ The parser deliberately supports a small, explicit HTTP/1.1 subset:
 - pipelining is excluded: bytes running past the end of a request body are
   a hard 400 (`"Unexpected data after request body"`). Send the next request
   only after reading the previous response.
-- `MAX_HEADER_BYTES` (16 KiB) and `MAX_BODY_BYTES` (1 MiB) guard the parser;
-  oversize headers fail with 431, oversize bodies with 413
+- `MAX_HEADER_BYTES` (16 KiB), `MAX_BODY_BYTES` (1 MiB) and
+  `MAX_REQUEST_LINE_BYTES` (8 KiB) guard the parser
+- rejections carry the RFC 9112 status: grammar and Host violations answer
+  400, a non-1.x major version answers 505, an unsupported transfer coding
+  answers 501, a request line past its cap answers 414, headers past their
+  cap answer 431, a body past its cap answers 413, and the router answers
+  405 with an Allow header when only the method is wrong
 
 Parse failures follow the `nil, message, status` convention, so a connection
 loop can answer `http.error_response(status, { message })` directly.
+
+This class is probed, not just spec'd: the [Http11Probe](https://github.com/uNetworkingAB/Http11Probe)
+rig (`ext/http/Dockerfile.http`) runs the probe's 213-case matrix against the
+happy-path target in this folder and asserts the outcome. Out-of-scope tests
+pass because the subset rejects the feature by design — chunked bodies and
+any `Transfer-Encoding` answer 501, HTTP/1.0 answers 400, `OPTIONS *`
+answers 400, and the minimal echo target answers 405 with an `Allow` header
+for un-routed methods. Rerun and commit the regenerated expectation manifest
+when `ext/http` code changes:
+
+```sh
+docker build -f ext/http/Dockerfile.http -t lunet-http-probe .
+docker run --rm lunet-http-probe
+```
 
 ## lunet.http — request framing and responses
 

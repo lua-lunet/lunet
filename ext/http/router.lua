@@ -229,6 +229,18 @@ function router.handle(ctx)
 
     local route, params = router.match(method, path)
     if not route then
+        local allowed = {}
+        for _, r in ipairs(routes) do
+            if not allowed[r.method] and match_pattern(r.pattern, path) then
+                allowed[r.method] = true
+                allowed[#allowed + 1] = r.method
+            end
+        end
+        if #allowed > 0 then
+            ctx.res_headers["Allow"] = table.concat(allowed, ", ")
+            respond_result(ctx, 405, { error = "Method not allowed", path = path })
+            return
+        end
         respond_result(ctx, 404, { error = "Not found", path = path })
         return
     end

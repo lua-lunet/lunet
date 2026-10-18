@@ -354,6 +354,11 @@ jobs:
         # sqlite3 Lua loader: the public lunet.sqlite3 surface + the
         # path-keyed handle cache (the binary registers as lunet.sqlite3core).
         cp ext/sqlite3/sqlite3.lua "$DIST_DIR/lunet/"
+        # Pure-Lua HTTP extension modules: lunet.http (framing + responses
+        # + opt-in CORS), lunet.http_context (per-request context) and
+        # lunet.http_router (routes + middleware).
+        cp ext/http/http.lua ext/http/http_context.lua "$DIST_DIR/lunet/"
+        cp ext/http/router.lua "$DIST_DIR/lunet/http_router.lua"
         # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
@@ -400,6 +405,11 @@ jobs:
         # sqlite3 Lua loader: the public lunet.sqlite3 surface + the
         # path-keyed handle cache (the binary registers as lunet.sqlite3core).
         cp ext/sqlite3/sqlite3.lua "$DIST_DIR/lunet/"
+        # Pure-Lua HTTP extension modules: lunet.http (framing + responses
+        # + opt-in CORS), lunet.http_context (per-request context) and
+        # lunet.http_router (routes + middleware).
+        cp ext/http/http.lua ext/http/http_context.lua "$DIST_DIR/lunet/"
+        cp ext/http/router.lua "$DIST_DIR/lunet/http_router.lua"
         # DB transaction wrappers: one per driver, deliberately not shared.
         cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
            ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
@@ -472,6 +482,11 @@ jobs:
         # sqlite3 Lua loader: the public lunet.sqlite3 surface + the
         # path-keyed handle cache (the binary registers as lunet.sqlite3core).
         Copy-Item ext\sqlite3\sqlite3.lua (Join-Path $dist "lunet")
+        # Pure-Lua HTTP extension modules: lunet.http (framing + responses
+        # + opt-in CORS), lunet.http_context (per-request context) and
+        # lunet.http_router (routes + middleware).
+        Copy-Item ext\http\http.lua, ext\http\http_context.lua (Join-Path $dist "lunet")
+        Copy-Item ext\http\router.lua (Join-Path $dist "lunet\http_router.lua")
         # DB transaction wrappers: one per driver, deliberately not shared.
         Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
         # Documentation: copy every docs\*.md (and its -CN.md counterpart)

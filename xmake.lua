@@ -296,13 +296,30 @@ target("lunet-bin")
     set_kind("binary")
     add_rules("lunet.c_safety_lint")
     set_basename("lunet-run")  -- Avoid conflict with lunet/ driver directory
-    
+
     add_files(core_sources)
     add_files("src/main.c", "src/embed_scripts_blob.c")
     add_includedirs("include", {public = true})
     add_packages("luajit", "libuv", "zlib")
     lunet_apply_asan_flags("binary")
     lunet_apply_easy_memory()
+
+    -- Pure-Lua HTTP extension modules (lunet.http / lunet.http_context /
+    -- lunet.http_router): copied into the lunet/ module directory beside
+    -- the binary so require() resolves them via the runtime's lunet/?.
+    -- lua path entry — same convention as the sqlite3 Lua loader. The
+    -- router's source file (ext/http/router.lua) installs under its
+    -- module name, http_router.lua.
+    after_build(function (target)
+        local moddir = path.join(target:targetdir(), "lunet")
+        if not os.isdir(moddir) then
+            os.mkdir(moddir)
+        end
+        os.cp("ext/http/http.lua", moddir)
+        os.cp("ext/http/http_context.lua", moddir)
+        os.cp("ext/http/router.lua", path.join(moddir, "http_router.lua"))
+    end)
+
     
     -- Embedded script packaging (release-only)
     if has_config("lunet_embed_scripts") then

@@ -158,7 +158,7 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1
 | 03 | [`examples/03_db_sqlite3.lua`](examples/03_db_sqlite3.lua) | SQLite3 CRUD + `(rw, ro)` 读写拆分（读在循环线程内联执行） | `xmake build lunet-sqlite3` | `"$LUNET_BIN" examples/03_db_sqlite3.lua` |
 | 04 | [`examples/04_db_mysql.lua`](examples/04_db_mysql.lua) | MySQL CRUD + 预处理语句（`?`） | `xmake build lunet-mysql` + MySQL 服务器 | `"$LUNET_BIN" examples/04_db_mysql.lua` |
 | 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + 预处理语句（`$1`） | `xmake build lunet-postgres` + Postgres 服务器 | `"$LUNET_BIN" examples/05_db_postgres.lua` |
-| 08 | [`examples/08_lnt_shared.lua`](examples/08_lnt_shared.lua) | 经 Rust FFI 的 lunet 风格共享字典 | `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_lnt_shared.lua` |
+| 08 | [`examples/08_http.lua`](examples/08_http.lua) | HTTP 服务器 + 路由器（`lunet.http`、`lunet.http_router`），带中间件与可选 CORS；以 `lnt_shared` 计数器作为刻意简化的 kv 存储——GET 读取、POST 递增、PATCH 调整 | `xmake build-release` + `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_http.lua` |
 | 09 | [`examples/09_jsonic_demo.lua`](examples/09_jsonic_demo.lua) | 经 Rust FFI 的 dkjson 风格 JSON 编解码 | `xmake build-jsonic` | `"$LUNET_BIN" examples/09_jsonic_demo.lua` |
 | 10 | [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) | **规范级微型 MCP 服务器**：SSE 传输 + 经 `lunet.httpc` 的 OpenAlex API，无数据库、仅回环 | `xmake build lunet-httpc` + `.env` 中的 `OPEN_ALEX_API_KEY` | `"$LUNET_BIN" examples/mcp_openalex_sse/main.lua` |
 

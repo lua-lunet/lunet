@@ -25,6 +25,13 @@ lunet/                              # extension modules
                                     #   registers as lunet.sqlite3core)
   sqlite3_tx.lua / postgres_tx.lua  # DB transaction wrappers
   mysql_tx.lua
+  http.lua                          # HTTP/1.1 request framing + responses,
+                                    #   opt-in CORS (lunet.http)
+  http_context.lua                  # per-request context object
+                                    #   (lunet.http_context)
+  http_router.lua                   # method+path router with :params and
+                                    #   middleware (lunet.http_router;
+                                    #   source: ext/http/router.lua)
   liblnt_shared.so                  # lnt_shared shared dictionary (Linux)
   liblnt_shared.dylib               #   (macOS — not shipped on Windows)
   lnt_shared.lua                    # lnt_shared Lua FFI loader

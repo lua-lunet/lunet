@@ -1,44 +1,91 @@
-# RealWorld: how to build a more typical app with Lunet
+# The lunet demo fleet
 
-A complete RealWorld "Conduit" implementation — a more vanilla, typical web
-application — lives at [lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua).
-Use it as the signpost for how to build a bigger, ordinary Lunet application,
-and to have a smaller footprint and faster startup time.
+Lunet is about *not* needing a kitchen sink: a small runtime you assemble from
+exactly the pieces a service needs, and nothing else. Yet the demos collected
+here demonstrate that it can do a full range of things — raw HTTP, four SQL
+drivers, encrypted datagrams, MCP servers, embedding in a C host, and a
+complete RealWorld application. Less by design, not less capable.
 
-Running a webserver is a solved problem where very small footprint is not
-something the average installation is paying attention to. The idea behind
-Lunet is that less is more so you can run a lot more instances. That requires
-thinking more about what you are trying to do and how. In the webapp space the
-emotional sweet spot has been the forever upgraded kitchen-sink ecosystems. In
-the new world being more careful about putting together just what you need can
-be faster to build a solution and far lower cost to maintain.
+## The demo applications
 
-The purpose of the RealWorld demo is to show what things look like when you do
-add in everything that you could get with a one-shot of an Express server. What
-you may not see is that all the dependencies are right there, are very stable,
-and get long-term security patches. What remains is very little code, that you
-can read through, that takes up a lot less memory, and that works. If you don't
-care that it is smaller and more stable than a kitchen-sink solution, then
-Lunet is not for you.
+| # | Application | What it is | Where |
+|---|-------------|------------|-------|
+| 1 | twelve-dollar-server-challenge | A realistic Feed API on SQLite for a resource-constrained host | [lua-lunet/twelve-dollar-server-challenge](https://github.com/lua-lunet/twelve-dollar-server-challenge) |
+| 2 | realworld-lua | The RealWorld "Conduit" application | [lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua) |
+| 3 | lunet-mcp-sse | A production MCP server over SSE, shipped as a Docker image | [lua-lunet/lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) |
+| 4 | lunet-backproxy | An outbound-only reverse proxy for DMZ topologies | [lua-lunet/lunet-backproxy](https://github.com/lua-lunet/lunet-backproxy) |
+| 5 | examples/mcp_openalex_sse | A complete MCP-over-SSE demo, in this repository | [examples/mcp_openalex_sse](../mcp_openalex_sse/) |
 
-Now there is going to be someone, somewhere, who says "but it is not JavaScript
-on the server". If the only answer you will accept is JavaScript on the server,
-then again, Lunet is not for you. Lua is both remarkably simple while at the
-same time being remarkably powerful. The LuaJIT runtime that runs the demo app
-is tiny compared to a Node.js runtime. You cannot have JavaScript without the
-overheads of a JavaScript runtime. Lunet not being JavaScript, so that it can
-use an efficient embeddable scripting runtime, is a core feature, not a bug.
+### 1. twelve-dollar-server-challenge
 
-## Quick start
+A Feed API — read a feed, post a message, like a post — backed by in-process
+SQLite, written for a host constrained to 1 vCPU and 2 GB of RAM: that is the
+machine the challenge rents for twelve dollars a year. It is the case in point
+for this folder: the whole submission is application logic (`server.lua` plus
+`app/` routes, JWT and SQLite access), and efficiency and size is where lunet
+aims to shine. Measured on a macOS arm64 development machine, the lunet runtime
+serving the submission's `server.lua` held a resident set of **3.7 MB after
+boot** and **4.1 MB settled after 25 sequential loopback requests** (3,712 KB
+and 4,160 KB via `ps -o rss=`; single client, three-row seed database). Those are
+dev-machine conditions, not the scored ones — the challenge's own 1 vCPU / 2 GB
+scoring box is the authoritative environment, where the submission's README
+reports 18 MB peak RSS holding 2,500 virtual users for the full five-minute
+benchmark.
 
-Follow the README in the demo repository:
+### 2. realworld-lua
 
-```sh
-git clone https://github.com/lua-lunet/realworld-lua.git
-cd realworld-lua
-# pick up a runtime with the "Get a runtime" section at the top of
-# the project README (no toolchain needed), then run the demo per its README.
-```
+The RealWorld "Conduit" application — registration, authentication, articles,
+comments and follows on PostgreSQL — as an ordinary, typical webapp. The
+resource story can go unnoticed in a RealWorld demo, so its
+[README carries a measured comparison table](https://github.com/lua-lunet/realworld-lua#resource-footprint)
+against the Node.js and Python/Django implementations of the same spec; see
+that table rather than trust a summary of it.
 
-Nothing is fetched into the Lunet tree by this folder: the demo is developed,
-built and versioned in its own repository so the examples here stay minimal.
+### 3. lunet-mcp-sse
+
+A production MCP server speaking the SSE transport, published as a Docker
+image for use behind an AI assistant. Its README is where the sizes live, and
+the sizes are about overhead: a 171 MB image and ~7 MB of resident runtime
+against the 367–420 MB images and 14–28 MB runtimes of the Node.js, Bun and
+Python MCP implementations it lists. The container images exist so the server
+can be dropped into an existing deployment unchanged.
+
+### 4. lunet-backproxy
+
+A reverse proxy where the protected zone has no inbound path at all: internal
+workers connect *out* to a broker in the DMZ — sitting behind nginx/OpenResty —
+and HTTP requests are tunnelled over those outbound connections. It is
+uniquely secure in that respect, following the QMail school of one process,
+one focused job across a trust boundary. As a demo it proves versatility:
+the same runtime that serves HTTP handlers is comfortable carrying a
+security-topology role.
+
+### 5. examples/mcp_openalex_sse
+
+The local, in-repo, complete demo: an MCP server over SSE with three tools
+backed by the free OpenAlex scholarly API, loopback only, no database. It is
+the clone-and-run one — clone this repository, build the runtime, put an
+OpenAlex API key in a `.env` file, and run
+`examples/mcp_openalex_sse/main.lua` with the built `lunet-run`; its
+[README](../mcp_openalex_sse/README.md) has the exact commands.
+
+## The in-repo demo files
+
+The `examples/` directory doubles as the in-tree index. Each entry is a small,
+self-contained demonstration of one surface of the runtime:
+
+| Entry | What it demonstrates |
+|-------|----------------------|
+| `01_http_json.lua` | Raw HTTP/1.1 with hand-rolled JSON escaping on `lunet.socket` — a JSON API with no libraries |
+| `02_http_routing.lua` | A hand-rolled routing table with `:param` patterns over raw sockets |
+| `03_db_sqlite3.lua` | The bundled SQLite3 driver: schema creation and basic CRUD |
+| `04_db_mysql.lua` | The MySQL driver against a local server (env-configured) |
+| `05_db_postgres.lua` | The PostgreSQL driver on libpq |
+| `06_paxe_encryption.lua` | PAXE datagram encryption: seal/open, per-socket protection |
+| `07_paxe_stress.lua` | PAXE stress test: payload sizes across the 64-byte seam, deliberate failure injection |
+| `08_http.lua` | The `lunet.http` + `http_router` + `lnt_shared` wiring in one runnable file |
+| `09_jsonic_demo.lua` | The jsonic extension: Rust-backed JSON decode behind a dkjson-style API |
+| `10_db_prepared.lua` | SQLite prepared statements |
+| `mcp_openalex_sse/` | The complete MCP-over-SSE demo (see above) |
+| `realworld/` | This folder: the signpost to the RealWorld application |
+| `sdk_embed/` | Embedding the lunet runtime in a C host program with embedded scripts |

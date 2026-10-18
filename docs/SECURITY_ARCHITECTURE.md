@@ -25,7 +25,7 @@ flowchart TB
     Treats every byte it reads as hostile"]
 
     hostile --> edge
-    edge -->|"Unix socket (preferred) or TCP loopback"| lunet
+    edge -->|"Unix socket or TCP loopback (your choice)"| lunet
 ```
 
 ## The edge is an exposure boundary, not a memory-safety boundary
@@ -66,14 +66,15 @@ In qmail terms: the edge is the network-facing guard, but every component
 must still assume its inputs are hostile. Defense in depth is the point of
 this architecture — the edge is the first boundary, not the only one.
 
-## Why Unix sockets over TCP loopback?
+## Transport options: Unix socket or TCP loopback
 
-TCP loopback (`127.0.0.1`) exposes you to other processes on the same host.
-A compromised service, container escape, or misconfigured firewall rule
-could allow local attackers to connect.
+Both keep lunet off the network; pick by what you want the boundary to
+enforce:
 
-Unix sockets use filesystem permissions — only processes with the correct
-UID/GID can connect.
+| Option | What it enforces | Considerations |
+|--------|------------------|----------------|
+| TCP loopback (`127.0.0.1` / `::1`) | No network exposure; any local process may connect | IP-shaped: fits existing tooling and containers with shared loopback; a compromised local service, container escape, or misconfigured firewall rule can reach it |
+| Unix domain socket | No network exposure; only processes with the correct UID/GID may connect | Filesystem permissions are the boundary: match the socket's owner to the lunet process's dedicated UID/GID; needs the edge and lunet on one filesystem |
 
 ## Outbound TLS clients (optional)
 

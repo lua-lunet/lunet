@@ -4,9 +4,11 @@
 ---sign/verify, base64url, and JWT HS256.
 ---
 ---ONE flat, pure-Lua module over the EXISTING primitives: every
----byte-level operation goes through lunet.sodium (HMAC-SHA-256 and the
+---byte-level operation goes through lunet.sodium (SHA-256 and the
 ---URLSAFE base64 variants, both backed by liblunet_paxe — libsodium
----statically linked) and claims JSON goes through lunet.jsonic.
+---statically linked), HMAC-SHA-256 is composed in pure Lua on
+---lunet.sodium.sha256 per RFC 2104, and claims JSON goes through
+---lunet.jsonic.
 ---Requires lunet.sodium at load time; lunet.jsonic is jwt-only and
 ---loaded on first use. See `docs/SECURITY.md`.
 ---
@@ -15,23 +17,25 @@
 ---and jwt.decode reports it as nil plus an error string naming the
 ---failure kind: malformed / sig / exp.
 ---
----Key handling: a 32-byte key is used exactly as given (known-answer
----vectors apply unchanged); any other non-empty key is first reduced
----to 32 bytes with SHA-256 — a deterministic subkey derivation (keys
----longer than the HMAC block size derive exactly the plain
----HMAC-SHA-256 tag; shorter keys are hashed, never truncated).
+---Key handling: RFC 7518 HS256 — the HMAC key is the RAW secret
+---octets, composed per RFC 2104 on lunet.sodium.sha256 (a key longer
+---than the 64-byte block is hashed first, every other key is used
+---as-is and zero-padded to the block, exactly as HMAC pads). Tags are
+---bit-identical to plain HMAC-SHA-256 for every key length — a short
+---secret never sees a subkey derivation.
 local security = {}
 
 ---HMAC/base64url helpers over lunet.sodium.
 ---@class lunet.security.crypto
 local crypto = {}
 
----HMAC-SHA-256 over the existing lunet.sodium primitive.
+---HMAC-SHA-256 over the raw secret octets, composed per RFC 2104 on
+---the existing lunet.sodium.sha256 primitive.
 ---
----`key` may be any non-empty string: a 32-byte key is used exactly as
----given, any other length is first reduced to 32 bytes with SHA-256.
----Malformed arguments raise; an operational failure (libsodium init)
----returns nil, message.
+---`key` may be any non-empty string: the tag is plain HMAC-SHA-256
+---over the raw key bytes for every length (RFC 7518 HS256). Malformed
+---arguments raise; an operational failure (libsodium init) returns
+---nil, message.
 ---@param data string Data to authenticate
 ---@param key string Non-empty secret key
 ---@return string tag 32 raw tag bytes

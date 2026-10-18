@@ -28,7 +28,7 @@ a self-contained archive (`lunet-linux-amd64.tar.gz`,
 prebuilt binary:
 
 ```bash
-TAG=v0.10.0
+TAG=v0.14.1
 curl -fsSLO "https://github.com/lua-lunet/lunet/releases/download/${TAG}/lunet-macos.tar.gz"
 tar -xzf lunet-macos.tar.gz
 ./lunet-run path/to/app.lua
@@ -392,7 +392,10 @@ handles opened with the same name share the same region within a process.
 
 ### JSON (`lunet.jsonic`) — Linux / macOS
 
-A dkjson-compatible `encode`/`decode`/`null` API. Decoding is backed by a
+A dkjson-compatible `encode`/`decode`/`null` API, plus fixed-shape render
+helpers (`jstr` quotes a string with the same escaper as `encode`; `jint`
+renders a number exactly as `encode` would) for response builders that
+assemble JSON byte strings with static prefixes. Decoding is backed by a
 Rust FFI wrapper around [jsonic](https://github.com/g1mv/jsonic) (MIT /
 Apache-2.0, zero runtime dependencies) — see `ext/jsonic/NOTICE.md` for full
 attribution. `jsonic` itself only parses; `encode()` is plain, dependency-free
@@ -415,6 +418,9 @@ local str = json.encode({ a = 1, b = { true, json.null } })
 -- str = '{"a":1,"b":[true,null]}'
 
 json.encode({ a = 1 }, { indent = true, keyorder = { "a" } })
+
+json.jstr('say "hi"')  -- '"say \"hi\""'
+json.jint(42)          -- '42'
 ```
 
 **Maelstrom rig**: [`ext/jsonic/maelstrom/`](ext/jsonic/maelstrom/README.md)

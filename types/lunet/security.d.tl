@@ -1,10 +1,11 @@
 global record security
     record crypto
-        -- HMAC-SHA-256 over lunet.sodium: a 32-byte key is used as-is,
-        -- any other non-empty key is first reduced to 32 bytes with
-        -- SHA-256 (deterministic subkey derivation — hashed, never
-        -- truncated or zero-padded). Returns the raw 32-byte tag, or
-        -- nil plus a message on operational failure (libsodium init).
+        -- HMAC-SHA-256 over the RAW secret octets (RFC 7518 HS256),
+        -- composed per RFC 2104 on lunet.sodium.sha256: a key longer
+        -- than the 64-byte block is hashed first, every other key is
+        -- used as-is and zero-padded to the block. Returns the raw
+        -- 32-byte tag, or nil plus a message on operational failure
+        -- (libsodium init).
         sign: function(data: string, key: string): string, string
         -- Constant-time verify: computes the expected tag and compares
         -- it through an accumulated XOR difference. A sig of any other

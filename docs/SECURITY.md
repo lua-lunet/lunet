@@ -5,8 +5,10 @@ applications the authenticated-token layer every web app needs: HMAC-SHA-256
 sign/verify, base64url helpers, and JWT HS256 (`encode` / `decode`).
 
 It is glue, not a crypto library: every byte-level operation goes through the
-EXISTING `lunet.sodium` primitives and claims JSON goes through the EXISTING
-`lunet.jsonic`. The module owns no hashing, padding, or parsing of its own.
+EXISTING `lunet.sodium` primitives (HMAC-SHA-256 itself is composed in pure Lua
+on `lunet.sodium.sha256`, per RFC 2104 — see "Key handling" below) and claims
+JSON goes through the EXISTING `lunet.jsonic`. The module owns no hashing,
+padding, or parsing of its own beyond the key padding HMAC itself is.
 
 ## Overview
 
@@ -45,7 +47,9 @@ only breaks `jwt.*`, on first use, with an error naming the dependency.
 
 ### `security.crypto.sign(data, key) -> tag`
 
-HMAC-SHA-256 over `lunet.sodium.hmac_sha256`. Returns the raw 32-byte tag.
+HMAC-SHA-256 over the RAW secret octets, composed per RFC 2104 on
+`lunet.sodium.sha256`. Returns the raw 32-byte tag — bit-identical to plain
+HMAC-SHA-256 for every key length.
 
 `key` may be any non-empty string — see "Key handling" below. Malformed
 arguments raise; an operational failure (libsodium could not be initialised)
@@ -109,21 +113,25 @@ alg-confusion token (for example a `{"alg":"none"}` header) is rejected as
 
 ## Key handling
 
-libsodium's `crypto_auth_hmacsha256` fixes the HMAC-SHA-256 key at exactly 32
-bytes, and `lunet.sodium` deliberately refuses any other length rather than
-silently pad or truncate. This module reconciles the fixed key size with
-arbitrary application secrets:
+HS256 is RFC 7518: the HMAC-SHA-256 key is the **raw secret octets** — exactly
+the bytes a standard JWT library signs with and verifies against. This module
+produces and accepts precisely those tags, for a secret of any length.
 
-- a **32-byte key is used exactly as given** — the known-answer vectors apply
-  unchanged;
-- **any other non-empty key is first reduced to 32 bytes with SHA-256** — a
-  deterministic subkey derivation. Keys longer than the HMAC block size (64
-  bytes) derive exactly the tag plain HMAC-SHA-256 would produce (RFC 2104
-  hashes such keys too); shorter keys are hashed instead of zero-padded,
-  which never silently discards secret material the way truncation would.
+libsodium's `crypto_auth_hmacsha256` fixes the HMAC key at exactly 32 bytes, and
+`lunet.sodium` deliberately refuses any other length rather than silently pad or
+truncate — so the module composes HMAC-SHA-256 itself, in pure Lua on
+`lunet.sodium.sha256`, following RFC 2104:
 
-Sign and verify derive identically, so the policy is invisible to callers as
-long as the same secret goes in on both sides.
+- a **key longer than the 64-byte block is hashed first** — the standard's own
+  reduction, so long keys produce exactly the tags plain HMAC-SHA-256 produces;
+- **every other key is used as-is**, zero-padded to the block exactly as HMAC
+  itself pads — which is why a short secret (`"Jefe"`, `"secret"`, twenty `0x0b`
+  bytes) verifies the tags a standard library issues.
+
+The result is bit-identical to plain HMAC-SHA-256 for EVERY key length — no
+subkey derivation, no re-hashing of short secrets. Sign and verify share one
+key-handling helper, so the policy is invisible to callers as long as the same
+secret goes in on both sides.
 
 ## exp policy
 
@@ -166,11 +174,15 @@ pure Lua, no binary of its own. `lunet/sodium.lua`, `lunet/paxe.lua` and
 ## Tests
 
 `spec/security_spec.lua` covers: independent-implementation HMAC known-answer
-vectors (including RFC 4231 test cases 5 and 7 verbatim through the long-key
-derivation), per-byte tamper rejection, base64url RFC 4648 vectors and binary
-round-trips, JWT encode/decode round-trips, the `exp` policy, the
-alg-confusion defence, and every named error string. The suite pends cleanly
-when `liblunet_paxe` (or jsonic's native decoder) has not been built.
+vectors over the raw secret (RFC 4231 test cases 1 and 2 verbatim through the
+raw path, cases 5 and 7 through the standard hash-the-key path, and an
+externally computed short-secret signature for a fixed JWT signing input), the
+negative pin that the retired SHA-256-subkey tags no longer verify, per-byte
+tamper rejection, base64url RFC 4648 vectors and binary round-trips, JWT
+encode/decode round-trips (including a standard-library token with a short raw
+secret), the `exp` policy, the alg-confusion defence, and every named error
+string. The suite pends cleanly when `liblunet_paxe` (or jsonic's native
+decoder) has not been built.
 
 ## References
 
@@ -178,6 +190,8 @@ when `liblunet_paxe` (or jsonic's native decoder) has not been built.
 - RFC 4231 — Test Cases for HMAC-SHA-256
 - RFC 4648 — The Base16, Base32, and Base64 Data Encodings (the URL-safe
   profile)
+- RFC 7518 — JSON Web Algorithms (HS256: HMAC with SHA-256 over the raw secret
+  octets)
 - RFC 7515/7519 — JSON Web Signature / JSON Web Token
 - [docs/SODIUM.md](SODIUM.md) — the underlying primitives and their security
   boundary (the HMAC key crosses the FFI as ordinary Lua string data)

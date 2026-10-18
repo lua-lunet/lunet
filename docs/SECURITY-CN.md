@@ -2,7 +2,7 @@
 
 `lunet.security` 是一个可选的纯 Lua 扩展，为 lunet 应用提供每个 Web 应用都需要的认证令牌层：HMAC-SHA-256 签名/验证、base64url 辅助函数，以及 JWT HS256（`encode` / `decode`）。
 
-它是胶水层，而不是加密库：所有字节级操作都通过现有的 `lunet.sodium` 原语完成，claims JSON 则通过现有的 `lunet.jsonic` 完成。模块自身不做任何哈希、填充或解析。
+它是胶水层，而不是加密库：所有字节级操作都通过现有的 `lunet.sodium` 原语完成（HMAC-SHA-256 本身是在 `lunet.sodium.sha256` 之上按 RFC 2104 用纯 Lua 组合而成——见下文"密钥处理"），claims JSON 则通过现有的 `lunet.jsonic` 完成。除 HMAC 自身必需的密钥填充外，模块自身不做任何哈希、填充或解析。
 
 ## 概览
 
@@ -31,7 +31,7 @@ local crypto, jwt = security.crypto, security.jwt
 
 ### `security.crypto.sign(data, key) -> tag`
 
-基于 `lunet.sodium.hmac_sha256` 的 HMAC-SHA-256。返回原始 32 字节标签。
+基于原始 secret 八位组的 HMAC-SHA-256，在 `lunet.sodium.sha256` 之上按 RFC 2104 组合而成。返回原始 32 字节标签——对任何密钥长度都与普通 HMAC-SHA-256 逐位一致。
 
 `key` 可以是任何非空字符串——见下文"密钥处理"。畸形参数会抛出错误；操作失败（libsodium 无法初始化）返回 `nil, message`。
 
@@ -69,12 +69,14 @@ local crypto, jwt = security.crypto, security.jwt
 
 ## 密钥处理
 
-libsodium 的 `crypto_auth_hmacsha256` 将 HMAC-SHA-256 密钥固定为恰好 32 字节，而 `lunet.sodium` 刻意拒绝任何其他长度，而不是悄悄填充或截断。本模块将固定密钥长度与任意应用密钥调和如下：
+HS256 遵循 RFC 7518：HMAC-SHA-256 的密钥就是**原始 secret 八位组**——标准 JWT 库用来签名和验证的正是这些字节。本模块产生的和接受的标签恰好就是这些标签，secret 长度不限。
 
-- **32 字节的密钥按原样使用**——已知答案向量原样适用；
-- **任何其他非空密钥先用 SHA-256 归约到 32 字节**——一种确定性的子密钥派生。长于 HMAC 块大小（64 字节）的密钥派生出与普通 HMAC-SHA-256 完全相同的标签（RFC 2104 也会哈希这类密钥）；较短的密钥被哈希而不是零填充，绝不会像截断那样悄悄丢弃秘密材料。
+libsodium 的 `crypto_auth_hmacsha256` 将 HMAC 密钥固定为恰好 32 字节，而 `lunet.sodium` 刻意拒绝任何其他长度，而不是悄悄填充或截断——因此本模块在 `lunet.sodium.sha256` 之上用纯 Lua 按 RFC 2104 组合 HMAC-SHA-256：
 
-sign 与 verify 的派生方式一致，因此只要两侧使用相同密钥，该策略对调用者不可见。
+- **长于 64 字节块的密钥先做哈希**——这是标准自身的归约，长密钥产生的标签与普通 HMAC-SHA-256 完全一致；
+- **其余任何密钥按原样使用**，按 HMAC 自身的填充方式零填充到块大小——这正是短 secret（`"Jefe"`、`"secret"`、二十个 `0x0b` 字节）能验证标准库所签发标签的原因。
+
+结果对任何密钥长度都与普通 HMAC-SHA-256 逐位一致——没有子密钥派生，不会对短 secret 重新哈希。sign 与 verify 共享同一个密钥处理辅助函数，因此只要两侧使用相同 secret，该策略对调用者不可见。
 
 ## exp 策略
 
@@ -113,12 +115,13 @@ end
 
 ## 测试
 
-`spec/security_spec.lua` 覆盖：独立实现计算的 HMAC 已知答案向量（包括通过长密钥派生路径逐字复现的 RFC 4231 测试用例 5 和 7）、逐字节篡改拒绝、base64url RFC 4648 向量与二进制往返、JWT 编码/解码往返、`exp` 策略、alg 混淆防御，以及每个指名错误字符串。当 `liblunet_paxe`（或 jsonic 的原生解码器）尚未构建时，测试套件会干净地 pend。
+`spec/security_spec.lua` 覆盖：基于原始 secret、由独立实现计算的 HMAC 已知答案向量（RFC 4231 测试用例 1 和 2 逐字走原始密钥路径，用例 5 和 7 走标准的先哈希密钥路径，以及针对固定 JWT 签名输入、外部计算的短 secret 签名）、已废弃的 SHA-256 子密钥标签不再通过验证的负向钉死、逐字节篡改拒绝、base64url RFC 4648 向量与二进制往返、JWT 编码/解码往返（包括使用短原始 secret 的标准库令牌）、`exp` 策略、alg 混淆防御，以及每个指名错误字符串。当 `liblunet_paxe`（或 jsonic 的原生解码器）尚未构建时，测试套件会干净地 pend。
 
 ## 参考
 
 - RFC 2104 —— HMAC：消息认证的键控哈希
 - RFC 4231 —— HMAC-SHA-256 测试用例
 - RFC 4648 —— Base16、Base32 与 Base64 数据编码（URL 安全规格）
+- RFC 7518 —— JSON Web 算法（HS256：对原始 secret 八位组做 HMAC-SHA-256）
 - RFC 7515/7519 —— JSON Web 签名 / JSON Web 令牌
 - [docs/SODIUM-CN.md](SODIUM-CN.md) —— 底层原语及其安全边界（HMAC 密钥以普通 Lua 字符串数据跨越 FFI）

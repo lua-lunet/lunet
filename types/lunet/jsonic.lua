@@ -30,6 +30,31 @@ function jsonic.decode(str, position, nullval) end
 ---```
 function jsonic.encode(value, opts) end
 
+---Render a value as a quoted JSON string (fixed-shape helper).
+---Strings are quoted with the same escaper `encode` uses; any other value
+---falls back to `encode`.
+---@param value any The value to render
+---@return string json
+---@usage
+---```lua
+---local json = require("lunet.jsonic")
+---local s = json.jstr('say "hi"')
+---print(s)  --> '"say \"hi\""'
+---```
+function jsonic.jstr(value) end
+
+---Render a value as a JSON number (fixed-shape helper).
+---Intended for integers; the output is byte-identical to `encode`.
+---@param value any The value to render
+---@return string json
+---@usage
+---```lua
+---local json = require("lunet.jsonic")
+---local s = json.jint(42)
+---print(s)  --> '42'
+---```
+function jsonic.jint(value) end
+
 ---Sentinel value representing JSON null (from dkjson).
 ---@type any
 jsonic.null = nil

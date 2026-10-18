@@ -27,7 +27,7 @@ Lunet 最初的用途是编写**微型 localhost MCP 服务器** —— 运行�
 扩展模块的预构建二进制：
 
 ```bash
-TAG=v0.10.0
+TAG=v0.14.1
 curl -fsSLO "https://github.com/lua-lunet/lunet/releases/download/${TAG}/lunet-macos.tar.gz"
 tar -xzf lunet-macos.tar.gz
 ./lunet-run path/to/app.lua
@@ -369,7 +369,9 @@ bump 分配器；单自旋锁。同一进程内以相同名称打开的多个句
 
 ### JSON（`lunet.jsonic`）— Linux / macOS
 
-dkjson 兼容的 `encode`/`decode`/`null` API。解码由 Rust FFI 封装
+dkjson 兼容的 `encode`/`decode`/`null` API，外加定形渲染辅助函数（`jstr`
+使用与 `encode` 相同的转义器处理字符串；`jint` 按 `encode` 的输出原样渲染
+数字），供以静态前缀拼接 JSON 字节串的响应构造器使用。解码由 Rust FFI 封装
 [jsonic](https://github.com/g1mv/jsonic)（MIT / Apache-2.0，无运行时依赖）
 实现——完整署名见 `ext/jsonic/NOTICE.md`。`jsonic` 本身只做解析；`encode()`
 是纯 Lua 实现，无任何依赖。
@@ -390,6 +392,9 @@ local str = json.encode({ a = 1, b = { true, json.null } })
 -- str = '{"a":1,"b":[true,null]}'
 
 json.encode({ a = 1 }, { indent = true, keyorder = { "a" } })
+
+json.jstr('say "hi"')  -- '"say \"hi\""'
+json.jint(42)          -- '42'
 ```
 
 **Maelstrom 测试平台**:[`ext/jsonic/maelstrom/`](ext/jsonic/maelstrom/README-CN.md)

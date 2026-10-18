@@ -3,9 +3,11 @@
 --
 -- ONE flat module, pure Lua, opt-in like the database drivers. It owns
 -- NO primitives of its own: every byte-level operation goes through the
--- EXISTING lunet.sodium surface (HMAC-SHA-256 and the URLSAFE base64
--- variants, both backed by liblunet_paxe — libsodium statically linked)
--- and claims JSON goes through the EXISTING lunet.jsonic. Nothing here
+-- EXISTING lunet.sodium surface (SHA-256 and the URLSAFE base64
+-- variants, both backed by liblunet_paxe — libsodium statically
+-- linked), HMAC-SHA-256 is composed in pure Lua on sodium.sha256 per
+-- RFC 2104 (the one pad-and-concatenate step HMAC itself is), and
+-- claims JSON goes through the EXISTING lunet.jsonic. Nothing here
 -- hashes, pads, or parses on its own beyond gluing the pieces.
 --
 -- DEPENDENCY CONTRACT (docs/SECURITY.md states it too):
@@ -26,16 +28,17 @@
 -- (libsodium could not be initialised) surface as nil, message from
 -- sign/encode and are re-raised from the boolean verify.
 --
--- KEY HANDLING (the reconciled design, stated): libsodium's
--- crypto_auth_hmacsha256 fixes the HMAC-SHA-256 key at exactly 32
--- bytes, and lunet.sodium deliberately refuses any other length rather
--- than silently pad or truncate. A 32-byte key is used exactly as given
--- (known-answer vectors apply unchanged); any other non-empty key is
--- first reduced to 32 bytes with SHA-256 — a deterministic subkey
--- derivation. Keys longer than the HMAC block size (64 bytes) derive
--- exactly the tag plain HMAC-SHA-256 would produce (RFC 2104 hashes
--- such keys too); shorter keys are hashed instead of zero-padded, which
--- never silently discards secret material the way truncation would.
+-- KEY HANDLING (the compliance contract, stated): HS256 is RFC 7518 —
+-- the HMAC key is the RAW secret octets, so tags from any standard JWT
+-- library verify unchanged and no tag is produced that a standard
+-- library would refuse. libsodium's crypto_auth_hmacsha256 fixes the
+-- key at exactly 32 bytes and lunet.sodium deliberately refuses any
+-- other length rather than silently pad or truncate, so HMAC-SHA-256
+-- itself is composed in pure Lua (RFC 2104) on sodium.sha256: a key
+-- longer than the 64-byte block is hashed first (the standard's own
+-- reduction), every other key is used as-is and zero-padded to the
+-- block exactly as HMAC pads. The tag is plain HMAC-SHA-256 for EVERY
+-- key length — no subkey derivation, no re-hashing of short secrets.
 
 local sodium = require("lunet.sodium")
 local bit = require("bit")
@@ -47,8 +50,9 @@ M.jwt = {}
 local crypto = M.crypto
 local jwt = M.jwt
 
--- Digest/tag size of HMAC-SHA-256 (lunet.sodium.BYTES).
-local TAG_BYTES = 32
+-- HMAC-SHA-256 block size (RFC 2104); the tag stays 32 bytes
+-- (lunet.sodium.BYTES).
+local BLOCK_BYTES = 64
 
 -- lunet.jsonic is jwt-only and loaded on first use: the require itself
 -- succeeds without the native decoder (encode is pure Lua) and the
@@ -87,20 +91,44 @@ local function ct_equal(a, b)
   return diff == 0
 end
 
+-- RFC 2104 HMAC-SHA-256 over `data` under the RAW `key` octets,
+-- composed in pure Lua on sodium.sha256: a key longer than the block
+-- is hashed first (the standard's own reduction), every other key is
+-- used as-is and zero-padded to the block exactly as HMAC pads. The
+-- result is bit-identical to plain HMAC-SHA-256 for every key length,
+-- so tags from standard JWT libraries verify unchanged. Returns the
+-- raw 32-byte tag, or nil plus a message on operational failure
+-- (libsodium could not be initialised) — the failure paths are
+-- crypto.sign's and jwt's shared authority.
+local function hmac_sha256(data, key)
+  if #key > BLOCK_BYTES then
+    local reduced, err = sodium.sha256(key)
+    if not reduced then return nil, err end
+    key = reduced
+  end
+  local inner, outer = {}, {}
+  for i = 1, BLOCK_BYTES do
+    local b = i <= #key and key:byte(i) or 0
+    inner[i] = string.char(bit.bxor(b, 0x36))
+    outer[i] = string.char(bit.bxor(b, 0x5c))
+  end
+  local digest, derr = sodium.sha256(table.concat(inner) .. data)
+  if not digest then return nil, derr end
+  return sodium.sha256(table.concat(outer) .. digest)
+end
+
 -- The HMAC-SHA-256 sign of `data` under `key`: the raw 32-byte tag, or
 -- nil plus a message on operational failure (libsodium could not be
--- initialised). A 32-byte key is used as-is; any other non-empty key is
--- first reduced to 32 bytes with SHA-256 (see the header note).
+-- initialised). The key is the raw secret octets (see the header note).
 ---
----HMAC-SHA-256 over the existing lunet.sodium primitive.
+---HMAC-SHA-256 over the raw secret octets, composed per RFC 2104 on
+---the existing lunet.sodium.sha256 primitive.
 ---
----`key` may be any non-empty string: a 32-byte key is used exactly as
----given (known-answer vectors apply unchanged), any other length is
----first reduced to 32 bytes with SHA-256 — a deterministic subkey
----derivation (keys longer than the HMAC block size derive exactly the
----plain HMAC-SHA-256 tag; shorter keys are hashed, never truncated or
----zero-padded). Malformed arguments raise; an operational failure
----(libsodium init) returns nil, message.
+---`key` may be any non-empty string: the tag is plain HMAC-SHA-256
+---over the raw key bytes for every length (RFC 7518 HS256 — a key
+---longer than the 64-byte block is hashed first, every other key is
+---zero-padded to the block, exactly as HMAC pads). Malformed arguments
+---raise; an operational failure (libsodium init) returns nil, message.
 ---@param data string Data to authenticate
 ---@param key string Non-empty secret key
 ---@return string tag 32 raw tag bytes
@@ -116,13 +144,7 @@ function crypto.sign(data, key)
   if #key == 0 then
     error("bad argument 'key' (must be a non-empty string)", 2)
   end
-  local work = key
-  if #work ~= TAG_BYTES then
-    local derived, derr = sodium.sha256(key)
-    if not derived then return nil, derr end
-    work = derived
-  end
-  return sodium.hmac_sha256(data, work)
+  return hmac_sha256(data, key)
 end
 
 ---Verify the HMAC-SHA-256 tag of `data` under `key` in constant time:

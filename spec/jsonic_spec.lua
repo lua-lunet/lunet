@@ -105,6 +105,50 @@ describe("jsonic module #native", function()
     end)
   end)
 
+  -- Fixed-shape renderers for response builders that assemble JSON byte
+  -- strings with static prefixes. Both defer to the encoder's own
+  -- escaping/formatting so there is a single authority: jstr quotes a
+  -- string with dkjson's quotestring (the escaper encode itself uses)
+  -- and jint renders through encode's number branch.
+  describe("fixed-shape renderers", function()
+    it("quotes a string identically to encode", function()
+      local s = 'a\nb\tc"d\\e\127'
+      assert.are.equal(jsonic.encode(s), jsonic.jstr(s))
+      assert.are.equal('"hi"', jsonic.jstr("hi"))
+    end)
+
+    it("falls back to encode for non-string scalars", function()
+      assert.are.equal(jsonic.encode(42), jsonic.jstr(42))
+      assert.are.equal(jsonic.encode(true), jsonic.jstr(true))
+      assert.are.equal(jsonic.encode(jsonic.null), jsonic.jstr(jsonic.null))
+    end)
+
+    it("renders integers exactly (zero, negative, large)", function()
+      assert.are.equal("0", jsonic.jint(0))
+      assert.are.equal("-7", jsonic.jint(-7))
+      assert.are.equal("2147483648", jsonic.jint(2147483648))
+      assert.are.equal("9.007199254741e+15", jsonic.jint(9007199254740992))
+      assert.are.equal(jsonic.encode(9007199254740992), jsonic.jint(9007199254740992))
+    end)
+
+    it("shares one number-rendering authority with encode", function()
+      -- non-finite numbers render as null (encode's number branch), not
+      -- the invalid JSON literals tostring would emit
+      assert.are.equal("null", jsonic.jint(0 / 0))
+      assert.are.equal(jsonic.encode(-1 / 0), jsonic.jint(-1 / 0))
+    end)
+
+    it("renders non-number scalars through the encoder", function()
+      -- the submission contract type-checks nothing: off-domain scalars
+      -- take the same rendering path as encode, unsupported types raise
+      assert.are.equal(jsonic.encode("5"), jsonic.jint("5"))
+      assert.are.equal("null", jsonic.jint(nil))
+      local raised, err = pcall(jsonic.jint, print)
+      assert.is_false(raised)
+      assert.matches("not supported by JSON", tostring(err))
+    end)
+  end)
+
   if not native_ok then
     pending("liblunet_jsonic not built (xmake build-jsonic)", function() end)
     return

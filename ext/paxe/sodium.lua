@@ -125,7 +125,7 @@ M.BYTES = BYTES
 --- Malformed arguments raise; an operational failure (libsodium init)
 --- returns nil, message.
 ---@param data string Data to hash
----@return string digest 32 raw bytes
+---@return string|nil digest 32 raw bytes, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
 ---@usage
 ---```lua
@@ -149,7 +149,7 @@ end
 --- unguarded, unlike PAXE keystore material. See docs/SODIUM.md.
 ---@param data string Data to authenticate
 ---@param key string Exactly 32 bytes
----@return string tag 32 raw bytes
+---@return string|nil tag 32 raw bytes, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
 ---@usage
 ---```lua
@@ -170,7 +170,7 @@ end
 --- mix two RNGs in one process). `n` is a non-negative integer; 0
 --- returns the empty string. Returns the raw bytes as a string.
 ---@param n integer Number of bytes to draw
----@return string bytes n raw bytes
+---@return string|nil bytes n raw bytes, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
 ---@usage
 ---```lua
@@ -230,7 +230,7 @@ end
 --- bytes that are secret remain secret while encoded.
 ---@param data string Bytes to encode
 ---@param variant integer One of the BASE64_VARIANT_* constants
----@return string b64 Encoded text
+---@return string|nil b64 Encoded text, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
 ---@usage
 ---```lua
@@ -256,7 +256,7 @@ end
 --- length — not a NUL — says where it ends.
 ---@param data string Encoded text
 ---@param variant integer One of the BASE64_VARIANT_* constants
----@return string bytes Decoded bytes
+---@return string|nil bytes Decoded bytes, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
 ---@usage
 ---```lua

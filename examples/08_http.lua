@@ -173,9 +173,9 @@ lunet.spawn(function()
 
   local keep_client = socket.connect("127.0.0.1", 18082)
   socket.write(keep_client, http_request("GET", "/counters/keepalive", nil, nil, true))
-  local first = read_response(keep_client)
+  local first = assert(read_response(keep_client))
   socket.write(keep_client, http_request("POST", "/counters/keepalive", nil, nil, true))
-  local second = read_response(keep_client)
+  local second = assert(read_response(keep_client))
   socket.close(keep_client)
   print("-- two requests, one connection (keep-alive)")
   print("   " .. tostring(first:match("^([^\r\n]+)")) .. "  " ..

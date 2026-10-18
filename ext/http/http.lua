@@ -175,9 +175,10 @@ end
 ---print(http.url_decode("a%20b"))  --> "a b"
 ---```
 function http.url_decode(str)
-    return str:gsub("%%(%x%x)", function(hex)
+    local decoded = str:gsub("%%(%x%x)", function(hex)
         return string.char(tonumber(hex, 16))
     end)
+    return decoded
 end
 
 ---Parse one complete raw request (head + body). The body must exactly

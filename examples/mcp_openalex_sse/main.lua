@@ -106,12 +106,14 @@ end
 
 local function handle_connection(conn)
     local method, path, body = read_request(conn)
-    if not method then
+    if not method or not path then
         socket.close(conn)
         return
     end
     local route, query = path:match("^([^?]+)%??(.*)$")
     if not route then route, query = path, "" end
+    route = route or path
+    query = query or ""
     if method == "GET" and route == "/sse" then
         handle_sse(conn)
     elseif method == "POST" and route == "/message" then

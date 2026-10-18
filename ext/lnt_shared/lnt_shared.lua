@@ -417,7 +417,7 @@ local M = {}
 --- to the same underlying region.
 function M.open(name, size_bytes)
   assert(type(name) == "string" and #name > 0, "name must be a non-empty string")
-  size_bytes = math.max(size_bytes or 1024 * 1024, 65536)
+  size_bytes = math.max(size_bytes or (1024 * 1024), 65536)
   local l = lib()
   local h = l.ngx_shared_open(name, size_bytes)
   if h == nil then

@@ -78,7 +78,7 @@ end
 ---raise; an operational failure (libsodium init) returns nil, message.
 ---@param data string Data to authenticate
 ---@param key string Non-empty secret key
----@return string tag 32 raw tag bytes
+---@return string|nil tag 32 raw tag bytes, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
 ---@usage
 ---```lua
@@ -124,7 +124,7 @@ end
 ---(- and _) with no = padding. Malformed arguments raise with the
 ---underlying library's diagnostic, like lunet.sodium itself.
 ---@param data string Bytes to encode
----@return string b64 Encoded text
+---@return string|nil b64 Encoded text, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
 ---@usage
 ---```lua
@@ -143,7 +143,7 @@ end
 ---named "malformed" error because token bytes are untrusted input,
 ---while direct callers keep the raise.
 ---@param data string Encoded text
----@return string bytes Decoded bytes
+---@return string|nil bytes Decoded bytes, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
 ---@usage
 ---```lua
@@ -191,7 +191,7 @@ local ERR = {
 ---@param payload table Claims table
 ---@param secret string Non-empty secret key
 ---@param opts table|nil Optional table; expires_in (integer seconds) injects the exp claim
----@return string token The compact JWT
+---@return string|nil token The compact JWT, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
 ---@usage
 ---```lua
@@ -249,7 +249,7 @@ end
 ---those are bugs in the calling script, not attacker input.
 ---@param token string The compact JWT (as produced by encode)
 ---@param secret string Non-empty secret key (as passed to encode)
----@return table payload Claims table
+---@return table|nil payload Claims table, nil plus an error string (malformed / sig / exp)
 ---@return string|nil error nil on success; otherwise names the failure
 ---@usage
 ---```lua

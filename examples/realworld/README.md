@@ -23,14 +23,11 @@ SQLite, written for a host constrained to 1 vCPU and 2 GB of RAM: that is the
 machine the challenge rents for twelve dollars a year. It is the case in point
 for this folder: the whole submission is application logic (`server.lua` plus
 `app/` routes, JWT and SQLite access), and efficiency and size is where lunet
-aims to shine. Measured on a macOS arm64 development machine, the lunet runtime
-serving the submission's `server.lua` held a resident set of **3.7 MB after
-boot** and **4.1 MB settled after 25 sequential loopback requests** (3,712 KB
-and 4,160 KB via `ps -o rss=`; single client, three-row seed database). Those are
-dev-machine conditions, not the scored ones — the challenge's own 1 vCPU / 2 GB
-scoring box is the authoritative environment, where the submission's README
-reports 18 MB peak RSS holding 2,500 virtual users for the full five-minute
-benchmark.
+should shine. In our own unofficial testing the lunet runtime serving the
+submission's `server.lua` held a resident set of **3.7 MB after boot** and
+**4.1 MB settled after 25 sequential loopback requests**. That observation is
+unofficial, period — the submission is not yet merged into the challenge, and
+nothing here claims any score on any machine.
 
 ### 2. realworld-lua
 

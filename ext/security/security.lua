@@ -1,6 +1,6 @@
 -- lunet.security: HMAC-SHA-256 sign/verify, base64url, JWT HS256.
 --
--- Pure Lua over the existing lunet.sodium surface (SHA-256, URLSAFE
+-- Pure Lua over the lunet.sodium surface (SHA-256, URLSAFE
 -- base64) and lunet.jsonic (jwt claims only, loaded on first use).
 -- Malformed arguments raise (caller bug); untrusted token content comes
 -- back as nil plus an error string: malformed / sig / exp.

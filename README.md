@@ -74,6 +74,8 @@ Lunet is **modular by design**. You build only what you need:
   - `lunet.lnt_shared` - lunet-style shared dict via Rust FFI (`xmake build-lnt-shared`)
 - **JSON** (optional Rust extension, Linux/macOS):
   - `lunet.jsonic` - dkjson-style encode/decode; decode via Rust FFI wrapping [jsonic](https://github.com/g1mv/jsonic) (`xmake build-jsonic`)
+- **Crypto / JWT** (optional pure-Lua extension):
+  - `lunet.security` - HMAC-SHA-256 sign/verify, base64url, and JWT HS256 over `lunet.sodium` + `lunet.jsonic` (reference: [docs/SECURITY.md](docs/SECURITY.md))
 
 Build one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
 
@@ -157,7 +159,7 @@ binary — `xmake build <target>` is only needed when you build from source.
 | 03 | [`examples/03_db_sqlite3.lua`](examples/03_db_sqlite3.lua) | SQLite3 CRUD + the `(rw, ro)` read/write split (reads inline on the loop thread) | `xmake build lunet-sqlite3` | `"$LUNET_BIN" examples/03_db_sqlite3.lua` |
 | 04 | [`examples/04_db_mysql.lua`](examples/04_db_mysql.lua) | MySQL CRUD + prepared statements (`?`) | `xmake build lunet-mysql` + MySQL server | `"$LUNET_BIN" examples/04_db_mysql.lua` |
 | 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + prepared statements (`$1`) | `xmake build lunet-postgres` + Postgres server | `"$LUNET_BIN" examples/05_db_postgres.lua` |
-| 08 | [`examples/08_lnt_shared.lua`](examples/08_lnt_shared.lua) | lunet-style shared dictionary via Rust FFI | `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_lnt_shared.lua` |
+| 08 | [`examples/08_http.lua`](examples/08_http.lua) | HTTP server + router (`lunet.http`, `lunet.http_router`) with middleware and opt-in CORS; `lnt_shared` counters as a contrived kv store — GET reads, POST increments, PATCH adjusts | `xmake build-release` + `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_http.lua` |
 | 09 | [`examples/09_jsonic_demo.lua`](examples/09_jsonic_demo.lua) | dkjson-style JSON encode/decode via Rust FFI | `xmake build-jsonic` | `"$LUNET_BIN" examples/09_jsonic_demo.lua` |
 | 10 | [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) | **Canonical tiny MCP server**: SSE transport + OpenAlex API via `lunet.httpc`, no DB, loopback only | `xmake build lunet-httpc` + `OPEN_ALEX_API_KEY` in `.env` | `"$LUNET_BIN" examples/mcp_openalex_sse/main.lua` |
 

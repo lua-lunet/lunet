@@ -24,6 +24,14 @@ lunet/                              # 扩展模块
                                     #   句柄缓存（二进制注册为 lunet.sqlite3core）
   sqlite3_tx.lua / postgres_tx.lua  # 数据库事务封装
   mysql_tx.lua
+  http.lua                          # HTTP/1.1 请求解析 + 响应构建、可选 CORS
+                                    #   （lunet.http）
+  http_context.lua                  # 每请求上下文对象（lunet.http_context）
+  http_router.lua                   # 带 :参数与方法中间件的方法+路径路由器
+                                    #   （lunet.http_router；源文件：ext/http/router.lua）
+  security.lua                      # 加密 + JWT HS256 辅助模块
+                                    #   （lunet.security；基于 lunet.sodium +
+                                    #   lunet.jsonic 的纯 Lua 实现）
   liblnt_shared.so                  # lnt_shared 共享字典（Linux）
   liblnt_shared.dylib               #   （macOS，Windows 不提供）
   lnt_shared.lua                    # lnt_shared Lua FFI 加载器
@@ -49,6 +57,7 @@ types/                              # LuaCATS 类型注解（---@meta，纯文�
     mysql.lua                       # MySQL 驱动
     postgres.lua                    # PostgreSQL 驱动
     paxe.lua                        # AES-256-GCM 加密
+    security.lua                    # 加密 + JWT HS256 辅助模块
     signal.lua                      # 操作系统信号处理
     socket.lua                      # TCP 套接字操作
     sodium.lua                      # SHA-256 / HMAC-SHA-256 / randombytes

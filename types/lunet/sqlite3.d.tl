@@ -13,4 +13,15 @@ global record sqlite3
     close: function(conn: userdata): string
     query: function(conn: userdata, query: string): {any}, string
     exec: function(conn: userdata, query: string): {affected_rows: integer, last_insert_id: integer}, string
+
+    -- Prepared statements: prepare once, bind per call; one statement is
+    -- bound to one connection. Write SQL on the read-only handle fails
+    -- loudly at prepare time.
+    prepare: function(conn: userdata, sql: string): userdata, string
+end
+
+global record sqlite3_stmt
+    query: function(self: userdata, ...: any): {any}, string
+    exec: function(self: userdata, ...: any): {affected_rows: integer, last_insert_id: integer}, string
+    close: function(self: userdata): string
 end

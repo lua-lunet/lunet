@@ -89,4 +89,41 @@ function db.query_params(conn, sql, params) end
 ---@return string|nil error Error message if failed
 function db.exec_params(conn, sql, params) end
 
+---@class sqlite3_stmt
+---A reusable prepared statement bound to one connection: prepare once,
+---then query/exec per call (the driver resets and rebinds the vendor
+---statement each call), then close. A second call while one is in flight
+---fails with "statement is busy". Closing the owning connection closes
+---every statement still open on it. See ext/sqlite3/SQLITE.md,
+---"Prepared statements".
+local stmt = {} -- luacheck: ignore
+
+---Run the prepared SELECT with fresh bound parameters. On the read-only
+---handle this runs inline on the loop thread; on the read-write handle it
+---is dispatched to the worker pool and yields.
+---@return table|nil result Array of rows, or nil on error
+---@return string|nil error Error message if failed
+function stmt.query(...) end
+
+---Run the prepared non-SELECT statement with fresh bound parameters.
+---@return table|nil result Table with affected_rows and last_insert_id, or nil on error
+---@return string|nil error Error message if failed
+function stmt.exec(...) end
+
+---Finalize the vendor statement. After close, use fails loudly. Closing
+---an already-closed statement is a no-op.
+---@return string|nil error Error message if failed
+function stmt.close() end
+
+---Prepare a reusable statement on a connection. The statement is bound to
+---this connection for its lifetime. On the read-only handle the prepare
+---runs inline and write SQL fails loudly at prepare time. Requires a
+---coroutine (lunet.spawn); on the read-write handle the prepare is queued
+---to the worker pool and yields.
+---@param conn lightuserdata The connection to prepare on
+---@param sql string The SQL text (non-empty; ? placeholders)
+---@return lightuserdata|nil stmt The prepared statement, or nil on error
+---@return string|nil error Error message if failed
+function db.prepare(conn, sql) end
+
 return db

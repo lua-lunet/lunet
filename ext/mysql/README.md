@@ -16,6 +16,7 @@ deliberately no `db.escape`.
 | `query(conn, sql, ...)` | returns array of row tables |
 | `exec(conn, sql, ...)` | returns `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | same behaviour as the above |
+| `prepare(conn, sql)` | reusable prepared statement; `stmt:query` / `stmt:exec` / `stmt:close`; requires `pool_size = 1` — see [Prepared statements](#prepared-statements) |
 
 ### Open settings
 
@@ -109,6 +110,43 @@ config.
 - Default isolation is `REPEATABLE-READ` (not Postgres's `READ COMMITTED`), so
   a re-`SELECT` inside a transaction keeps returning the first snapshot. Detect
   write conflicts with `affected_rows` from `t.exec`, not by re-reading.
+
+## Prepared statements
+
+`prepare` keeps the vendor statement alive instead of preparing and
+destroying it per call: `mysql_stmt_init` + `mysql_stmt_prepare` once,
+then per call `mysql_stmt_bind_param` + `mysql_stmt_execute` on the kept
+statement. The server re-prepares automatically if statement metadata
+changes (for example a table alteration), so a surviving statement stays
+correct without caller intervention.
+
+```lua
+local stmt, err = mysql.prepare(conn, "SELECT name FROM users WHERE age > ?")
+if not stmt then error(err) end
+
+local rows, qerr = stmt:query(30)   -- same binding semantics as query
+stmt:close()                        -- mysql_stmt_close
+```
+
+- `stmt:query(...)` / `stmt:exec(...)` bind the varargs per call, exactly
+  like `query` / `exec`; each call resets and rebinds the kept statement.
+- **One statement is bound to one connection.** `prepare` on a pooled
+  handle requires `pool_size = 1` (the default) and fails loudly otherwise
+  — same doctrine as `mysql_tx`.
+- If the connection dies, the statement dies with it: use fails loudly
+  (`statement is closed` / `connection is closed`). Closing the connection
+  severs every statement still open on it.
+- **Busy discipline:** one statement, one in-flight call. A second
+  concurrent call on the same statement fails with `statement is busy`
+  instead of surfacing as a mid-protocol desync.
+- `stmt:close()` releases the vendor statement; after it, use fails
+  loudly. A statement dropped without `close` is finalized by the
+  finalizer.
+
+Is it worth it? For a trivial statement the per-call prepare is
+unmeasurable; for a complex or high-rate one it can matter. Read the
+libmysqlclient documentation on the prepared statement API and decide for
+your own workload — there is no magic.
 
 ## How the pinning was verified
 

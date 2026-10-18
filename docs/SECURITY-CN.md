@@ -2,7 +2,7 @@
 
 `lunet.security` 是一个可选的纯 Lua 扩展，为 lunet 应用提供每个 Web 应用都需要的认证令牌层：HMAC-SHA-256 签名/验证、base64url 辅助函数，以及 JWT HS256（`encode` / `decode`）。
 
-它是胶水层，而不是加密库：所有字节级操作都通过现有的 `lunet.sodium` 原语完成（HMAC-SHA-256 本身是在 `lunet.sodium.sha256` 之上按 RFC 2104 用纯 Lua 组合而成——见下文"密钥处理"），claims JSON 则通过现有的 `lunet.jsonic` 完成。除 HMAC 自身必需的密钥填充外，模块自身不做任何哈希、填充或解析。
+它是薄封装层，而不是加密库：SHA-256 与 base64url 来自 `lunet.sodium`，HMAC-SHA-256 是在 `lunet.sodium.sha256` 之上按 RFC 2104 用纯 Lua 组合而成（见下文"密钥处理"），claims JSON 则通过 `lunet.jsonic` 完成。
 
 ## 概览
 
@@ -80,8 +80,6 @@ libsodium 的 `crypto_auth_hmacsha256` 将 HMAC 密钥固定为恰好 32 字节�
 
 ## exp 策略
 
-明确声明，因为这是调和后的设计：
-
 - **没有** `exp` claim 的令牌永不过期——`decode` 成功。
 - `exp` claim 必须是数字；其他任何类型都是 `malformed`。
 - 一旦 `exp` **严格早于**当前时间，令牌即过期。
@@ -115,7 +113,7 @@ end
 
 ## 测试
 
-`spec/security_spec.lua` 覆盖：基于原始 secret、由独立实现计算的 HMAC 已知答案向量（RFC 4231 测试用例 1 和 2 逐字走原始密钥路径，用例 5 和 7 走标准的先哈希密钥路径，以及针对固定 JWT 签名输入、外部计算的短 secret 签名）、已废弃的 SHA-256 子密钥标签不再通过验证的负向钉死、逐字节篡改拒绝、base64url RFC 4648 向量与二进制往返、JWT 编码/解码往返（包括使用短原始 secret 的标准库令牌）、`exp` 策略、alg 混淆防御，以及每个指名错误字符串。当 `liblunet_paxe`（或 jsonic 的原生解码器）尚未构建时，测试套件会干净地 pend。
+`spec/security_spec.lua` 覆盖：基于原始 secret、由独立实现计算的 HMAC 已知答案向量（RFC 4231 测试用例 1 和 2 逐字走原始密钥路径，用例 5 和 7 走标准的先哈希密钥路径，以及针对固定 JWT 签名输入、外部计算的短 secret 签名）、子密钥派生标签不通过验证的负向钉死、逐字节篡改拒绝、base64url RFC 4648 向量与二进制往返、JWT 编码/解码往返（包括使用短原始 secret 的标准库令牌）、`exp` 策略、alg 混淆防御，以及每个指名错误字符串。当 `liblunet_paxe`（或 jsonic 的原生解码器）尚未构建时，测试套件会干净地 pend。
 
 ## 参考
 

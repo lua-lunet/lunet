@@ -8,8 +8,8 @@
 --
 -- KNOWN-ANSWER VECTORS: RFC 4231 cases 1, 2, 5 and 7 verbatim (short
 -- and oversize keys), plus tags computed with Python's hmac against
--- plain RFC 2104 HMAC-SHA-256 over the raw secret. The retired
--- SHA-256-subkey tags are pinned as negatives: they must not verify.
+-- plain RFC 2104 HMAC-SHA-256 over the raw secret. Subkey-derived
+-- tags are pinned as negatives: they must not verify.
 --
 -- TAMPER-TEST GEOMETRY: base64url carries 6 bits per character, so the
 -- final character of an unpadded segment holds bits the decoder may
@@ -140,7 +140,7 @@ describe("security module #native", function()
       assert.is_true(crypto.verify(message, "secret", tag))
     end)
 
-    it("rejects the tags the retired subkey derivation produced", function()
+    it("rejects subkey-derived tags", function()
       -- Regression pin: the old implementation reduced every secret to
       -- a 32-byte SHA-256 subkey before HMAC. Its tag over the same
       -- message and secret — reproduced here with an independent

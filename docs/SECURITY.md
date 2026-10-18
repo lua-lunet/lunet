@@ -4,11 +4,10 @@
 applications the authenticated-token layer every web app needs: HMAC-SHA-256
 sign/verify, base64url helpers, and JWT HS256 (`encode` / `decode`).
 
-It is glue, not a crypto library: every byte-level operation goes through the
-EXISTING `lunet.sodium` primitives (HMAC-SHA-256 itself is composed in pure Lua
-on `lunet.sodium.sha256`, per RFC 2104 — see "Key handling" below) and claims
-JSON goes through the EXISTING `lunet.jsonic`. The module owns no hashing,
-padding, or parsing of its own beyond the key padding HMAC itself is.
+It is a thin layer, not a crypto library: SHA-256 and base64url come from
+`lunet.sodium`, HMAC-SHA-256 is composed in pure Lua on `lunet.sodium.sha256`
+(RFC 2104 — see "Key handling" below), and claims JSON goes through
+`lunet.jsonic`.
 
 ## Overview
 
@@ -135,8 +134,6 @@ secret goes in on both sides.
 
 ## exp policy
 
-Stated, because it is the reconciled design:
-
 - A token **without** an `exp` claim never expires — `decode` succeeds.
 - An `exp` claim must be a number; anything else is `malformed`.
 - A token is expired once `exp` is **strictly before** the current time.
@@ -177,8 +174,7 @@ pure Lua, no binary of its own. `lunet/sodium.lua`, `lunet/paxe.lua` and
 vectors over the raw secret (RFC 4231 test cases 1 and 2 verbatim through the
 raw path, cases 5 and 7 through the standard hash-the-key path, and an
 externally computed short-secret signature for a fixed JWT signing input), the
-negative pin that the retired SHA-256-subkey tags no longer verify, per-byte
-tamper rejection, base64url RFC 4648 vectors and binary round-trips, JWT
+negative pin that subkey-derived tags do not verify, per-byte tamper rejection, base64url RFC 4648 vectors and binary round-trips, JWT
 encode/decode round-trips (including a standard-library token with a short raw
 secret), the `exp` policy, the alg-confusion defence, and every named error
 string. The suite pends cleanly when `liblunet_paxe` (or jsonic's native

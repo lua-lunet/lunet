@@ -10,11 +10,34 @@ SQL。本项目有意不提供 `db.escape`。
 
 | 函数 | 说明 |
 |---|---|
-| `open(config)` | `host`、`port`、`user`、`password`、`database`，可选 `pool_size`（默认 1） |
+| `open(config)` | `host`、`port`、`user`、`password`、`database`，可选 `connect_timeout`、`sslmode`、`pool_size`（默认 1） |
 | `close(conn)` | |
 | `query(conn, sql, ...)` | 返回行表数组 |
 | `exec(conn, sql, ...)` | 返回 `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | 与上述行为一致 |
+
+### 打开参数（Open settings）
+
+`open` 接受一个参数表，包含下表所列设置。除 `host` 等连接目标外，其余字段在
+运行时均可省略；类型错误与未知值会在打开时大声报错，绝不会被静默忽略。
+
+| 参数 | 类型 | 语义 |
+|---|---|---|
+| `host` | string | 默认 `"localhost"` |
+| `port` | integer | 默认 `5432` |
+| `user` / `password` / `database` | string | 默认 `""` |
+| `connect_timeout` | integer | libpq 连接尝试的等待秒数；不设置则保持 libpq 默认值 |
+| `sslmode` | string | 取值为 `"disable"`、`"allow"`、`"prefer"`、`"require"`、`"verify-ca"`、`"verify-full"` 之一；不设置则保持 libpq 默认值 |
+| `pool_size` | integer | 默认 `1`；见下文 |
+
+透传语义：`connect_timeout` 与 `sslmode` 在句柄返回**之前**就已生效——它们被写入
+驱动拼装的 libpq conninfo 字符串，对池中的每一条连接（包括你最先接触的那条）同时
+生效。驱动不会替供应商发明默认值：省略字段，libpq 的行为就与 libpq 文档所述完全
+一致。
+
+该句柄没有打开后的 pragma 通道——没有 `SET` 逃生舱口，也没有会话级旋钮。打开时
+的设置就是全部约定。（sqlite3 风格的读/写拆分有意不适用于远程驱动：服务器自身
+负责读/写流量的路由。）
 
 ### `pool_size`
 

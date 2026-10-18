@@ -112,6 +112,7 @@ typedef struct {
   char password[256];
   char database[256];
   char charset[256];
+  int connect_timeout; /* 0 = unset, leave the libmysqlclient default */
 } db_open_ctx_t;
 
 static void db_open_work_cb(uv_work_t* req) {
@@ -143,6 +144,13 @@ static void db_open_work_cb(uv_work_t* req) {
     }
 
     mysql_options(ctx->conns[i], MYSQL_SET_CHARSET_NAME, ctx->charset);
+
+    /* connect_timeout: seconds libmysqlclient waits before the connect
+     * attempt fails. 0 leaves the library default untouched. */
+    if (ctx->connect_timeout > 0) {
+      unsigned int timeout = (unsigned int)ctx->connect_timeout;
+      mysql_options(ctx->conns[i], MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+    }
 
     if (!mysql_real_connect(ctx->conns[i], ctx->host, ctx->user, ctx->password,
                             ctx->database, ctx->port, NULL, 0)) {
@@ -460,6 +468,29 @@ int lunet_db_open(lua_State* L) {
   lua_getfield(L, 1, "charset");
   snprintf(ctx->charset, sizeof(ctx->charset), "%s", luaL_optstring(L, -1, "utf8mb4"));
   lua_pop(L, 6);
+
+  /* connect_timeout: seconds libmysqlclient waits before the connect
+   * attempt fails. Unset leaves the library default untouched. */
+  ctx->connect_timeout = 0;
+  lua_getfield(L, 1, "connect_timeout");
+  if (!lua_isnil(L, -1)) {
+    if (!lua_isnumber(L, -1)) {
+      lua_pop(L, 1);
+      lunet_mysql_library_release();
+      lunet_free_nonnull(ctx);
+      lua_pushstring(L, "db.open: connect_timeout must be a number (seconds)");
+      return lua_error(L);
+    }
+    ctx->connect_timeout = (int)lua_tointeger(L, -1);
+    if (ctx->connect_timeout < 1) {
+      lua_pop(L, 1);
+      lunet_mysql_library_release();
+      lunet_free_nonnull(ctx);
+      lua_pushstring(L, "db.open: connect_timeout must be a positive integer (seconds)");
+      return lua_error(L);
+    }
+  }
+  lua_pop(L, 1);
 
   /* pool_size: how many connections sit behind the returned handle
    * (round-robin pick at dispatch). Default 1 — exactly one connection,

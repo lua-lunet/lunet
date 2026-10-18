@@ -15,7 +15,9 @@ local function test_mysql()
         port = 3306,
         user = "root",
         password = "root",
-        database = "test"
+        database = "test",
+        charset = "latin1",
+        connect_timeout = 10
     })
     if not conn then
         print("SKIP: Could not connect to MySQL: " .. tostring(err))
@@ -26,8 +28,23 @@ local function test_mysql()
     print("   OK: Connection opened")
 
     local _, rows
-    -- Test 2: Create table
-    print("2. Creating table...")
+    -- Test 2: Verify the charset passthrough actually took effect on the session
+    print("2. Verifying charset passthrough...")
+    rows, err = db.query(conn, "SELECT @@character_set_client AS v")
+    if err then
+        print("FAIL: Could not read character_set_client: " .. tostring(err))
+        __lunet_exit_code = 1
+        return
+    end
+    if rows[1].v ~= "latin1" then
+        print("FAIL: Expected character_set_client latin1, got " .. tostring(rows[1].v))
+        __lunet_exit_code = 1
+        return
+    end
+    print("   OK: charset passthrough in force")
+
+    -- Test 3: Create table
+    print("3. Creating table...")
     _, err = db.exec(
       conn,
       "CREATE TABLE IF NOT EXISTS smoke_test (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255))"
@@ -39,8 +56,8 @@ local function test_mysql()
     end
     print("   OK: Table created")
 
-    -- Test 3: Insert data
-    print("3. Inserting data...")
+    -- Test 4: Insert data
+    print("4. Inserting data...")
     _, err = db.exec(conn, "INSERT INTO smoke_test (name) VALUES ('hello')")
     if err then
         print("FAIL: Could not insert: " .. tostring(err))
@@ -49,8 +66,8 @@ local function test_mysql()
     end
     print("   OK: Data inserted")
 
-    -- Test 4: Query data
-    print("4. Querying data...")
+    -- Test 5: Query data
+    print("5. Querying data...")
     rows, err = db.query(conn, "SELECT * FROM smoke_test ORDER BY id DESC LIMIT 1")
     if err then
         print("FAIL: Could not query: " .. tostring(err))
@@ -64,13 +81,13 @@ local function test_mysql()
     end
     print("   OK: Query returned expected data")
 
-    -- Test 5: Clean up
-    print("5. Cleaning up...")
+    -- Test 6: Clean up
+    print("6. Cleaning up...")
     db.exec(conn, "DROP TABLE smoke_test")
     print("   OK: Table dropped")
 
-    -- Test 6: Close connection
-    print("6. Closing connection...")
+    -- Test 7: Close connection
+    print("7. Closing connection...")
     db.close(conn)
     print("   OK: Connection closed")
 

@@ -11,11 +11,39 @@ deliberately no `db.escape`.
 
 | Function | Notes |
 |---|---|
-| `open(config)` | `host`, `port`, `user`, `password`, `database`, `charset`, optional `pool_size` (default 1) |
+| `open(config)` | `host`, `port`, `user`, `password`, `database`, `charset`, optional `connect_timeout`, `pool_size` (default 1) |
 | `close(conn)` | |
 | `query(conn, sql, ...)` | returns array of row tables |
 | `exec(conn, sql, ...)` | returns `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | same behaviour as the above |
+
+### Open settings
+
+`open` accepts a params table with the settings below. Everything except
+`host` and friends is optional at runtime; wrong types raise a loud error at
+open time rather than being silently ignored.
+
+| Param | Type | Semantics |
+|---|---|---|
+| `host` | string | default `"localhost"` |
+| `port` | integer | default `3306` |
+| `user` | string | default `"root"` |
+| `password` / `database` | string | defaults `""` |
+| `charset` | string | default `"utf8mb4"`, applied via `MYSQL_SET_CHARSET_NAME` |
+| `connect_timeout` | integer | seconds libmysqlclient waits before the connect attempt fails; unset leaves the library default untouched |
+| `pool_size` | integer | default `1`; see below |
+
+Passthrough semantics: `connect_timeout` is applied before the handle returns
+— the driver sets `MYSQL_OPT_CONNECT_TIMEOUT` on every connection in the pool
+before `mysql_real_connect`, so it is in force for the first connection you
+touch and for all of them. The driver never invents a value the vendor already
+defaults: omit the field and libmysqlclient behaves exactly as its manual
+documents.
+
+There is no post-open pragma surface on this handle — no `SET` escape hatch
+exposed as an API, no per-session knob. Open-time settings are the entire
+contract. (The sqlite3-style read/write split deliberately does not apply to
+remote drivers: the server routes read/write traffic itself.)
 
 ### `pool_size`
 

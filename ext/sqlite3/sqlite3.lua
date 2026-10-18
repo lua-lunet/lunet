@@ -21,7 +21,7 @@ local core = require("lunet.sqlite3core")
 local sqlite3 = {}
 local cache = {}
 
-for _, name in ipairs({ "close", "query", "exec", "query_params", "exec_params" }) do
+for _, name in ipairs({ "close", "query", "exec", "query_params", "exec_params", "prepare" }) do
   sqlite3[name] = core[name]
 end
 

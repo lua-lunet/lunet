@@ -15,6 +15,7 @@ SQL。本项目有意不提供 `db.escape`。
 | `query(conn, sql, ...)` | 返回行表数组 |
 | `exec(conn, sql, ...)` | 返回 `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | 与上述行为一致 |
+| `prepare(conn, sql)` | 可复用的预处理语句；`stmt:query` / `stmt:exec` / `stmt:close`；要求 `pool_size = 1`——见[预处理语句](#预处理语句prepared-statements) |
 
 ### 打开参数（Open settings）
 
@@ -82,6 +83,38 @@ if not ok and err.poisoned then pg.close(conn) end
 - 任何语句出错后，Postgres 会把会话置于 aborted 状态，直到 `ROLLBACK` 之前所有
   语句都会失败。本包装器会直接展开到 `ROLLBACK`，因此连接可以恢复；请不要捕获
   `t.*` 的错误后继续发送语句。
+
+## 预处理语句（Prepared statements）
+
+`prepare` 暴露 libpq 的显式预处理语句协议：SQL 只 `PQprepare` 一次，之后每次
+调用通过 `PQexecPrepared` 执行——不再每次在服务器上重复解析加规划。
+
+```lua
+local stmt, err = pg.prepare(conn, "SELECT name FROM users WHERE age > $1")
+if not stmt then error(err) end
+
+local rows, qerr = stmt:query(30)   -- 绑定语义与 query 一致
+stmt:close()                        -- PQclosePrepared，一次 worker 跳转
+```
+
+- `stmt:query(...)` / `stmt:exec(...)` 每次调用都重新绑定变参，语义与
+  `query` / `exec` 完全一致；每次调用就是对其所属连接的一次
+  `PQexecPrepared`。
+- **一条语句绑定一个连接。** libpq 的预处理语句名是会话级的，因此在池化
+  句柄上调用 `prepare` 要求 `pool_size = 1`（默认值），否则大声报错——与
+  `postgres_tx` 同一条纪律。
+- 连接死掉时语句随之消亡：使用时大声报错（`statement is closed` /
+  `connection is closed`）。
+- **忙（busy）纪律：** 一条语句同时只允许一个在途调用。对同一语句的第二个
+  并发调用会以 `statement is busy` 大声失败，而不是在连接上交错执行。
+- `stmt:close()` 释放服务器端的语句定义（一次 worker 跳转）；之后使用会
+  大声报错。未 `close` 就丢弃的语句，其服务器端定义会一直保留到会话结束
+  ——finalizer 从不发送网络流量，请显式调用 `close`。
+- 关闭连接会切断其上所有仍然打开的语句。
+
+值得吗？对一条无关紧要的语句，每次调用的服务器规划成本测不出来；对复杂或
+高频率的语句则可能值得。阅读 PostgreSQL 扩展查询协议文档，按你自己的负载
+决定——这里没有魔法。
 
 ## 固定连接（pinning）是如何被人工验证的
 

@@ -15,6 +15,7 @@ SQL。本项目有意不提供 `db.escape`。
 | `query(conn, sql, ...)` | 返回行表数组 |
 | `exec(conn, sql, ...)` | 返回 `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | 与上述行为一致 |
+| `prepare(conn, sql)` | 可复用的预处理语句；`stmt:query` / `stmt:exec` / `stmt:close`；要求 `pool_size = 1`——见[预处理语句](#预处理语句prepared-statements) |
 
 ### 打开参数（Open settings）
 
@@ -94,6 +95,37 @@ if not ok and err.poisoned then mysql.close(conn) end
 - 默认隔离级别是 `REPEATABLE-READ`（而非 Postgres 的 `READ COMMITTED`），因此在
   一个事务内重复 `SELECT` 始终返回首次的快照。请用 `t.exec` 返回的
   `affected_rows` 检测写冲突，而不是重新读取。
+
+## 预处理语句（Prepared statements）
+
+`prepare` 让厂商语句跨调用存活，而不是每次调用准备又销毁：`mysql_stmt_init`
+加 `mysql_stmt_prepare` 只做一次，之后每次调用在保留的语句上执行
+`mysql_stmt_bind_param` 加 `mysql_stmt_execute`。若语句元数据发生变化（例如
+表被修改），服务器会自动重新准备，因此存活的语句无需调用者干预即可保持
+正确。
+
+```lua
+local stmt, err = mysql.prepare(conn, "SELECT name FROM users WHERE age > ?")
+if not stmt then error(err) end
+
+local rows, qerr = stmt:query(30)   -- 绑定语义与 query 一致
+stmt:close()                        -- mysql_stmt_close
+```
+
+- `stmt:query(...)` / `stmt:exec(...)` 每次调用都重新绑定变参，语义与
+  `query` / `exec` 完全一致；每次调用都会重置并重新绑定保留的语句。
+- **一条语句绑定一个连接。** 在池化句柄上调用 `prepare` 要求
+  `pool_size = 1`（默认值），否则大声报错——与 `mysql_tx` 同一条纪律。
+- 连接死掉时语句随之消亡：使用时大声报错（`statement is closed` /
+  `connection is closed`）。关闭连接会切断其上所有仍然打开的语句。
+- **忙（busy）纪律：** 一条语句同时只允许一个在途调用。对同一语句的第二个
+  并发调用会以 `statement is busy` 大声失败，而不是表现为协议中间态失步。
+- `stmt:close()` 释放厂商语句；之后使用会大声报错。未 `close` 就丢弃的语句
+  由 finalizer 兜底释放。
+
+值得吗？对一条无关紧要的语句，每次调用的准备成本测不出来；对复杂或高频率
+的语句则可能值得。阅读 libmysqlclient 预处理语句 API 文档，按你自己的负载
+决定——这里没有魔法。
 
 ## 固定连接（pinning）是如何被人工验证的
 

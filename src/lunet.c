@@ -125,6 +125,7 @@ int lunet_db_query(lua_State* L);
 int lunet_db_exec(lua_State* L);
 int lunet_db_query_params(lua_State* L);
 int lunet_db_exec_params(lua_State* L);
+int lunet_db_prepare(lua_State* L);
 
 static int lunet_open_db(lua_State *L) {
   luaL_Reg funcs[] = {{"open", lunet_db_open},
@@ -133,6 +134,7 @@ static int lunet_open_db(lua_State *L) {
                       {"exec", lunet_db_exec},
                       {"query_params", lunet_db_query_params},
                       {"exec_params", lunet_db_exec_params},
+                      {"prepare", lunet_db_prepare},
                       {NULL, NULL}};
   luaL_newlib(L, funcs);
   return 1;

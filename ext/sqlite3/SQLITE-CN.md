@@ -32,6 +32,7 @@ SQLite 驱动。可以直接 `require("lunet.sqlite3")` 发布压缩包中的预
 | `query(conn, sql, ...)` | 返回行表数组 |
 | `exec(conn, sql, ...)` | 返回 `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | 与上述行为一致 |
+| `prepare(conn, sql)` | 可复用的预处理语句；`stmt:query` / `stmt:exec` / `stmt:close`——见[预处理语句](#预处理语句prepared-statements) |
 
 职责的拆分：二进制模块（`lunet.sqlite3core`）只管异步 I/O——一次 worker 跳
 的 open 返回 `(rw, ro, err)`，`rw` 上的语句派发到 uv worker 池，`ro` 上的语
@@ -195,6 +196,39 @@ if not ok and err.poisoned then db.destroy(path) end
 - **读写拆分需要文件路径。** 对 `":memory:"` 以 `SQLITE_OPEN_READONLY` 再开的
   第二个连接是一个全新、空、私有的数据库——不是写者数据的读者。打算使用
   `ro` 时请传文件路径；在 `:memory:` 上只用 `rw` 即可。
+
+## 预处理语句（Prepared statements）
+
+`prepare` 让厂商语句跨调用存活，而不是每次调用都重新解析加规划：SQL 只编译
+一次（`sqlite3_prepare_v2`），之后每次调用重置、重新绑定并步进。
+
+```lua
+local stmt, err = db.prepare(rw, "SELECT name FROM users WHERE age > ?")
+if not stmt then error(err) end
+
+local rows, qerr = stmt:query(30)   -- 绑定语义与 query 一致
+local res, eerr  = stmt:exec(...)   -- 用于 INSERT/UPDATE/DELETE
+stmt:close()                        -- 立即 finalize，或交给 GC
+```
+
+- `stmt:query(...)` / `stmt:exec(...)` 每次调用都重新绑定变参，语义与
+  `query` / `exec` 完全一致；每次调用在绑定前先执行 `sqlite3_reset` 加
+  `sqlite3_clear_bindings`，并让语句保持就绪供下次调用。
+- **一条语句绑定一个连接。** 在读写句柄上准备的语句与该句柄的其他语句一样
+   进入 worker 池；在只读句柄上准备的语句内联执行，与该句柄的语义一致。
+- **只读句柄上的写 SQL 会在 prepare 阶段就被大声拒绝**——比误路由的普通
+  exec 在步进阶段才失败要早得多。
+- **忙（busy）纪律：** 一条语句同时只允许一个在途调用。对同一语句的第二个
+  并发调用会以 `statement is busy` 大声失败，而不是破坏中间状态。
+- `stmt:close()` finalize 厂商语句；之后使用会大声报错。未 `close` 就丢弃的
+  语句由 finalizer 兜底 finalize。
+- 连接关闭时其上仍然打开的语句是安全的：所有打开的语句都随之 finalize，
+  每个幸存的语句 userdata 之后使用时大声报错。
+- 本驱动不存在 `pool_size` 问题：它没有池。
+
+值得吗？对一条无关紧要的语句，每次调用的准备成本测不出来；对复杂或高频率
+的语句则可能值得。阅读 SQLite 文档，按你自己的负载决定——这里没有魔法。
+小应用中该 API 的形态见 `examples/10_db_prepared.lua`。
 
 ## 固定连接（pinning）是如何被验证的
 

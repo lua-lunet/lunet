@@ -16,6 +16,7 @@ deliberately no `db.escape`.
 | `query(conn, sql, ...)` | returns array of row tables |
 | `exec(conn, sql, ...)` | returns `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | same behaviour as the above |
+| `prepare(conn, sql)` | reusable prepared statement; `stmt:query` / `stmt:exec` / `stmt:close`; requires `pool_size = 1` — see [Prepared statements](#prepared-statements) |
 
 ### Open settings
 
@@ -93,6 +94,43 @@ unit, which is why it takes a `conn` rather than a config.
   everything fails until `ROLLBACK`. The wrapper unwinds straight to `ROLLBACK`,
   so the connection recovers; don't catch a `t.*` error and keep issuing
   statements.
+
+## Prepared statements
+
+`prepare` exposes libpq's explicit prepared-statement protocol: the SQL is
+prepared once (`PQprepare`) and each call executes it (`PQexecPrepared`) —
+no per-call parse + plan on the server.
+
+```lua
+local stmt, err = pg.prepare(conn, "SELECT name FROM users WHERE age > $1")
+if not stmt then error(err) end
+
+local rows, qerr = stmt:query(30)   -- same binding semantics as query
+stmt:close()                        -- PQclosePrepared, one worker hop
+```
+
+- `stmt:query(...)` / `stmt:exec(...)` bind the varargs per call, exactly
+  like `query` / `exec`; each call is one `PQexecPrepared` on the
+  statement's connection.
+- **One statement is bound to one connection.** Prepared-statement names
+  are session-scoped in libpq, so `prepare` on a pooled handle requires
+  `pool_size = 1` (the default) and fails loudly otherwise — same doctrine
+  as `postgres_tx`.
+- If the connection dies, the statement dies with the session: use fails
+  loudly (`statement is closed` / `connection is closed`).
+- **Busy discipline:** one statement, one in-flight call. A second
+  concurrent call on the same statement fails with `statement is busy`
+  instead of interleaving on the connection.
+- `stmt:close()` releases the server-side definition (one worker hop);
+  after it, use fails loudly. A statement dropped without `close` leaves
+  its server-side definition allocated until the session ends — the
+  finalizer never sends network traffic, so call `close`.
+- Closing the connection severs every statement still open on it.
+
+Is it worth it? For a trivial statement the per-call server plan is
+unmeasurable; for a complex or high-rate one it can matter. Read the
+PostgreSQL documentation on the extended query protocol and decide for
+your own workload — there is no magic.
 
 ## How the pinning was verified
 

@@ -55,4 +55,42 @@ function postgres.query(conn, sql, ...) end
 ---@return string|nil error Error message if failed
 function postgres.exec(conn, sql, ...) end
 
+---@class postgres_stmt
+---A reusable prepared statement bound to one pool member: the SQL is
+---prepared once under a unique session-scoped name (PQprepare); each
+---query/exec call executes it via PQexecPrepared with fresh parameters;
+---close releases the server-side definition with PQclosePrepared. If the
+---connection dies, the statement dies with the session: use fails loudly.
+---A second call while one is in flight fails with "statement is busy".
+---Requires pool_size = 1 (a statement is bound to one connection). See
+---ext/postgres/README.md, "Prepared statements".
+local stmt = {} -- luacheck: ignore
+
+---Run the prepared SELECT with fresh bound parameters (varargs, same
+---binding semantics as query).
+---@return table|nil rows Array of row tables, or nil on error
+---@return string|nil error Error message if failed
+function stmt.query(...) end
+
+---Run the prepared non-SELECT statement with fresh bound parameters.
+---@return table|nil result { affected_rows = integer, last_insert_id = integer }, or nil on error
+---@return string|nil error Error message if failed
+function stmt.exec(...) end
+
+---Release the server-side statement (PQclosePrepared, one worker hop).
+---After close, use fails loudly. Closing an already-closed statement is a
+---no-op. A statement dropped without close leaves its server-side
+---definition allocated until the session ends.
+---@return string|nil error Error message if failed
+function stmt.close() end
+
+---Prepare a reusable statement on a connection. Requires a coroutine
+---(lunet.spawn); the prepare is queued to the worker pool and yields.
+---Requires pool_size = 1.
+---@param conn lightuserdata The connection to prepare on
+---@param sql string The SQL text (non-empty; $n placeholders)
+---@return lightuserdata|nil stmt The prepared statement, or nil on error
+---@return string|nil error Error message if failed
+function postgres.prepare(conn, sql) end
+
 return postgres

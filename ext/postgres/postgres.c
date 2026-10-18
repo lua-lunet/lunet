@@ -11,6 +11,7 @@
 
 #define LUNET_PG_CONN_MT "lunet.pg.conn"
 #define LUNET_PG_POOL_MT "lunet.pg.pool"
+#define LUNET_PG_STMT_MT "lunet.pg.stmt"
 #define LUNET_PG_POOL_MAX 64
 
 static char* lunet_strdup_local(const char* s) {
@@ -22,11 +23,48 @@ static char* lunet_strdup_local(const char* s) {
   return out;
 }
 
+typedef struct lunet_pg_stmt_s lunet_pg_stmt_t;
+
 typedef struct {
   PGconn* conn;
   uv_mutex_t mutex;
   int closed;
+  /* Open prepared statements bound to this connection (intrusive list,
+   * loop-thread-only links). Closing the connection marks every still-open
+   * statement closed and severs it: the server-side prepared statement dies
+   * with the session, so a surviving statement userdata must never send
+   * commands on the dead connection again. */
+  lunet_pg_stmt_t* stmts;
 } lunet_pg_conn_t;
+
+/* A prepared statement: one connection, one server-side name. The busy
+ * flag guards re-entrant use (a second call while one is in flight fails
+ * loudly instead of interleaving on the connection). */
+struct lunet_pg_stmt_s {
+  lunet_pg_conn_t* member;
+  char name[64]; /* server-side prepared-statement name, per session */
+  int busy;
+  int closed;
+  lunet_pg_stmt_t* next;
+  lunet_pg_stmt_t* prev;
+};
+
+/* Link a statement into the connection's open-statement list (loop thread). */
+static void conn_track_stmt(lunet_pg_conn_t* conn, lunet_pg_stmt_t* s) {
+  s->prev = NULL;
+  s->next = conn->stmts;
+  if (conn->stmts) conn->stmts->prev = s;
+  conn->stmts = s;
+}
+
+/* Unlink a statement from the connection's open-statement list (loop thread). */
+static void conn_untrack_stmt(lunet_pg_conn_t* conn, lunet_pg_stmt_t* s) {
+  if (s->prev) s->prev->next = s->next;
+  else if (conn->stmts == s) conn->stmts = s->next;
+  if (s->next) s->next->prev = s->prev;
+  s->next = NULL;
+  s->prev = NULL;
+}
 
 /* The handle open() returns: a pool of pool_size connections, one statement
  * -> one member, picked round-robin at dispatch. Default pool_size is 1 —
@@ -43,6 +81,20 @@ typedef struct {
 static void lunet_pg_conn_close(lunet_pg_conn_t* wrapper) {
   if (!wrapper || wrapper->closed) return;
   wrapper->closed = 1;
+  /* Sever every still-open prepared statement first: the server-side
+   * prepared statements die with the session, so each one is marked closed
+   * and severed — later use or GC is a loud error or a safe no-op, never a
+   * command on a dead connection. */
+  lunet_pg_stmt_t* s = wrapper->stmts;
+  while (s) {
+    lunet_pg_stmt_t* next = s->next;
+    s->closed = 1;
+    s->member = NULL;
+    s->next = NULL;
+    s->prev = NULL;
+    s = next;
+  }
+  wrapper->stmts = NULL;
   if (wrapper->conn) {
     PQfinish(wrapper->conn);
     wrapper->conn = NULL;
@@ -285,8 +337,8 @@ static void db_open_after_cb(uv_work_t* req, int status) {
       pool->closed = 0;
       for (int i = 0; i < pool->n; i++) {
         lunet_pg_conn_t* member = lunet_alloc(sizeof(lunet_pg_conn_t));
+        memset(member, 0, sizeof(*member));
         member->conn = ctx->conns[i];
-        member->closed = 0;
         uv_mutex_init(&member->mutex);
         pool->members[i] = member;
         ctx->conns[i] = NULL;
@@ -499,6 +551,54 @@ static lunet_pg_conn_t* pick_statement_target(lua_State* L, int idx) {
   return (lunet_pg_conn_t*)luaL_testudata(L, idx, LUNET_PG_CONN_MT);
 }
 
+/* Convert collected Lua params to libpq's text-paramValues form.
+ * Returns 0 on success (caller frees via pg_free_param_values), -1 on
+ * out-of-memory. */
+static int pg_build_param_values(param_t* params, int nparams,
+                                 const char*** out_values, int** out_should_free) {
+  *out_values = NULL;
+  *out_should_free = NULL;
+  if (nparams <= 0) return 0;
+  const char** paramValues = lunet_calloc(nparams, sizeof(char*));
+  int* should_free = lunet_calloc(nparams, sizeof(int));
+  if (!paramValues || !should_free) {
+    lunet_free_nonnull(paramValues);
+    lunet_free_nonnull(should_free);
+    return -1;
+  }
+  for (int i = 0; i < nparams; i++) {
+    if (params[i].type == PARAM_TYPE_INT) {
+      char buf[64];
+      snprintf(buf, sizeof(buf), "%lld", params[i].value.i);
+      paramValues[i] = lunet_strdup_local(buf);
+      should_free[i] = 1;
+    } else if (params[i].type == PARAM_TYPE_DOUBLE) {
+      char buf[64];
+      snprintf(buf, sizeof(buf), "%g", params[i].value.d);
+      paramValues[i] = lunet_strdup_local(buf);
+      should_free[i] = 1;
+    } else if (params[i].type == PARAM_TYPE_TEXT) {
+      paramValues[i] = params[i].value.s.data;
+      should_free[i] = 0;
+    } else {
+      paramValues[i] = NULL;
+      should_free[i] = 0;
+    }
+  }
+  *out_values = paramValues;
+  *out_should_free = should_free;
+  return 0;
+}
+
+static void pg_free_param_values(const char** paramValues, int* should_free, int nparams) {
+  if (!paramValues) return;
+  for (int i = 0; i < nparams; i++) {
+    if (should_free && should_free[i]) lunet_free_nonnull((void*)paramValues[i]);
+  }
+  lunet_free_nonnull(paramValues);
+  lunet_free_nonnull(should_free);
+}
+
 typedef struct {
   uv_work_t req;
   lua_State* waiter_L;
@@ -506,7 +606,14 @@ typedef struct {
 
   lunet_pg_conn_t* wrapper;
   char* query;
-  
+
+  /* When set, execute this server-side prepared statement name via
+   * PQexecPrepared instead of one-shot PQexec/PQexecParams. The valref
+   * pins the statement userdata while the worker op is in flight. */
+  char prepared_name[64];
+  lunet_pg_stmt_t* pstmt;
+  int stmt_valref;
+
   param_t* params;
   int nparams;
 
@@ -525,42 +632,31 @@ static void db_query_work_cb(uv_work_t* req) {
     return;
   }
 
-  if (ctx->nparams > 0) {
-      const char **paramValues = lunet_calloc(ctx->nparams, sizeof(char*));
-      int *should_free = lunet_calloc(ctx->nparams, sizeof(int));
-      if (!paramValues || !should_free) {
+  if (ctx->prepared_name[0]) {
+    const char** paramValues = NULL;
+    int* should_free = NULL;
+    if (pg_build_param_values(ctx->params, ctx->nparams, &paramValues, &should_free) != 0) {
+      snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+      ctx->result = NULL;
+      uv_mutex_unlock(&ctx->wrapper->mutex);
+      return;
+    }
+    ctx->result = PQexecPrepared(ctx->wrapper->conn, ctx->prepared_name,
+                                 ctx->nparams, (const char* const*)paramValues,
+                                 NULL, NULL, 0);
+    pg_free_param_values(paramValues, should_free, ctx->nparams);
+  } else if (ctx->nparams > 0) {
+      const char **paramValues = NULL;
+      int *should_free = NULL;
+      if (pg_build_param_values(ctx->params, ctx->nparams, &paramValues, &should_free) != 0) {
            snprintf(ctx->err, sizeof(ctx->err), "out of memory");
-           lunet_free_nonnull(paramValues);
-           lunet_free_nonnull(should_free);
            uv_mutex_unlock(&ctx->wrapper->mutex);
            return;
-      }
-      
-      for (int i=0; i<ctx->nparams; i++) {
-          if (ctx->params[i].type == PARAM_TYPE_INT) {
-              char buf[64];
-              snprintf(buf, sizeof(buf), "%lld", ctx->params[i].value.i);
-              paramValues[i] = lunet_strdup_local(buf);
-              should_free[i] = 1;
-          } else if (ctx->params[i].type == PARAM_TYPE_DOUBLE) {
-              char buf[64];
-              snprintf(buf, sizeof(buf), "%g", ctx->params[i].value.d);
-              paramValues[i] = lunet_strdup_local(buf);
-              should_free[i] = 1;
-          } else if (ctx->params[i].type == PARAM_TYPE_TEXT) {
-              paramValues[i] = ctx->params[i].value.s.data;
-              should_free[i] = 0;
-          } else {
-              paramValues[i] = NULL;
-              should_free[i] = 0;
-          }
       }
 
       ctx->result = PQexecParams(ctx->wrapper->conn, ctx->query, ctx->nparams, NULL, (const char * const *)paramValues, NULL, NULL, 0);
 
-      for(int i=0; i<ctx->nparams; i++) if(should_free[i]) lunet_free_nonnull((void*)paramValues[i]);
-      lunet_free_nonnull(paramValues);
-      lunet_free_nonnull(should_free);
+      pg_free_param_values(paramValues, should_free, ctx->nparams);
   } else {
       ctx->result = PQexec(ctx->wrapper->conn, ctx->query);
   }
@@ -586,6 +682,8 @@ static void db_query_after_cb(uv_work_t* req, int status) {
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.query\n");
+    if (ctx->pstmt) ctx->pstmt->busy = 0;
+    if (ctx->stmt_valref) lunet_valref_release(L, ctx->stmt_valref);
     if (ctx->result) PQclear(ctx->result);
     lunet_free_nonnull(ctx->query);
     free_params(ctx->params, ctx->nparams);
@@ -594,6 +692,9 @@ static void db_query_after_cb(uv_work_t* req, int status) {
   }
   lua_State* co = lua_tothread(L, -1);
   lua_pop(L, 1);
+
+  if (ctx->pstmt) ctx->pstmt->busy = 0;
+  if (ctx->stmt_valref) lunet_valref_release(L, ctx->stmt_valref);
 
   if (ctx->result) {
     lua_newtable(co);
@@ -736,7 +837,11 @@ typedef struct {
 
   lunet_pg_conn_t* wrapper;
   char* query;
-  
+
+  char prepared_name[64];
+  lunet_pg_stmt_t* pstmt;
+  int stmt_valref;
+
   param_t* params;
   int nparams;
 
@@ -756,42 +861,30 @@ static void db_exec_work_cb(uv_work_t* req) {
   }
 
   PGresult* result;
-  if (ctx->nparams > 0) {
-      const char **paramValues = lunet_calloc(ctx->nparams, sizeof(char*));
-      int *should_free = lunet_calloc(ctx->nparams, sizeof(int));
-      if (!paramValues || !should_free) {
+  if (ctx->prepared_name[0]) {
+    const char** paramValues = NULL;
+    int* should_free = NULL;
+    if (pg_build_param_values(ctx->params, ctx->nparams, &paramValues, &should_free) != 0) {
+      snprintf(ctx->err, sizeof(ctx->err), "out of memory");
+      uv_mutex_unlock(&ctx->wrapper->mutex);
+      return;
+    }
+    result = PQexecPrepared(ctx->wrapper->conn, ctx->prepared_name,
+                            ctx->nparams, (const char* const*)paramValues,
+                            NULL, NULL, 0);
+    pg_free_param_values(paramValues, should_free, ctx->nparams);
+  } else if (ctx->nparams > 0) {
+      const char **paramValues = NULL;
+      int *should_free = NULL;
+      if (pg_build_param_values(ctx->params, ctx->nparams, &paramValues, &should_free) != 0) {
            snprintf(ctx->err, sizeof(ctx->err), "out of memory");
-           lunet_free_nonnull(paramValues);
-           lunet_free_nonnull(should_free);
            uv_mutex_unlock(&ctx->wrapper->mutex);
            return;
-      }
-      
-      for (int i=0; i<ctx->nparams; i++) {
-          if (ctx->params[i].type == PARAM_TYPE_INT) {
-              char buf[64];
-              snprintf(buf, sizeof(buf), "%lld", ctx->params[i].value.i);
-              paramValues[i] = lunet_strdup_local(buf);
-              should_free[i] = 1;
-          } else if (ctx->params[i].type == PARAM_TYPE_DOUBLE) {
-              char buf[64];
-              snprintf(buf, sizeof(buf), "%g", ctx->params[i].value.d);
-              paramValues[i] = lunet_strdup_local(buf);
-              should_free[i] = 1;
-          } else if (ctx->params[i].type == PARAM_TYPE_TEXT) {
-              paramValues[i] = ctx->params[i].value.s.data;
-              should_free[i] = 0;
-          } else {
-              paramValues[i] = NULL;
-              should_free[i] = 0;
-          }
       }
 
       result = PQexecParams(ctx->wrapper->conn, ctx->query, ctx->nparams, NULL, (const char * const *)paramValues, NULL, NULL, 0);
 
-      for(int i=0; i<ctx->nparams; i++) if(should_free[i]) lunet_free_nonnull((void*)paramValues[i]);
-      lunet_free_nonnull(paramValues);
-      lunet_free_nonnull(should_free);
+      pg_free_param_values(paramValues, should_free, ctx->nparams);
   } else {
       result = PQexec(ctx->wrapper->conn, ctx->query);
   }
@@ -822,6 +915,8 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.exec\n");
+    if (ctx->pstmt) ctx->pstmt->busy = 0;
+    if (ctx->stmt_valref) lunet_valref_release(L, ctx->stmt_valref);
     lunet_free_nonnull(ctx->query);
     free_params(ctx->params, ctx->nparams);
     lunet_free_nonnull(ctx);
@@ -829,6 +924,9 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
   }
   lua_State* co = lua_tothread(L, -1);
   lua_pop(L, 1);
+
+  if (ctx->pstmt) ctx->pstmt->busy = 0;
+  if (ctx->stmt_valref) lunet_valref_release(L, ctx->stmt_valref);
 
   if (ctx->err[0] != '\0') {
     lua_pushnil(co);
@@ -1057,6 +1155,461 @@ int lunet_db_exec_params(lua_State* L) {
     lunet_free_nonnull(ctx);
     lua_pushnil(L);
     lua_pushstring(L, uv_strerror(ret));
+    return 2;
+  }
+
+  return lua_yield(L, 0);
+}
+
+/* ==========================================================================
+ * Prepared statements
+ *
+ * db.prepare(handle, sql) hands back a reusable statement handle: the SQL
+ * is PQprepare'd once under a unique session-scoped name, each stmt:query /
+ * stmt:exec call executes it via PQexecPrepared with fresh parameters, and
+ * stmt:close() releases the server-side definition with PQclosePrepared.
+ * One statement is bound to one connection — prepare on a pooled handle
+ * therefore requires pool_size = 1. If the connection dies, the statement
+ * dies with the session: use fails loudly. A second call while one is in
+ * flight fails loudly ("statement is busy").
+ * ========================================================================== */
+
+/* Session-scoped unique name generator: every entry point that mints one
+ * runs on the loop thread, so no lock is needed. */
+static unsigned long long g_pg_stmt_counter = 0;
+
+static void pg_stmt_name(char* buf, size_t buflen) {
+  snprintf(buf, buflen, "lunet_s%llu",
+           (unsigned long long)(++g_pg_stmt_counter));
+}
+
+static int stmt_gc(lua_State* L) {
+  lunet_pg_stmt_t* s = (lunet_pg_stmt_t*)luaL_checkudata(L, 1, LUNET_PG_STMT_MT);
+  if (s->closed || !s->member) return 0;
+  /* Best-effort, no network: a statement dropped without stmt:close()
+   * leaves its server-side definition allocated until the session ends.
+   * Running PQclosePrepared here would be a blocking round trip on the
+   * loop thread — the deliberate trade is the documented leak-until-close
+   * for statements that are GC'd without an explicit close. */
+  s->closed = 1;
+  conn_untrack_stmt(s->member, s);
+  return 0;
+}
+
+/* Worker hop for stmt:close: PQclosePrepared is a network round trip, so
+ * it never runs on the loop thread. */
+typedef struct {
+  uv_work_t req;
+  lua_State* waiter_L;
+  int co_ref;
+  lunet_pg_conn_t* member;
+  char name[64];
+
+  char err[256];
+} stmt_close_ctx_t;
+
+static void stmt_close_work_cb(uv_work_t* req) {
+  stmt_close_ctx_t* ctx = (stmt_close_ctx_t*)req->data;
+
+  uv_mutex_lock(&ctx->member->mutex);
+  if (ctx->member->closed || !ctx->member->conn) {
+    /* The session is gone: the server-side statement died with it. */
+    uv_mutex_unlock(&ctx->member->mutex);
+    return;
+  }
+  PGresult* r = PQclosePrepared(ctx->member->conn, ctx->name);
+  ExecStatusType status = r ? PQresultStatus(r) : PGRES_FATAL_ERROR;
+  if (r) PQclear(r);
+  if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
+    snprintf(ctx->err, sizeof(ctx->err), "%s", PQerrorMessage(ctx->member->conn));
+  }
+  uv_mutex_unlock(&ctx->member->mutex);
+}
+
+static void stmt_close_after_cb(uv_work_t* req, int status) {
+  stmt_close_ctx_t* ctx = (stmt_close_ctx_t*)req->data;
+  lua_State* L = ctx->waiter_L;
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
+  if (!lua_isthread(L, -1)) {
+    lua_pop(L, 1);
+    fprintf(stderr, "invalid coroutine in stmt:close\n");
+    lunet_free_nonnull(ctx);
+    return;
+  }
+  lua_State* co = lua_tothread(L, -1);
+  lua_pop(L, 1);
+
+  if (ctx->err[0] != '\0') {
+    lua_pushstring(co, ctx->err);
+  } else {
+    lua_pushnil(co);
+  }
+  /* Shape: err = stmt:close() — one return value. */
+  int rc = lunet_co_resume(co, 1);
+  if (rc != 0 && rc != LUA_YIELD) {
+    const char* err = lua_tostring(co, -1);
+    if (err) fprintf(stderr, "lua_resume error in stmt:close: %s\n", err);
+    lua_pop(co, 1);
+  }
+  lunet_free_nonnull(ctx);
+}
+
+static int stmt_close(lua_State* L) {
+  if (lunet_ensure_coroutine(L, "stmt:close")) {
+    return lua_error(L);
+  }
+  lunet_pg_stmt_t* s = (lunet_pg_stmt_t*)luaL_testudata(L, 1, LUNET_PG_STMT_MT);
+  if (!s) {
+    lua_pushstring(L, "stmt:close requires a prepared statement");
+    return 1;
+  }
+  if (s->closed || !s->member) {
+    lua_pushnil(L);
+    return 1;
+  }
+  if (s->busy) {
+    lua_pushstring(L, "statement is busy");
+    return 1;
+  }
+
+  /* Mark closed and detach immediately: every later use fails loudly even
+   * while the release round trip is still in flight. */
+  stmt_close_ctx_t* ctx = lunet_alloc(sizeof(stmt_close_ctx_t));
+  if (!ctx) {
+    lua_pushstring(L, "out of memory");
+    return lua_error(L);
+  }
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->waiter_L = L;
+  ctx->req.data = ctx;
+  ctx->member = s->member;
+  snprintf(ctx->name, sizeof(ctx->name), "%s", s->name);
+
+  s->closed = 1;
+  conn_untrack_stmt(s->member, s);
+
+  lunet_coref_create(L, ctx->co_ref);
+  int ret = uv_queue_work(uv_default_loop(), &ctx->req, stmt_close_work_cb,
+                          stmt_close_after_cb);
+  if (ret < 0) {
+    lunet_coref_release(L, ctx->co_ref);
+    lunet_free_nonnull(ctx);
+    lua_pushfstring(L, "stmt:close: uv_queue_work failed: %s", uv_strerror(ret));
+    return lua_error(L);
+  }
+  return lua_yield(L, 0);
+}
+
+/* Shared body of stmt:query / stmt:exec: validate the handle, bind the
+ * varargs (same binding semantics as the one-shot calls), pin the
+ * userdata, and queue the PQexecPrepared worker op. */
+static int stmt_dispatch(lua_State* L, int is_exec) {
+  lunet_pg_stmt_t* s = (lunet_pg_stmt_t*)luaL_testudata(L, 1, LUNET_PG_STMT_MT);
+  if (!s) {
+    lua_pushnil(L);
+    lua_pushstring(L, "stmt requires a prepared statement");
+    return 2;
+  }
+  if (s->closed || !s->member) {
+    lua_pushnil(L);
+    lua_pushstring(L, "statement is closed");
+    return 2;
+  }
+  if (s->busy) {
+    lua_pushnil(L);
+    lua_pushstring(L, "statement is busy");
+    return 2;
+  }
+  if (s->member->closed) {
+    lua_pushnil(L);
+    lua_pushstring(L, "connection is closed");
+    return 2;
+  }
+
+  /* Pin the statement userdata for the flight; the after callback releases
+   * the pin and clears the busy flag. */
+  lua_pushvalue(L, 1);
+  int valref;
+  lunet_valref_create_raw(L, valref);
+  s->busy = 1;
+
+  if (is_exec) {
+    db_exec_ctx_t* ctx = lunet_alloc(sizeof(db_exec_ctx_t));
+    if (!ctx) {
+      s->busy = 0;
+      lunet_valref_release(L, valref);
+      lua_pushstring(L, "out of memory");
+      return lua_error(L);
+    }
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->waiter_L = L;
+    ctx->req.data = ctx;
+    ctx->wrapper = s->member;
+    ctx->pstmt = s;
+    ctx->stmt_valref = valref;
+    snprintf(ctx->prepared_name, sizeof(ctx->prepared_name), "%s", s->name);
+    ctx->params = collect_params(L, 2, &ctx->nparams);
+    if (ctx->nparams < 0) {
+      s->busy = 0;
+      lunet_valref_release(L, valref);
+      lunet_free_nonnull(ctx);
+      lua_pushnil(L);
+      lua_pushstring(L, "out of memory");
+      return 2;
+    }
+
+    lunet_coref_create(L, ctx->co_ref);
+    int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_exec_work_cb, db_exec_after_cb);
+    if (ret < 0) {
+      lunet_coref_release(L, ctx->co_ref);
+      s->busy = 0;
+      lunet_valref_release(L, valref);
+      lunet_free_nonnull(ctx->query);
+      free_params(ctx->params, ctx->nparams);
+      lunet_free_nonnull(ctx);
+      lua_pushnil(L);
+      lua_pushstring(L, uv_strerror(ret));
+      return 2;
+    }
+    return lua_yield(L, 0);
+  }
+
+  db_query_ctx_t* ctx = lunet_alloc(sizeof(db_query_ctx_t));
+  if (!ctx) {
+    s->busy = 0;
+    lunet_valref_release(L, valref);
+    lua_pushstring(L, "out of memory");
+    return lua_error(L);
+  }
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->waiter_L = L;
+  ctx->req.data = ctx;
+  ctx->wrapper = s->member;
+  ctx->pstmt = s;
+  ctx->stmt_valref = valref;
+  snprintf(ctx->prepared_name, sizeof(ctx->prepared_name), "%s", s->name);
+  ctx->params = collect_params(L, 2, &ctx->nparams);
+  if (ctx->nparams < 0) {
+    s->busy = 0;
+    lunet_valref_release(L, valref);
+    lunet_free_nonnull(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  lunet_coref_create(L, ctx->co_ref);
+  int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_query_work_cb, db_query_after_cb);
+  if (ret < 0) {
+    lunet_coref_release(L, ctx->co_ref);
+    s->busy = 0;
+    lunet_valref_release(L, valref);
+    lunet_free_nonnull(ctx->query);
+    free_params(ctx->params, ctx->nparams);
+    lunet_free_nonnull(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, uv_strerror(ret));
+    return 2;
+  }
+  return lua_yield(L, 0);
+}
+
+static int stmt_query(lua_State* L) {
+  if (lunet_ensure_coroutine(L, "stmt:query")) {
+    return lua_error(L);
+  }
+  return stmt_dispatch(L, 0);
+}
+
+static int stmt_exec(lua_State* L) {
+  if (lunet_ensure_coroutine(L, "stmt:exec")) {
+    return lua_error(L);
+  }
+  return stmt_dispatch(L, 1);
+}
+
+static void register_stmt_metatable(lua_State* L) {
+  if (luaL_newmetatable(L, LUNET_PG_STMT_MT)) {
+    lua_newtable(L);
+    lua_pushcfunction(L, stmt_query);
+    lua_setfield(L, -2, "query");
+    lua_pushcfunction(L, stmt_exec);
+    lua_setfield(L, -2, "exec");
+    lua_pushcfunction(L, stmt_close);
+    lua_setfield(L, -2, "close");
+    lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, stmt_gc);
+    lua_setfield(L, -2, "__gc");
+  }
+  lua_pop(L, 1);
+}
+
+typedef struct {
+  uv_work_t req;
+  lua_State* waiter_L;
+  int co_ref;
+  int ud_ref; /* pins the statement userdata across the worker hop */
+  lunet_pg_stmt_t* target;
+  char* sql;
+
+  char err[256];
+} db_prepare_ctx_t;
+
+static void db_prepare_work_cb(uv_work_t* req) {
+  db_prepare_ctx_t* ctx = (db_prepare_ctx_t*)req->data;
+  lunet_pg_stmt_t* s = ctx->target;
+
+  uv_mutex_lock(&s->member->mutex);
+  if (s->member->closed || !s->member->conn) {
+    snprintf(ctx->err, sizeof(ctx->err), "connection is closed");
+    uv_mutex_unlock(&s->member->mutex);
+    return;
+  }
+  PGresult* r = PQprepare(s->member->conn, s->name, ctx->sql, 0, NULL);
+  ExecStatusType status = r ? PQresultStatus(r) : PGRES_FATAL_ERROR;
+  if (r) PQclear(r);
+  if (status != PGRES_COMMAND_OK) {
+    snprintf(ctx->err, sizeof(ctx->err), "%s", PQerrorMessage(s->member->conn));
+  }
+  uv_mutex_unlock(&s->member->mutex);
+}
+
+/* Mark a not-yet-usable statement closed and take it off the connection's
+ * open list. */
+static void prepare_discard(lunet_pg_stmt_t* s) {
+  s->closed = 1;
+  if (s->member) conn_untrack_stmt(s->member, s);
+}
+
+static void db_prepare_after_cb(uv_work_t* req, int status) {
+  db_prepare_ctx_t* ctx = (db_prepare_ctx_t*)req->data;
+  lua_State* L = ctx->waiter_L;
+  lunet_pg_stmt_t* s = ctx->target;
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
+  if (!lua_isthread(L, -1)) {
+    lua_pop(L, 1);
+    fprintf(stderr, "invalid coroutine in db.prepare\n");
+    lunet_valref_release(L, ctx->ud_ref);
+    prepare_discard(s);
+    lunet_free_nonnull(ctx->sql);
+    lunet_free_nonnull(ctx);
+    return;
+  }
+  lua_State* co = lua_tothread(L, -1);
+  lua_pop(L, 1);
+
+  /* The pinned statement userdata moves to the coroutine's stack as the
+   * first return value. */
+  lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->ud_ref);
+  lunet_valref_release(L, ctx->ud_ref);
+
+  if (ctx->err[0] != '\0') {
+    prepare_discard(s);
+    lua_pop(L, 1);
+    lua_pushnil(co);
+    lua_pushstring(co, ctx->err);
+  } else {
+    lua_xmove(L, co, 1);
+    lua_pushnil(co);
+  }
+  int rc = lunet_co_resume(co, 2);
+  if (rc != 0 && rc != LUA_YIELD) {
+    const char* err = lua_tostring(co, -1);
+    if (err) fprintf(stderr, "lua_resume error in db.prepare: %s\n", err);
+    lua_pop(co, 1);
+  }
+  lunet_free_nonnull(ctx->sql);
+  lunet_free_nonnull(ctx);
+}
+
+int lunet_db_prepare(lua_State* L) {
+  if (lunet_ensure_coroutine(L, "db.prepare")) {
+    return lua_error(L);
+  }
+  if (lua_gettop(L) < 2 || lua_type(L, 2) != LUA_TSTRING ||
+      lua_strlen(L, 2) == 0) {
+    lua_pushstring(L, "db.prepare requires a non-empty SQL string");
+    return lua_error(L);
+  }
+
+  /* Statement-to-connection affinity: one statement lives on exactly one
+   * pool member, so prepare is only defined for the default pool. */
+  lunet_pg_pool_t* pool = (lunet_pg_pool_t*)luaL_testudata(L, 1, LUNET_PG_POOL_MT);
+  if (pool && pool->n > 1) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.prepare requires pool_size = 1 (a statement is bound to one connection)");
+    return 2;
+  }
+
+  lunet_pg_conn_t* wrapper = pick_statement_target(L, 1);
+  if (!wrapper) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.prepare requires a valid connection");
+    return 2;
+  }
+  if (wrapper->closed || !wrapper->conn) {
+    lua_pushnil(L);
+    lua_pushstring(L, "connection is closed");
+    return 2;
+  }
+  const char* sql = lua_tostring(L, 2);
+
+  register_stmt_metatable(L);
+
+  lunet_pg_stmt_t* s =
+      (lunet_pg_stmt_t*)lua_newuserdata(L, sizeof(lunet_pg_stmt_t));
+  memset(s, 0, sizeof(*s));
+  s->member = wrapper;
+  pg_stmt_name(s->name, sizeof(s->name));
+  luaL_getmetatable(L, LUNET_PG_STMT_MT);
+  lua_setmetatable(L, -2);
+  conn_track_stmt(wrapper, s);
+
+  db_prepare_ctx_t* ctx = lunet_alloc(sizeof(db_prepare_ctx_t));
+  if (!ctx) {
+    s->closed = 1;
+    conn_untrack_stmt(wrapper, s);
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->waiter_L = L;
+  ctx->req.data = ctx;
+  ctx->target = s;
+  ctx->sql = lunet_strdup_local(sql);
+  if (!ctx->sql) {
+    s->closed = 1;
+    conn_untrack_stmt(wrapper, s);
+    lunet_free_nonnull(ctx);
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  lua_pushvalue(L, 3); /* the statement userdata */
+  lunet_valref_create_raw(L, ctx->ud_ref);
+
+  lunet_coref_create(L, ctx->co_ref);
+
+  int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_prepare_work_cb,
+                          db_prepare_after_cb);
+  if (ret < 0) {
+    lunet_coref_release(L, ctx->co_ref);
+    lunet_valref_release(L, ctx->ud_ref);
+    s->closed = 1;
+    conn_untrack_stmt(wrapper, s);
+    lunet_free_nonnull(ctx->sql);
+    lunet_free_nonnull(ctx);
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    lua_pushfstring(L, "db.prepare: uv_queue_work failed: %s", uv_strerror(ret));
     return 2;
   }
 

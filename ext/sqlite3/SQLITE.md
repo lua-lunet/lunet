@@ -37,6 +37,7 @@ values are never concatenated into SQL. There is deliberately no `db.escape`.
 | `query(conn, sql, ...)` | returns array of row tables |
 | `exec(conn, sql, ...)` | returns `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | same behaviour as the above |
+| `prepare(conn, sql)` | reusable prepared statement; `stmt:query` / `stmt:exec` / `stmt:close` — see [Prepared statements](#prepared-statements) |
 
 The split of responsibilities: the binary (`lunet.sqlite3core`) owns the
 async I/O — one worker-hop open returning `(rw, ro, err)`, statements
@@ -224,6 +225,48 @@ will scatter `BEGIN`, the work, and `COMMIT` across handles and commit nothing.
   connection opened `SQLITE_OPEN_READONLY` on `":memory:"` is a new, empty,
   private database — not a reader on the writer's data. Pass a file path
   whenever you intend to use `ro`; on `:memory:` simply use `rw` alone.
+
+## Prepared statements
+
+`prepare` keeps the vendor statement alive instead of parsing + planning
+per call: the SQL is compiled once (`sqlite3_prepare_v2`) and each call
+resets, rebinds and steps it.
+
+```lua
+local stmt, err = db.prepare(rw, "SELECT name FROM users WHERE age > ?")
+if not stmt then error(err) end
+
+local rows, qerr = stmt:query(30)   -- same binding semantics as query
+local res, eerr  = stmt:exec(...)   -- for INSERT/UPDATE/DELETE
+stmt:close()                        -- finalize now, or let GC do it
+```
+
+- `stmt:query(...)` / `stmt:exec(...)` bind the varargs per call, exactly
+  like `query` / `exec`; each call runs `sqlite3_reset` +
+  `sqlite3_clear_bindings` before binding, and leaves the statement ready
+  for the next call.
+- **One statement is bound to one connection.** A statement prepared on
+  the read-write handle rides the worker pool like every other statement
+  on it; one prepared on the read-only handle runs inline, matching that
+  handle's semantics.
+- **Write SQL on the read-only handle is rejected loudly at prepare time**
+  — earlier than the step-time failure of a mis-routed plain exec.
+- **Busy discipline:** one statement, one in-flight call. A second
+  concurrent call on the same statement fails with `statement is busy`
+  instead of corrupting the mid-step state.
+- `stmt:close()` finalizes the vendor statement; after it, use fails
+  loudly. A statement dropped without `close` is finalized by the
+  finalizer.
+- Closing a connection with statements still open is safe: every open
+  statement is finalized with it, and each surviving statement userdata
+  fails loudly afterwards.
+- There is no `pool_size` question on this driver: it has no pool.
+
+Is it worth it? For a trivial statement the per-call prepare is
+unmeasurable; for a complex or high-rate one it can matter. Read the
+SQLite documentation and decide for your own workload — there is no
+magic. See `examples/10_db_prepared.lua` for the shape of the API in a
+small application.
 
 ## How the pinning was verified
 

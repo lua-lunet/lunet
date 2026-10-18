@@ -22,6 +22,7 @@
 
 #define LUNET_MYSQL_CONN_MT "lunet.mysql.conn"
 #define LUNET_MYSQL_POOL_MT "lunet.mysql.pool"
+#define LUNET_MYSQL_STMT_MT "lunet.mysql.stmt"
 #define LUNET_MYSQL_POOL_MAX 64
 
 static int g_mysql_library_initialized = 0;
@@ -58,12 +59,49 @@ static char* lunet_strdup_local(const char* s) {
   return out;
 }
 
+typedef struct lunet_mysql_stmt_s lunet_mysql_stmt_t;
+
 typedef struct {
   MYSQL* conn;
   uv_mutex_t mutex;
   int closed;
   int library_ref_held;
+  /* Open prepared statements bound to this connection (intrusive list,
+   * loop-thread-only links). Closing the connection marks every still-open
+   * statement closed and severs it: mysql_close() invalidates the vendor
+   * statements with the connection, so a surviving statement userdata must
+   * never dereference its MYSQL_STMT* again. */
+  lunet_mysql_stmt_t* stmts;
 } lunet_mysql_conn_t;
+
+/* A prepared statement: one connection, one vendor statement. The busy
+ * flag guards re-entrant use (a second call while one is in flight fails
+ * loudly instead of surfacing as CR_COMMANDS_OUT_OF_SYNC). */
+struct lunet_mysql_stmt_s {
+  MYSQL_STMT* stmt;
+  lunet_mysql_conn_t* member;
+  lunet_mysql_stmt_t* next;
+  lunet_mysql_stmt_t* prev;
+  int busy;
+  int closed;
+};
+
+/* Link a statement into the connection's open-statement list (loop thread). */
+static void conn_track_stmt(lunet_mysql_conn_t* conn, lunet_mysql_stmt_t* s) {
+  s->prev = NULL;
+  s->next = conn->stmts;
+  if (conn->stmts) conn->stmts->prev = s;
+  conn->stmts = s;
+}
+
+/* Unlink a statement from the connection's open-statement list (loop thread). */
+static void conn_untrack_stmt(lunet_mysql_conn_t* conn, lunet_mysql_stmt_t* s) {
+  if (s->prev) s->prev->next = s->next;
+  else if (conn->stmts == s) conn->stmts = s->next;
+  if (s->next) s->next->prev = s->prev;
+  s->next = NULL;
+  s->prev = NULL;
+}
 
 /* The handle open() returns: a pool of pool_size connections, one statement
  * -> one member, picked round-robin at dispatch. Default pool_size is 1 —
@@ -80,6 +118,21 @@ typedef struct {
 static void lunet_mysql_conn_close(lunet_mysql_conn_t* wrapper) {
   if (!wrapper || wrapper->closed) return;
   wrapper->closed = 1;
+  /* Sever every still-open prepared statement first: mysql_close()
+   * invalidates the vendor statements with the connection, so each one is
+   * marked closed and its MYSQL_STMT* nulled — later use or GC is then a
+   * loud error or a safe no-op, never a dereference of freed memory. */
+  lunet_mysql_stmt_t* s = wrapper->stmts;
+  while (s) {
+    lunet_mysql_stmt_t* next = s->next;
+    s->stmt = NULL;
+    s->closed = 1;
+    s->member = NULL;
+    s->next = NULL;
+    s->prev = NULL;
+    s = next;
+  }
+  wrapper->stmts = NULL;
   if (wrapper->conn) {
     mysql_close(wrapper->conn);
     wrapper->conn = NULL;
@@ -222,8 +275,8 @@ static void db_open_after_cb(uv_work_t* req, int status) {
       pool->closed = 0;
       for (int i = 0; i < pool->n; i++) {
         lunet_mysql_conn_t* member = lunet_alloc(sizeof(lunet_mysql_conn_t));
+        memset(member, 0, sizeof(*member));
         member->conn = ctx->conns[i];
-        member->closed = 0;
         member->library_ref_held = 1;
         uv_mutex_init(&member->mutex);
         pool->members[i] = member;
@@ -597,6 +650,13 @@ typedef struct {
   lunet_mysql_conn_t* wrapper;
   char* query;
 
+  /* When set, run against this already-prepared vendor statement (reset +
+   * rebind + execute, no init/prepare/close per call). The valref pins the
+   * statement userdata so it cannot be collected while the worker op is in
+   * flight. */
+  lunet_mysql_stmt_t* pstmt;
+  int stmt_valref;
+
   param_t* params;
   int nparams;
 
@@ -621,73 +681,62 @@ static void db_query_work_cb(uv_work_t* req) {
     return;
   }
 
-  // Use prepared statement
-  MYSQL_STMT* stmt = mysql_stmt_init(ctx->wrapper->conn);
-  if (!stmt) {
-    snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_init failed: %s", mysql_error(ctx->wrapper->conn));
-    mysql_thread_end();
-    uv_mutex_unlock(&ctx->wrapper->mutex);
-    return;
-  }
+  /* mysql_stmt_close() belongs to the per-call-prepare path only: a
+   * statement handle keeps its vendor statement alive across calls. */
+  int owned = (ctx->pstmt == NULL);
+  MYSQL_STMT* stmt;
 
-  if (mysql_stmt_prepare(stmt, ctx->query, strlen(ctx->query))) {
-    snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_prepare failed: %s", mysql_stmt_error(stmt));
-    mysql_stmt_close(stmt);
-    mysql_thread_end();
-    uv_mutex_unlock(&ctx->wrapper->mutex);
-    return;
+  if (ctx->pstmt) {
+    stmt = ctx->pstmt->stmt;
+    if (!stmt) {
+      snprintf(ctx->err, sizeof(ctx->err), "statement is closed");
+      mysql_thread_end();
+      uv_mutex_unlock(&ctx->wrapper->mutex);
+      return;
+    }
+    mysql_stmt_free_result(stmt);
+    mysql_stmt_reset(stmt);
+  } else {
+    // Use prepared statement
+    stmt = mysql_stmt_init(ctx->wrapper->conn);
+    if (!stmt) {
+      snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_init failed: %s", mysql_error(ctx->wrapper->conn));
+      mysql_thread_end();
+      uv_mutex_unlock(&ctx->wrapper->mutex);
+      return;
+    }
+
+    if (mysql_stmt_prepare(stmt, ctx->query, strlen(ctx->query))) {
+      snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_prepare failed: %s", mysql_stmt_error(stmt));
+      if (owned) mysql_stmt_close(stmt);
+      mysql_thread_end();
+      uv_mutex_unlock(&ctx->wrapper->mutex);
+      return;
+    }
   }
 
   unsigned long param_count = mysql_stmt_param_count(stmt);
   if (param_count != (unsigned long)ctx->nparams) {
     snprintf(ctx->err, sizeof(ctx->err), "parameter count mismatch: expected %lu, got %d", param_count, ctx->nparams);
-    mysql_stmt_close(stmt);
+    if (owned) mysql_stmt_close(stmt);
     mysql_thread_end();
     uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
 
-  if (ctx->nparams > 0) {
-    MYSQL_BIND* bind = lunet_alloc(sizeof(MYSQL_BIND) * ctx->nparams);
-    if (!bind) {
-      snprintf(ctx->err, sizeof(ctx->err), "out of memory");
-      mysql_stmt_close(stmt);
-      mysql_thread_end();
-      uv_mutex_unlock(&ctx->wrapper->mutex);
-      return;
-    }
-    
-    if (bind_params(stmt, bind, ctx->params, ctx->nparams, ctx->err, sizeof(ctx->err))) {
-       lunet_free_nonnull(bind);
-       mysql_stmt_close(stmt);
-       mysql_thread_end();
-       uv_mutex_unlock(&ctx->wrapper->mutex);
-       return;
-    }
-    lunet_free_nonnull(bind); // bind_params calls mysql_stmt_bind_param which copies the structures? No, it uses the array. 
-    // Wait, mysql_stmt_bind_param documentation says "The array of MYSQL_BIND structures must remain valid until the statement is executed."
-    // But we are about to execute it.
-    // However, if we free 'bind' here, and then call mysql_stmt_execute, is it safe?
-    // mysql_stmt_bind_param documentation says: "The bind argument is an array of MYSQL_BIND structures. The library uses the information in this array to bind the buffers... "
-    // It usually doesn't copy the array, it uses the pointer. 
-    // BUT we are in the same function scope.
-    // Wait, I should free it AFTER execution.
-  }
-  
-  // Re-allocating bind for clarity and safety
   MYSQL_BIND* bind = NULL;
   if (ctx->nparams > 0) {
       bind = lunet_alloc(sizeof(MYSQL_BIND) * ctx->nparams);
       if (!bind) {
           snprintf(ctx->err, sizeof(ctx->err), "out of memory");
-          mysql_stmt_close(stmt);
+          if (owned) mysql_stmt_close(stmt);
           mysql_thread_end();
           uv_mutex_unlock(&ctx->wrapper->mutex);
           return;
       }
       if (bind_params(stmt, bind, ctx->params, ctx->nparams, ctx->err, sizeof(ctx->err))) {
           lunet_free_nonnull(bind);
-          mysql_stmt_close(stmt);
+          if (owned) mysql_stmt_close(stmt);
           mysql_thread_end();
           uv_mutex_unlock(&ctx->wrapper->mutex);
           return;
@@ -697,18 +746,18 @@ static void db_query_work_cb(uv_work_t* req) {
   if (mysql_stmt_execute(stmt)) {
     snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_execute failed: %s", mysql_stmt_error(stmt));
     if (bind) lunet_free_nonnull(bind);
-    mysql_stmt_close(stmt);
+    if (owned) mysql_stmt_close(stmt);
     mysql_thread_end();
     uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
-  
-  if (bind) lunet_free_nonnull(bind); // Now we can free the bind array
+
+  if (bind) lunet_free_nonnull(bind);
 
   // Store result to get metadata about fields and buffer everything
   if (mysql_stmt_store_result(stmt)) {
       snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_store_result failed: %s", mysql_stmt_error(stmt));
-      mysql_stmt_close(stmt);
+      if (owned) mysql_stmt_close(stmt);
       mysql_thread_end();
       uv_mutex_unlock(&ctx->wrapper->mutex);
       return;
@@ -724,7 +773,7 @@ static void db_query_work_cb(uv_work_t* req) {
       if (mysql_stmt_field_count(stmt) > 0) {
           snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_result_metadata failed: %s", mysql_stmt_error(stmt));
       }
-      mysql_stmt_close(stmt);
+      if (owned) mysql_stmt_close(stmt);
       mysql_thread_end();
       uv_mutex_unlock(&ctx->wrapper->mutex);
       return;
@@ -748,7 +797,7 @@ static void db_query_work_cb(uv_work_t* req) {
       if (is_null) lunet_free_nonnull(is_null);
       if (length) lunet_free_nonnull(length);
       mysql_free_result(metadata);
-      mysql_stmt_close(stmt);
+      if (owned) mysql_stmt_close(stmt);
       mysql_thread_end();
       uv_mutex_unlock(&ctx->wrapper->mutex);
       return;
@@ -787,7 +836,7 @@ static void db_query_work_cb(uv_work_t* req) {
           lunet_free_nonnull(is_null);
           lunet_free_nonnull(length);
           mysql_free_result(metadata);
-          mysql_stmt_close(stmt);
+          if (owned) mysql_stmt_close(stmt);
           mysql_thread_end();
           uv_mutex_unlock(&ctx->wrapper->mutex);
           return;
@@ -806,7 +855,7 @@ static void db_query_work_cb(uv_work_t* req) {
       lunet_free_nonnull(is_null);
       lunet_free_nonnull(length);
       mysql_free_result(metadata);
-      mysql_stmt_close(stmt);
+      if (owned) mysql_stmt_close(stmt);
       mysql_thread_end();
       uv_mutex_unlock(&ctx->wrapper->mutex);
       return;
@@ -858,7 +907,7 @@ static void db_query_work_cb(uv_work_t* req) {
   lunet_free_nonnull(length);
   
   mysql_free_result(metadata);
-  mysql_stmt_close(stmt);
+  if (owned) mysql_stmt_close(stmt);
   mysql_thread_end();
   uv_mutex_unlock(&ctx->wrapper->mutex);
 }
@@ -872,10 +921,15 @@ static void db_query_after_cb(uv_work_t* req, int status) {
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.query\n");
+    if (ctx->pstmt) ctx->pstmt->busy = 0;
+    if (ctx->stmt_valref) lunet_valref_release(L, ctx->stmt_valref);
     goto cleanup;
   }
   lua_State* co = lua_tothread(L, -1);
   lua_pop(L, 1);
+
+  if (ctx->pstmt) ctx->pstmt->busy = 0;
+  if (ctx->stmt_valref) lunet_valref_release(L, ctx->stmt_valref);
 
   if (ctx->err[0] != '\0') {
     lua_pushnil(co);
@@ -1027,7 +1081,10 @@ typedef struct {
 
   lunet_mysql_conn_t* wrapper;
   char* query;
-  
+
+  lunet_mysql_stmt_t* pstmt;
+  int stmt_valref;
+
   param_t* params;
   int nparams;
 
@@ -1049,46 +1106,61 @@ static void db_exec_work_cb(uv_work_t* req) {
     return;
   }
 
-  // Use prepared statement
-  MYSQL_STMT* stmt = mysql_stmt_init(ctx->wrapper->conn);
-  if (!stmt) {
-    snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_init failed: %s", mysql_error(ctx->wrapper->conn));
-    mysql_thread_end();
-    uv_mutex_unlock(&ctx->wrapper->mutex);
-    return;
-  }
+  int owned = (ctx->pstmt == NULL);
+  MYSQL_STMT* stmt;
 
-  if (mysql_stmt_prepare(stmt, ctx->query, strlen(ctx->query))) {
-    snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_prepare failed: %s", mysql_stmt_error(stmt));
-    mysql_stmt_close(stmt);
-    mysql_thread_end();
-    uv_mutex_unlock(&ctx->wrapper->mutex);
-    return;
+  if (ctx->pstmt) {
+    stmt = ctx->pstmt->stmt;
+    if (!stmt) {
+      snprintf(ctx->err, sizeof(ctx->err), "statement is closed");
+      mysql_thread_end();
+      uv_mutex_unlock(&ctx->wrapper->mutex);
+      return;
+    }
+    mysql_stmt_free_result(stmt);
+    mysql_stmt_reset(stmt);
+  } else {
+    // Use prepared statement
+    stmt = mysql_stmt_init(ctx->wrapper->conn);
+    if (!stmt) {
+      snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_init failed: %s", mysql_error(ctx->wrapper->conn));
+      mysql_thread_end();
+      uv_mutex_unlock(&ctx->wrapper->mutex);
+      return;
+    }
+
+    if (mysql_stmt_prepare(stmt, ctx->query, strlen(ctx->query))) {
+      snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_prepare failed: %s", mysql_stmt_error(stmt));
+      mysql_stmt_close(stmt);
+      mysql_thread_end();
+      uv_mutex_unlock(&ctx->wrapper->mutex);
+      return;
+    }
   }
 
   unsigned long param_count = mysql_stmt_param_count(stmt);
   if (param_count != (unsigned long)ctx->nparams) {
     snprintf(ctx->err, sizeof(ctx->err), "parameter count mismatch: expected %lu, got %d", param_count, ctx->nparams);
-    mysql_stmt_close(stmt);
+    if (owned) mysql_stmt_close(stmt);
     mysql_thread_end();
     uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
-  
+
   MYSQL_BIND* bind = NULL;
   if (ctx->nparams > 0) {
       bind = lunet_alloc(sizeof(MYSQL_BIND) * ctx->nparams);
       if (!bind) {
           snprintf(ctx->err, sizeof(ctx->err), "out of memory");
-          mysql_stmt_close(stmt);
+          if (owned) mysql_stmt_close(stmt);
           mysql_thread_end();
           uv_mutex_unlock(&ctx->wrapper->mutex);
           return;
       }
-      
+
       if (bind_params(stmt, bind, ctx->params, ctx->nparams, ctx->err, sizeof(ctx->err))) {
           lunet_free_nonnull(bind);
-          mysql_stmt_close(stmt);
+          if (owned) mysql_stmt_close(stmt);
           mysql_thread_end();
           uv_mutex_unlock(&ctx->wrapper->mutex);
           return;
@@ -1098,18 +1170,18 @@ static void db_exec_work_cb(uv_work_t* req) {
   if (mysql_stmt_execute(stmt)) {
     snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_execute failed: %s", mysql_stmt_error(stmt));
     if (bind) lunet_free_nonnull(bind);
-    mysql_stmt_close(stmt);
+    if (owned) mysql_stmt_close(stmt);
     mysql_thread_end();
     uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
-  
+
   if (bind) lunet_free_nonnull(bind);
 
   ctx->affected_rows = mysql_stmt_affected_rows(stmt);
   ctx->insert_id = mysql_stmt_insert_id(stmt);
-  
-  mysql_stmt_close(stmt);
+
+  if (owned) mysql_stmt_close(stmt);
   mysql_thread_end();
   uv_mutex_unlock(&ctx->wrapper->mutex);
 }
@@ -1123,6 +1195,8 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.exec\n");
+    if (ctx->pstmt) ctx->pstmt->busy = 0;
+    if (ctx->stmt_valref) lunet_valref_release(L, ctx->stmt_valref);
     lunet_free_nonnull(ctx->query);
     free_params(ctx->params, ctx->nparams);
     lunet_free_nonnull(ctx);
@@ -1130,6 +1204,9 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
   }
   lua_State* co = lua_tothread(L, -1);
   lua_pop(L, 1);
+
+  if (ctx->pstmt) ctx->pstmt->busy = 0;
+  if (ctx->stmt_valref) lunet_valref_release(L, ctx->stmt_valref);
 
   if (ctx->err[0] != '\0') {
     lua_pushnil(co);
@@ -1375,6 +1452,400 @@ int lunet_db_exec_params(lua_State* L) {
     lunet_free_nonnull(ctx);
     lua_pushnil(L);
     lua_pushstring(L, uv_strerror(ret));
+    return 2;
+  }
+
+  return lua_yield(L, 0);
+}
+
+/* ==========================================================================
+ * Prepared statements
+ *
+ * db.prepare(handle, sql) hands back a reusable statement handle: the
+ * vendor statement is created once and kept, each stmt:query / stmt:exec
+ * call resets + rebinds + executes it, and stmt:close() releases it. One
+ * statement is bound to one pool member — prepare on a pooled handle
+ * therefore requires pool_size = 1. A second call while one is in flight
+ * fails loudly ("statement is busy") instead of surfacing as
+ * CR_COMMANDS_OUT_OF_SYNC.
+ * ========================================================================== */
+
+static int stmt_gc(lua_State* L) {
+  lunet_mysql_stmt_t* s = (lunet_mysql_stmt_t*)luaL_checkudata(L, 1, LUNET_MYSQL_STMT_MT);
+  if (s->closed || !s->member) return 0;
+  /* The busy flag can only be set while a valref pins this userdata, so
+   * GC can never observe it. */
+  uv_mutex_lock(&s->member->mutex);
+  if (!s->closed && s->stmt) {
+    mysql_stmt_close(s->stmt);
+    s->stmt = NULL;
+    s->closed = 1;
+    conn_untrack_stmt(s->member, s);
+  }
+  uv_mutex_unlock(&s->member->mutex);
+  return 0;
+}
+
+static int stmt_close(lua_State* L) {
+  if (lunet_ensure_coroutine(L, "stmt:close")) {
+    return lua_error(L);
+  }
+  lunet_mysql_stmt_t* s = (lunet_mysql_stmt_t*)luaL_testudata(L, 1, LUNET_MYSQL_STMT_MT);
+  if (!s) {
+    lua_pushstring(L, "stmt:close requires a prepared statement");
+    return 1;
+  }
+  if (s->closed || !s->member) {
+    lua_pushnil(L);
+    return 1;
+  }
+  if (s->busy) {
+    lua_pushstring(L, "statement is busy");
+    return 1;
+  }
+  uv_mutex_lock(&s->member->mutex);
+  if (!s->closed && s->stmt) {
+    mysql_stmt_close(s->stmt);
+    s->stmt = NULL;
+    s->closed = 1;
+    conn_untrack_stmt(s->member, s);
+  } else {
+    s->closed = 1;
+  }
+  uv_mutex_unlock(&s->member->mutex);
+  lua_pushnil(L);
+  return 1;
+}
+
+/* Shared body of stmt:query / stmt:exec: validate the handle, bind the
+ * varargs (same binding semantics as query_params/exec_params), pin the
+ * userdata, and queue the worker op on the statement's own connection. */
+static int stmt_dispatch(lua_State* L, int is_exec) {
+  lunet_mysql_stmt_t* s = (lunet_mysql_stmt_t*)luaL_testudata(L, 1, LUNET_MYSQL_STMT_MT);
+  if (!s) {
+    lua_pushnil(L);
+    lua_pushstring(L, "stmt requires a prepared statement");
+    return 2;
+  }
+  if (s->closed || !s->member) {
+    lua_pushnil(L);
+    lua_pushstring(L, "statement is closed");
+    return 2;
+  }
+  if (s->busy) {
+    lua_pushnil(L);
+    lua_pushstring(L, "statement is busy");
+    return 2;
+  }
+  if (s->member->closed) {
+    lua_pushnil(L);
+    lua_pushstring(L, "connection is closed");
+    return 2;
+  }
+
+  /* Pin the statement userdata for the flight; the after callback releases
+   * the pin and clears the busy flag. */
+  lua_pushvalue(L, 1);
+  int valref;
+  lunet_valref_create_raw(L, valref);
+  s->busy = 1;
+
+  if (is_exec) {
+    db_exec_ctx_t* ctx = lunet_alloc(sizeof(db_exec_ctx_t));
+    if (!ctx) {
+      s->busy = 0;
+      lunet_valref_release(L, valref);
+      lua_pushstring(L, "out of memory");
+      return lua_error(L);
+    }
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->waiter_L = L;
+    ctx->req.data = ctx;
+    ctx->wrapper = s->member;
+    ctx->pstmt = s;
+    ctx->stmt_valref = valref;
+    ctx->params = collect_params(L, 2, &ctx->nparams);
+    if (ctx->nparams < 0) {
+      s->busy = 0;
+      lunet_valref_release(L, valref);
+      lunet_free_nonnull(ctx);
+      lua_pushnil(L);
+      lua_pushstring(L, "out of memory");
+      return 2;
+    }
+
+    lunet_coref_create(L, ctx->co_ref);
+    int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_exec_work_cb, db_exec_after_cb);
+    if (ret < 0) {
+      lunet_coref_release(L, ctx->co_ref);
+      s->busy = 0;
+      lunet_valref_release(L, valref);
+      lunet_free_nonnull(ctx->query);
+      free_params(ctx->params, ctx->nparams);
+      lunet_free_nonnull(ctx);
+      lua_pushnil(L);
+      lua_pushstring(L, uv_strerror(ret));
+      return 2;
+    }
+    return lua_yield(L, 0);
+  }
+
+  db_query_ctx_t* ctx = lunet_alloc(sizeof(db_query_ctx_t));
+  if (!ctx) {
+    s->busy = 0;
+    lunet_valref_release(L, valref);
+    lua_pushstring(L, "out of memory");
+    return lua_error(L);
+  }
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->waiter_L = L;
+  ctx->req.data = ctx;
+  ctx->wrapper = s->member;
+  ctx->pstmt = s;
+  ctx->stmt_valref = valref;
+  ctx->params = collect_params(L, 2, &ctx->nparams);
+  if (ctx->nparams < 0) {
+    s->busy = 0;
+    lunet_valref_release(L, valref);
+    lunet_free_nonnull(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  lunet_coref_create(L, ctx->co_ref);
+  int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_query_work_cb, db_query_after_cb);
+  if (ret < 0) {
+    lunet_coref_release(L, ctx->co_ref);
+    s->busy = 0;
+    lunet_valref_release(L, valref);
+    lunet_free_nonnull(ctx->query);
+    free_params(ctx->params, ctx->nparams);
+    lunet_free_nonnull(ctx);
+    lua_pushnil(L);
+    lua_pushstring(L, uv_strerror(ret));
+    return 2;
+  }
+  return lua_yield(L, 0);
+}
+
+static int stmt_query(lua_State* L) {
+  if (lunet_ensure_coroutine(L, "stmt:query")) {
+    return lua_error(L);
+  }
+  return stmt_dispatch(L, 0);
+}
+
+static int stmt_exec(lua_State* L) {
+  if (lunet_ensure_coroutine(L, "stmt:exec")) {
+    return lua_error(L);
+  }
+  return stmt_dispatch(L, 1);
+}
+
+static void register_stmt_metatable(lua_State* L) {
+  if (luaL_newmetatable(L, LUNET_MYSQL_STMT_MT)) {
+    lua_newtable(L);
+    lua_pushcfunction(L, stmt_query);
+    lua_setfield(L, -2, "query");
+    lua_pushcfunction(L, stmt_exec);
+    lua_setfield(L, -2, "exec");
+    lua_pushcfunction(L, stmt_close);
+    lua_setfield(L, -2, "close");
+    lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, stmt_gc);
+    lua_setfield(L, -2, "__gc");
+  }
+  lua_pop(L, 1);
+}
+
+typedef struct {
+  uv_work_t req;
+  lua_State* waiter_L;
+  int co_ref;
+  int ud_ref; /* pins the statement userdata across the worker hop */
+  lunet_mysql_stmt_t* target;
+  char* sql;
+
+  char err[256];
+} db_prepare_ctx_t;
+
+static void db_prepare_work_cb(uv_work_t* req) {
+  db_prepare_ctx_t* ctx = (db_prepare_ctx_t*)req->data;
+  lunet_mysql_stmt_t* s = ctx->target;
+
+  uv_mutex_lock(&s->member->mutex);
+  mysql_thread_init();
+  if (s->member->closed || !s->member->conn) {
+    snprintf(ctx->err, sizeof(ctx->err), "connection is closed");
+    mysql_thread_end();
+    uv_mutex_unlock(&s->member->mutex);
+    return;
+  }
+  MYSQL_STMT* stmt = mysql_stmt_init(s->member->conn);
+  if (!stmt) {
+    snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_init failed: %s",
+             mysql_error(s->member->conn));
+    mysql_thread_end();
+    uv_mutex_unlock(&s->member->mutex);
+    return;
+  }
+  if (mysql_stmt_prepare(stmt, ctx->sql, strlen(ctx->sql))) {
+    snprintf(ctx->err, sizeof(ctx->err), "mysql_stmt_prepare failed: %s",
+             mysql_stmt_error(stmt));
+    mysql_stmt_close(stmt);
+    mysql_thread_end();
+    uv_mutex_unlock(&s->member->mutex);
+    return;
+  }
+  s->stmt = stmt;
+  mysql_thread_end();
+  uv_mutex_unlock(&s->member->mutex);
+}
+
+/* Mark a not-yet-usable statement closed and take it off the connection's
+ * open list (loop thread; lock held by the caller where required). */
+static void prepare_discard(lunet_mysql_stmt_t* s) {
+  s->stmt = NULL;
+  s->closed = 1;
+  if (s->member) conn_untrack_stmt(s->member, s);
+}
+
+static void db_prepare_after_cb(uv_work_t* req, int status) {
+  db_prepare_ctx_t* ctx = (db_prepare_ctx_t*)req->data;
+  lua_State* L = ctx->waiter_L;
+  lunet_mysql_stmt_t* s = ctx->target;
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
+  if (!lua_isthread(L, -1)) {
+    lua_pop(L, 1);
+    fprintf(stderr, "invalid coroutine in db.prepare\n");
+    lunet_valref_release(L, ctx->ud_ref);
+    if (s->stmt && s->member) {
+      uv_mutex_lock(&s->member->mutex);
+      mysql_stmt_close(s->stmt);
+      prepare_discard(s);
+      uv_mutex_unlock(&s->member->mutex);
+    } else {
+      prepare_discard(s);
+    }
+    lunet_free_nonnull(ctx->sql);
+    lunet_free_nonnull(ctx);
+    return;
+  }
+  lua_State* co = lua_tothread(L, -1);
+  lua_pop(L, 1);
+
+  /* The pinned statement userdata moves to the coroutine's stack as the
+   * first return value. */
+  lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->ud_ref);
+  lunet_valref_release(L, ctx->ud_ref);
+
+  if (ctx->err[0] != '\0') {
+    uv_mutex_lock(&s->member->mutex);
+    prepare_discard(s);
+    uv_mutex_unlock(&s->member->mutex);
+    lua_pop(L, 1);
+    lua_pushnil(co);
+    lua_pushstring(co, ctx->err);
+  } else {
+    lua_xmove(L, co, 1);
+    lua_pushnil(co);
+  }
+  int rc = lunet_co_resume(co, 2);
+  if (rc != 0 && rc != LUA_YIELD) {
+    const char* err = lua_tostring(co, -1);
+    if (err) fprintf(stderr, "lua_resume error in db.prepare: %s\n", err);
+    lua_pop(co, 1);
+  }
+  lunet_free_nonnull(ctx->sql);
+  lunet_free_nonnull(ctx);
+}
+
+int lunet_db_prepare(lua_State* L) {
+  if (lunet_ensure_coroutine(L, "db.prepare")) {
+    return lua_error(L);
+  }
+  if (lua_gettop(L) < 2 || lua_type(L, 2) != LUA_TSTRING ||
+      lua_strlen(L, 2) == 0) {
+    lua_pushstring(L, "db.prepare requires a non-empty SQL string");
+    return lua_error(L);
+  }
+
+  /* Statement-to-connection affinity: one statement lives on exactly one
+   * pool member, so prepare is only defined for the default pool. */
+  lunet_mysql_pool_t* pool = (lunet_mysql_pool_t*)luaL_testudata(L, 1, LUNET_MYSQL_POOL_MT);
+  if (pool && pool->n > 1) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.prepare requires pool_size = 1 (a statement is bound to one connection)");
+    return 2;
+  }
+
+  lunet_mysql_conn_t* wrapper = pick_statement_target(L, 1);
+  if (!wrapper) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.prepare requires a valid connection");
+    return 2;
+  }
+  if (wrapper->closed || !wrapper->conn) {
+    lua_pushnil(L);
+    lua_pushstring(L, "connection is closed");
+    return 2;
+  }
+  const char* sql = lua_tostring(L, 2);
+
+  register_stmt_metatable(L);
+
+  lunet_mysql_stmt_t* s =
+      (lunet_mysql_stmt_t*)lua_newuserdata(L, sizeof(lunet_mysql_stmt_t));
+  memset(s, 0, sizeof(*s));
+  s->member = wrapper;
+  luaL_getmetatable(L, LUNET_MYSQL_STMT_MT);
+  lua_setmetatable(L, -2);
+  conn_track_stmt(wrapper, s);
+
+  db_prepare_ctx_t* ctx = lunet_alloc(sizeof(db_prepare_ctx_t));
+  if (!ctx) {
+    s->closed = 1;
+    conn_untrack_stmt(wrapper, s);
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->waiter_L = L;
+  ctx->req.data = ctx;
+  ctx->target = s;
+  ctx->sql = lunet_strdup_local(sql);
+  if (!ctx->sql) {
+    s->closed = 1;
+    conn_untrack_stmt(wrapper, s);
+    lunet_free_nonnull(ctx);
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+
+  lua_pushvalue(L, 3); /* the statement userdata */
+  lunet_valref_create_raw(L, ctx->ud_ref);
+
+  lunet_coref_create(L, ctx->co_ref);
+
+  int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_prepare_work_cb,
+                          db_prepare_after_cb);
+  if (ret < 0) {
+    lunet_coref_release(L, ctx->co_ref);
+    lunet_valref_release(L, ctx->ud_ref);
+    s->closed = 1;
+    conn_untrack_stmt(wrapper, s);
+    lunet_free_nonnull(ctx->sql);
+    lunet_free_nonnull(ctx);
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    lua_pushfstring(L, "db.prepare: uv_queue_work failed: %s", uv_strerror(ret));
     return 2;
   }
 

@@ -1036,6 +1036,9 @@ task("smoke")
         -- The open contract: create=WAL|NORMAL, READWRITE-only default,
         -- :memory: unit-test swap, passthrough settings.
         os.execv(runner, {"test/smoke_sqlite3_open.lua"})
+        -- Prepared statements: prepare once, reset + rebind per call,
+        -- ro write rejection at prepare, busy discipline, close order.
+        os.execv(runner, {"test/smoke_sqlite3_prepare.lua"})
 
         local mysql_modules = os.files("build/**/release/lunet/mysql.*")
         if #mysql_modules > 0 then

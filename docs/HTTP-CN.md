@@ -20,10 +20,17 @@ close）由调用方负责；JSON 辅助函数仅在被调用时才惰性地依�
 
 解析器刻意只支持一个小而明确的 HTTP/1.1 子集：
 
-- 每个连接一个 origin-form 请求，CRLF 换行的头字段
+- origin-form 请求，CRLF 换行的头字段；一个连接按顺序逐个服务请求，
+  直到连接关闭
 - 每个头字段至多一个值，可选的十进制 `Content-Length` 请求体
 - 拒绝 `Transfer-Encoding`（包括 chunked）
-- 响应总是声明 `Connection: close` —— 无流水线、无持久连接；写完响应后请关闭套接字
+- 连接默认持久（HTTP/1.1）：响应不携带 `Connection` 头。把 `persistent=false`
+  作为最后一个实参传给 `http.response`/`http.json_response`/`http.error_response`
+  （以及 `http.preflight_response`）即可声明 `Connection: close` 响应。
+- 请求声明 `Connection: close` 时会被尊重：用 `persistent=false` 构建其响应，
+  并在写出后结束连接循环
+- 流水线被排除：越过请求体末尾的字节会得到硬性 400
+  （`"Unexpected data after request body"`）。读完上一个响应后再发送下一个请求。
 - `MAX_HEADER_BYTES`（16 KiB）与 `MAX_BODY_BYTES`（1 MiB）保护解析器；
   超大请求头以 431 失败，超大请求体以 413 失败
 
@@ -40,14 +47,14 @@ local http = require("lunet.http")
 |------|------|------|
 | `http.parse_request(raw)` | `request, err, status` | 解析一个完整的原始请求（头 + 体）。请求体必须与 `Content-Length` 完全一致。 |
 | `http.read_request(read_chunk)` | `request, err, status` | 增量变体：反复调用 `read_chunk()` 直到请求完整；读取器返回字符串分块，EOF/失败时返回 nil 加可选错误信息。 |
-| `http.response(status, headers, body, cors?)` | `string` | 构建完整响应。帧格式由本函数负责：调用方的 `Content-Length`/`Connection` 头会被丢弃并替换（`Content-Length` 取自请求体，`connection` 恒为 `close`）。`Content-Type` 默认为 `application/json`。 |
-| `http.json_response(status, data, cors?)` | `string` | `response()`，数据经 JSON 编码。 |
-| `http.error_response(status, data, cors?)` | `string` | `json_response()`，数据包装为 `{"errors": data}`。 |
+| `http.response(status, headers, body, cors?, persistent?)` | `string` | 构建完整响应。帧格式由本函数负责：调用方的 `Content-Length`/`Connection` 头会被丢弃并替换（`Content-Length` 取自请求体）。连接默认持久 —— 按 HTTP/1.1 不带 `Connection` 头；`persistent=false` 则声明 `Connection: close`。`Content-Type` 默认为 `application/json`。 |
+| `http.json_response(status, data, cors?, persistent?)` | `string` | `response()`，数据经 JSON 编码。 |
+| `http.error_response(status, data, cors?, persistent?)` | `string` | `json_response()`，数据包装为 `{"errors": data}`。 |
 | `http.parse_query_string(query)` | `table` | 将 `a=1&b=2` 解码为表；值经过 URL 解码。 |
 | `http.url_decode(str)` | `string` | `%xx` 字节转义。 |
 | `http.cors_headers(cors)` | `table` | 根据配置（见下）生成 `Access-Control-*` 头集合。 |
 | `http.is_preflight(request)` | `boolean` | `OPTIONS` 请求且同时带有 `Origin` 与 `Access-Control-Request-Method` 时为真。 |
-| `http.preflight_response(cors)` | `string` | 携带所配置 CORS 头、空请求体的 200 —— 即预检短路响应。 |
+| `http.preflight_response(cors, persistent?)` | `string` | 携带所配置 CORS 头、空请求体的 200 —— 即预检短路响应。 |
 
 解析出的请求是一个全新的表：
 
@@ -62,29 +69,43 @@ request.query_string  -- "by=2"（缺省时为 ""）
 request.query_params  -- { by = "2" }（URL 解码后）
 ```
 
-典型的连接循环：
+典型的连接循环 —— 一个连接上按顺序服务多个请求，在客户端 EOF、帧格式错误
+或请求声明的 `Connection: close` 时结束：
 
 ```lua
 local function handle_connection(client)
-  local request, err, status = http.read_request(function()
-    local chunk, read_err = socket.read(client)
-    if not chunk then return nil, read_err end
-    return chunk
-  end)
-  if not request then
-    socket.write(client, http.error_response(status or 400, { err }))
-    socket.close(client)
-    return
+  while true do
+    local request, err, status = http.read_request(function()
+      local chunk, read_err = socket.read(client)
+      if not chunk then return nil, read_err end
+      return chunk
+    end)
+    if not request and not status then
+      -- 任何字节之前遇到 EOF：关闭或空闲的客户端拥有这次关闭。
+      socket.close(client)
+      return
+    end
+    if not request then
+      -- 帧格式错误会让字节流失去同步：声明 close，停止服务。
+      socket.write(client, http.error_response(status or 400, { err }, nil, false))
+      socket.close(client)
+      return
+    end
+    local persistent = (request.headers["connection"] or ""):lower() ~= "close"
+    if cors and http.is_preflight(request) then
+      socket.write(client, http.preflight_response(cors, persistent))
+    else
+      local ctx = http_context.new(request)
+      ctx.env_config = config
+      router.handle(ctx)
+      socket.write(client, http.response(ctx.status, ctx.res_headers,
+                                         ctx.response_body(), cors, persistent))
+    end
+    if not persistent then
+      socket.close(client)  -- 请求声明了 Connection: close
+      return
+    end
   end
-  if cors and http.is_preflight(request) then
-    socket.write(client, http.preflight_response(cors))
-  else
-    local ctx = http_context.new(request)
-    ctx.env_config = config
-    router.handle(ctx)
-    socket.write(client, http.response(ctx.status, ctx.res_headers, ctx.response_body(), cors))
-  end
-  socket.close(client)
 end
 ```
 
@@ -187,14 +208,16 @@ local cors = {
 
 配置中省略的键不会产生对应的头；同名键上调用方提供的头始终优先于 CORS 头。
 连接循环中的接线只有两处：短路预检（`http.is_preflight` +
-`http.preflight_response`），以及把配置作为最后一个实参传给
-`http.response`/`http.json_response`/`http.error_response` 处理其余请求。
+`http.preflight_response`），以及把配置作为第四个实参传给
+`http.response`/`http.json_response`/`http.error_response` 处理其余请求
+（可选的 `persistent` 标志放在最后）。
 
 ## 示例
 
 [`examples/08_http.lua`](../examples/08_http.lua) 将三件套接到作为刻意简化的
 kv 存储的 `lnt_shared` 计数器上 —— GET 读取计数器、POST 递增、PATCH 按 JSON
-增量调整 —— 并带有日志中间件、403 短路守卫和已启用的 CORS：
+增量调整 —— 并带有日志中间件、403 短路守卫、已启用的 CORS，以及一段 keep-alive
+演示（两个请求在一个连接上按顺序服务）：
 
 ```bash
 xmake build-release          # 同时把 ext/http 的 Lua 模块复制到 lunet-run 旁边

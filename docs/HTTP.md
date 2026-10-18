@@ -23,11 +23,19 @@ runnable end-to-end demo lives at [`examples/08_http.lua`](../examples/08_http.l
 
 The parser deliberately supports a small, explicit HTTP/1.1 subset:
 
-- one origin-form request per connection, CRLF header lines
+- origin-form requests, CRLF header lines; one connection serves requests
+  sequentially, one after another, until the connection closes
 - at most one value per header field, optional decimal `Content-Length` body
 - `Transfer-Encoding` (including chunked) is rejected
-- responses always declare `Connection: close` — no pipelining, no persistent
-  connections; close the socket after writing the response
+- connections are persistent by default (HTTP/1.1): responses carry no
+  `Connection` header. Pass `persistent=false` as the last argument of
+  `http.response`/`http.json_response`/`http.error_response` (and
+  `http.preflight_response`) for a `Connection: close` response.
+- a request declaring `Connection: close` is honoured: build its response
+  with `persistent=false` and end the connection loop after writing it
+- pipelining is excluded: bytes running past the end of a request body are
+  a hard 400 (`"Unexpected data after request body"`). Send the next request
+  only after reading the previous response.
 - `MAX_HEADER_BYTES` (16 KiB) and `MAX_BODY_BYTES` (1 MiB) guard the parser;
   oversize headers fail with 431, oversize bodies with 413
 
@@ -44,14 +52,14 @@ local http = require("lunet.http")
 |----------|---------|-------|
 | `http.parse_request(raw)` | `request, err, status` | Parses one complete raw request (head + body). The body must exactly match `Content-Length`. |
 | `http.read_request(read_chunk)` | `request, err, status` | Incremental variant: `read_chunk()` is called until the request is complete and must return a string chunk, or nil plus an optional error on EOF/failure. |
-| `http.response(status, headers, body, cors?)` | `string` | Builds the full response. Framing is owned here: caller `Content-Length`/`Connection` headers are dropped and replaced (`Content-Length` from the body, `connection: close` always). `Content-Type` defaults to `application/json`. |
-| `http.json_response(status, data, cors?)` | `string` | `response()` with the data JSON-encoded. |
-| `http.error_response(status, data, cors?)` | `string` | `json_response()` wrapping the data as `{"errors": data}`. |
+| `http.response(status, headers, body, cors?, persistent?)` | `string` | Builds the full response. Framing is owned here: caller `Content-Length`/`Connection` headers are dropped and replaced (`Content-Length` from the body). The connection is persistent by default — no `Connection` header, per HTTP/1.1; `persistent=false` declares `Connection: close`. `Content-Type` defaults to `application/json`. |
+| `http.json_response(status, data, cors?, persistent?)` | `string` | `response()` with the data JSON-encoded. |
+| `http.error_response(status, data, cors?, persistent?)` | `string` | `json_response()` wrapping the data as `{"errors": data}`. |
 | `http.parse_query_string(query)` | `table` | Decodes `a=1&b=2` into a table; values are URL-decoded. |
 | `http.url_decode(str)` | `string` | `%xx` byte escapes. |
 | `http.cors_headers(cors)` | `table` | The `Access-Control-*` header set for a config (below). |
 | `http.is_preflight(request)` | `boolean` | True for `OPTIONS` requests with both `Origin` and `Access-Control-Request-Method`. |
-| `http.preflight_response(cors)` | `string` | 200 with an empty body carrying the configured CORS headers — the preflight short-circuit. |
+| `http.preflight_response(cors, persistent?)` | `string` | 200 with an empty body carrying the configured CORS headers — the preflight short-circuit. |
 
 A parsed request is a fresh table:
 
@@ -66,29 +74,44 @@ request.query_string  -- "by=2" ("" when absent)
 request.query_params  -- { by = "2" } (URL-decoded)
 ```
 
-A typical connection loop:
+A typical connection loop — sequential requests on one connection, ending
+on the client's EOF, a framing error, or a request-declared
+`Connection: close`:
 
 ```lua
 local function handle_connection(client)
-  local request, err, status = http.read_request(function()
-    local chunk, read_err = socket.read(client)
-    if not chunk then return nil, read_err end
-    return chunk
-  end)
-  if not request then
-    socket.write(client, http.error_response(status or 400, { err }))
-    socket.close(client)
-    return
+  while true do
+    local request, err, status = http.read_request(function()
+      local chunk, read_err = socket.read(client)
+      if not chunk then return nil, read_err end
+      return chunk
+    end)
+    if not request and not status then
+      -- EOF before any bytes: a closed or idle client owns the close.
+      socket.close(client)
+      return
+    end
+    if not request then
+      -- A framing error desynchronises the stream: declare close, stop.
+      socket.write(client, http.error_response(status or 400, { err }, nil, false))
+      socket.close(client)
+      return
+    end
+    local persistent = (request.headers["connection"] or ""):lower() ~= "close"
+    if cors and http.is_preflight(request) then
+      socket.write(client, http.preflight_response(cors, persistent))
+    else
+      local ctx = http_context.new(request)
+      ctx.env_config = config
+      router.handle(ctx)
+      socket.write(client, http.response(ctx.status, ctx.res_headers,
+                                         ctx.response_body(), cors, persistent))
+    end
+    if not persistent then
+      socket.close(client)  -- the request declared Connection: close
+      return
+    end
   end
-  if cors and http.is_preflight(request) then
-    socket.write(client, http.preflight_response(cors))
-  else
-    local ctx = http_context.new(request)
-    ctx.env_config = config
-    router.handle(ctx)
-    socket.write(client, http.response(ctx.status, ctx.res_headers, ctx.response_body(), cors))
-  end
-  socket.close(client)
 end
 ```
 
@@ -200,16 +223,18 @@ local cors = {
 Keys left out of the config produce no header, and a caller-supplied header
 always wins over the CORS header for the same key. The wiring in the
 connection loop is two lines: short-circuit preflights
-(`http.is_preflight` + `http.preflight_response`), and pass the config as the
-last argument of `http.response`/`http.json_response`/`http.error_response`
-for everything else.
+(`http.is_preflight` + `http.preflight_response`), and pass the config as
+the fourth argument of `http.response`/`http.json_response`/
+`http.error_response` for everything else (the optional `persistent` flag
+comes last).
 
 ## Demo
 
 [`examples/08_http.lua`](../examples/08_http.lua) wires the whole trio to
 `lnt_shared` counters as a contrived kv store — GET reads a counter, POST
 increments it, PATCH adjusts it by a JSON delta — with a logging middleware, a
-403 short-circuit guard and CORS enabled:
+403 short-circuit guard, CORS enabled, and one keep-alive exchange (two
+requests served sequentially on a single connection):
 
 ```bash
 xmake build-release          # also copies the ext/http Lua modules beside lunet-run

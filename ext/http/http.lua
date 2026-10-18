@@ -6,12 +6,18 @@ application-specific shapes. Framing, limits and response building are
 unchanged; opt-in CORS helpers were added.
 
 Framing subset (deliberately small and explicit):
-  - one origin-form request per connection, CRLF header lines
+  - origin-form requests, CRLF header lines; one connection serves
+    requests sequentially, one after another, until the connection closes
   - at most one value per header field, optional decimal Content-Length
   - chunked and every other Transfer-Encoding are rejected
-  - responses always declare "Connection: close": request pipelining and
-    persistent connections are excluded. The caller closes the socket
-    after writing the response.
+  - connections are persistent by default (HTTP/1.1): responses carry no
+    Connection header; pass persistent=false to the response builders for
+    a "Connection: close" response. A request declaring "Connection:
+    close" is honoured by the connection loop: build its response with
+    persistent=false and stop serving the connection.
+  - pipelining is excluded: bytes running past the end of a request body
+    are a hard 400. The caller closes the socket after writing a close
+    response or on a framing error.
 
 Limits guard the parser: MAX_HEADER_BYTES (16 KiB) and MAX_BODY_BYTES
 (1 MiB). Oversize headers fail with 431, oversize bodies with 413.
@@ -48,11 +54,12 @@ local http = {}
 ---@field credentials boolean? when true, adds Access-Control-Allow-Credentials: true
 
 -- This module deliberately supports a small, explicit HTTP/1.1 framing
--- subset: one origin-form request per connection, CRLF headers, at most
--- one value for each header field, and an optional decimal
--- Content-Length body. Chunked and every other Transfer-Encoding are
--- rejected. Responses always close the connection, so request
--- pipelining and persistent connections are excluded.
+-- subset: origin-form requests, CRLF headers, at most one value for each
+-- header field, and an optional decimal Content-Length body. Chunked and
+-- every other Transfer-Encoding are rejected. Connections are persistent
+-- by default (HTTP/1.1); pass persistent=false to the response builders
+-- for a "Connection: close" response. Pipelining is excluded: a chunk
+-- that runs past the end of a request body is a hard 400.
 http.MAX_HEADER_BYTES = 16 * 1024
 http.MAX_BODY_BYTES = 1024 * 1024
 
@@ -310,21 +317,26 @@ end
 
 ---Build one HTTP/1.1 response string. Framing is owned here: the
 ---caller's content-length and connection headers are dropped and
----replaced (Content-Length from the body, "Connection: close" always —
----there is no keep-alive in this framing subset). Content-Type defaults
----to "application/json". With a cors config table, the CORS headers are
----added for keys the caller did not set (opt-in; default off).
+---replaced (Content-Length from the body). The connection is persistent
+---by default per HTTP/1.1: no Connection header is emitted. Pass
+---persistent=false for a "Connection: close" response — a request that
+---declared Connection: close gets one, and the connection loop stops
+---after writing it. Content-Type defaults to "application/json". With a
+---cors config table, the CORS headers are added for keys the caller did
+---not set (opt-in; default off).
 ---@param status integer HTTP status code
 ---@param headers table<string, string>? Response headers (names are lower-cased)
 ---@param body string? Response body ("" when nil)
 ---@param cors lunet.http.Cors? Opt-in CORS configuration; nil adds nothing
+---@param persistent boolean? nil or true leave the connection persistent (no Connection header); false declares "Connection: close"
 ---@return string response The complete response, ready to write to the socket
 ---@usage
 ---```lua
 ---local http = require("lunet.http")
 ---socket.write(client, http.response(200, nil, "ok", cors))
+---socket.write(client, http.response(200, nil, "bye", nil, false))  -- close
 ---```
-function http.response(status, headers, body, cors)
+function http.response(status, headers, body, cors, persistent)
     local status_text = {
         [200] = "OK",
         [201] = "Created",
@@ -361,7 +373,9 @@ function http.response(status, headers, body, cors)
         end
     end
     normalized_headers["content-type"] = normalized_headers["content-type"] or "application/json"
-    normalized_headers["connection"] = "close"
+    if persistent == false then
+        normalized_headers["connection"] = "close"
+    end
 
     -- Build header lines
     local header_lines = { status_line }
@@ -440,14 +454,15 @@ end
 ---this when is_preflight(request) is true and CORS is configured;
 ---without a cors config the response carries no CORS headers.
 ---@param cors lunet.http.Cors? The CORS configuration
+---@param persistent boolean? nil or true leave the connection persistent (no Connection header); false declares "Connection: close"
 ---@return string response The preflight response, ready to write to the socket
 ---@usage
 ---```lua
 ---local http = require("lunet.http")
 ---socket.write(client, http.preflight_response(cors))
 ---```
-function http.preflight_response(cors)
-    return http.response(200, http.cors_headers(cors), "")
+function http.preflight_response(cors, persistent)
+    return http.response(200, http.cors_headers(cors), "", nil, persistent)
 end
 
 ---Encode data as JSON and build the response. Requires lunet.jsonic
@@ -455,16 +470,17 @@ end
 ---@param status integer HTTP status code
 ---@param data any The value to JSON-encode as the body
 ---@param cors lunet.http.Cors? Opt-in CORS configuration
+---@param persistent boolean? nil or true leave the connection persistent (no Connection header); false declares "Connection: close"
 ---@return string response The complete response
 ---@usage
 ---```lua
 ---local http = require("lunet.http")
 ---socket.write(client, http.json_response(200, { ok = true }))
 ---```
-function http.json_response(status, data, cors)
+function http.json_response(status, data, cors, persistent)
     local json = require("lunet.jsonic")
     local body = json.encode(data)
-    return http.response(status, { ["Content-Type"] = "application/json" }, body, cors)
+    return http.response(status, { ["Content-Type"] = "application/json" }, body, cors, persistent)
 end
 
 ---JSON error response in the {"errors": ...} envelope shared by the
@@ -473,14 +489,15 @@ end
 ---@param status integer HTTP status code
 ---@param data any The value for the "errors" field
 ---@param cors lunet.http.Cors? Opt-in CORS configuration
+---@param persistent boolean? nil or true leave the connection persistent (no Connection header); false declares "Connection: close"
 ---@return string response The complete response
 ---@usage
 ---```lua
 ---local http = require("lunet.http")
 ---socket.write(client, http.error_response(404, { "no such route" }))
 ---```
-function http.error_response(status, data, cors)
-    return http.json_response(status, { errors = data }, cors)
+function http.error_response(status, data, cors, persistent)
+    return http.json_response(status, { errors = data }, cors, persistent)
 end
 
 return http

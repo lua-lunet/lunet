@@ -18,6 +18,12 @@ Two restored conventions are shown along the way:
   - opt-in CORS: a preflight OPTIONS is answered with the configured
     Access-Control headers, and every response carries them
 
+Connections are persistent by default (HTTP/1.1): the server serves
+sequential requests on one connection until the client's EOF, a framing
+error, or a request-declared Connection: close. The demo driver sends
+one keep-alive exchange (two requests, one connection) and closes every
+other connection by declaring Connection: close on its requests.
+
 Prerequisites
   1. Build the runtime (copies the ext/http Lua modules beside lunet-run):
         xmake build-release
@@ -111,36 +117,54 @@ local cors = {
 }
 
 local function handle_connection(client)
-  local request, read_err, read_status = http.read_request(function()
-    local data, data_err = socket.read(client)
-    if not data then return nil, data_err end
-    return data
-  end)
-  if not request then
-    socket.write(client, http.error_response(read_status or 400, { read_err }))
-    socket.close(client)
-    return
-  end
+  while true do
+    local request, read_err, read_status = http.read_request(function()
+      local data, data_err = socket.read(client)
+      if not data then return nil, data_err end
+      return data
+    end)
+    if not request and not read_status then
+      -- EOF before any bytes: a closed or idle client owns the close.
+      socket.close(client)
+      return
+    end
+    if not request then
+      -- A framing error desynchronises the stream: declare close, stop.
+      socket.write(client, http.error_response(read_status or 400, { read_err }, nil, false))
+      socket.close(client)
+      return
+    end
 
-  if http.is_preflight(request) then
-    -- CORS preflight short-circuit: never dispatched to the router.
-    socket.write(client, http.preflight_response(cors))
-  else
-    local ctx = http_context.new(request)
-    ctx.env_config = { counters = counters }
-    router.handle(ctx)
-    socket.write(client, http.response(ctx.status, ctx.res_headers, ctx.response_body(), cors))
+    -- A request-declared Connection: close is honoured: the response
+    -- declares close too, and the loop ends after writing it.
+    local persistent = (request.headers["connection"] or ""):lower() ~= "close"
+    if http.is_preflight(request) then
+      -- CORS preflight short-circuit: never dispatched to the router.
+      socket.write(client, http.preflight_response(cors, persistent))
+    else
+      local ctx = http_context.new(request)
+      ctx.env_config = { counters = counters }
+      router.handle(ctx)
+      socket.write(client, http.response(ctx.status, ctx.res_headers,
+                                         ctx.response_body(), cors, persistent))
+    end
+    if not persistent then
+      socket.close(client)
+      return
+    end
   end
-  socket.close(client)
 end
 
 -- ── A tiny raw-socket client so the demo drives itself ────────────────────
-local function http_request(method, path, body, extra_headers)
+-- Every driver request declares Connection: close unless overridden, so
+-- the server answers, closes, and read_all() sees an EOF.
+local function http_request(method, path, body, extra_headers, keep_alive)
   body = body or ""
   return method .. " " .. path .. " HTTP/1.1\r\n" ..
          "Host: lunet-demo\r\n" ..
          (extra_headers or "") ..
          (body ~= "" and "Content-Type: application/json\r\n" or "") ..
+         (keep_alive and "" or "Connection: close\r\n") ..
          "Content-Length: " .. #body .. "\r\n\r\n" .. body
 end
 
@@ -152,6 +176,27 @@ local function read_all(client)
     parts[#parts + 1] = data
   end
   return table.concat(parts)
+end
+
+-- Read exactly one response by framing (head + Content-Length body):
+-- a persistent response has no EOF to read to.
+local function read_response(client)
+  local received = ""
+  while not received:find("\r\n\r\n", 1, true) do
+    local chunk = socket.read(client)
+    if not chunk then return nil, "connection closed before response head" end
+    received = received .. chunk
+  end
+  local head_end = received:find("\r\n\r\n", 1, true)
+  local head = received:sub(1, head_end + 3)
+  local body = received:sub(head_end + 4)
+  local length = tonumber(head:match("Content%-Length: (%d+)")) or 0
+  while #body < length do
+    local chunk = socket.read(client)
+    if not chunk then break end
+    body = body .. chunk
+  end
+  return head .. body
 end
 
 local function request(label, raw)
@@ -195,6 +240,21 @@ lunet.spawn(function()
           http_request("OPTIONS", "/counters/hits", "",
                        "Origin: http://localhost:5173\r\nAccess-Control-Request-Method: PATCH\r\n"))
   request("GET a fresh counter", http_request("GET", "/counters/hits"))
+
+  -- Two requests, one connection: neither declares Connection: close, so
+  -- the server serves them sequentially (persistent by default).
+  local keep_client = socket.connect("127.0.0.1", 18082)
+  socket.write(keep_client, http_request("GET", "/counters/keepalive", nil, nil, true))
+  local first = read_response(keep_client)
+  socket.write(keep_client, http_request("POST", "/counters/keepalive", nil, nil, true))
+  local second = read_response(keep_client)
+  socket.close(keep_client)
+  print("-- two requests, one connection (keep-alive)")
+  print("   " .. tostring(first:match("^([^\r\n]+)")) .. "  " ..
+        tostring(first:match("\r\n\r\n(.*)$")))
+  print("   " .. tostring(second:match("^([^\r\n]+)")) .. "  " ..
+        tostring(second:match("\r\n\r\n(.*)$")))
+
   request("POST increments (1)", http_request("POST", "/counters/hits"))
   request("POST increments (2)", http_request("POST", "/counters/hits"))
   request("POST increments (3)", http_request("POST", "/counters/hits"))

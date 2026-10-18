@@ -198,10 +198,6 @@ describe("http extension modules", function()
     end)
 
     it("stops at the end of the declared body without reading further chunks", function()
-      -- read_request never consumes past the declared body, so the next
-      -- request's bytes stay in the stream for the connection loop's next
-      -- read_request call (a chunk that itself runs past the body is a
-      -- hard 400 instead).
       local consumed = false
       local chunks = { "POST /kv/hits HTTP/1.1\r\nHost: h\r\n" ..
                        "Content-Length: 2\r\n\r\nhi", "!extra" }
@@ -255,8 +251,6 @@ describe("http extension modules", function()
     end)
 
     it("drops a caller-supplied Connection header in both modes", function()
-      -- Framing is owned here: the caller's connection header is dropped
-      -- whether the response comes out persistent or closing.
       local persistent_resp = http.response(200, { Connection = "close" }, "")
       assert.is_nil(persistent_resp:find("connection:", 1, false))
       local closing = http.response(200, { Connection = "keep-alive" }, "", nil, false)
@@ -406,8 +400,6 @@ describe("http extension modules", function()
     end)
 
     it("still rejects pipelined bytes past the body with a hard 400", function()
-      -- Pipelining stays excluded: a read carrying the start of a second
-      -- request inside the same chunk is a framing error, never a queue.
       local r, err, status = http.read_request(function()
         return "GET /kv/one HTTP/1.1\r\nHost: h\r\n\r\n" ..
                "GET /kv/two HTTP/1.1\r\nHost: h\r\n\r\n"

@@ -7,14 +7,12 @@ unchanged; opt-in CORS helpers were added.
 
 Framing subset (deliberately small and explicit):
   - origin-form requests, CRLF header lines; one connection serves
-    requests sequentially, one after another, until the connection closes
+    requests sequentially until the connection closes
   - at most one value per header field, optional decimal Content-Length
   - chunked and every other Transfer-Encoding are rejected
-  - connections are persistent by default (HTTP/1.1): responses carry no
-    Connection header; pass persistent=false to the response builders for
-    a "Connection: close" response. A request declaring "Connection:
-    close" is honoured by the connection loop: build its response with
-    persistent=false and stop serving the connection.
+  - connections are persistent by default (HTTP/1.1); pass
+    persistent=false to the response builders for "Connection: close" —
+    a request declaring close gets one, and the caller stops serving
   - pipelining is excluded: bytes running past the end of a request body
     are a hard 400. The caller closes the socket after writing a close
     response or on a framing error.
@@ -315,15 +313,10 @@ function http.read_request(read_chunk)
     end
 end
 
----Build one HTTP/1.1 response string. Framing is owned here: the
----caller's content-length and connection headers are dropped and
----replaced (Content-Length from the body). The connection is persistent
----by default per HTTP/1.1: no Connection header is emitted. Pass
----persistent=false for a "Connection: close" response — a request that
----declared Connection: close gets one, and the connection loop stops
----after writing it. Content-Type defaults to "application/json". With a
----cors config table, the CORS headers are added for keys the caller did
----not set (opt-in; default off).
+---Build one HTTP/1.1 response string: Content-Length comes from the
+---body, the connection is persistent by default, Content-Type defaults
+---to "application/json". With a cors config table, the CORS headers
+---are added for keys the caller did not set.
 ---@param status integer HTTP status code
 ---@param headers table<string, string>? Response headers (names are lower-cased)
 ---@param body string? Response body ("" when nil)

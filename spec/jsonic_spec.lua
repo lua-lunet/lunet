@@ -105,11 +105,7 @@ describe("jsonic module #native", function()
     end)
   end)
 
-  -- Fixed-shape renderers for response builders that assemble JSON byte
-  -- strings with static prefixes. Both defer to the encoder's own
-  -- escaping/formatting so there is a single authority: jstr quotes a
-  -- string with dkjson's quotestring (the escaper encode itself uses)
-  -- and jint renders through encode's number branch.
+  -- Fixed-shape render helpers; single escaping/formatting authority.
   describe("fixed-shape renderers", function()
     it("quotes a string identically to encode", function()
       local s = 'a\nb\tc"d\\e\127'

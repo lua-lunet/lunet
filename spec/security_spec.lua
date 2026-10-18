@@ -1,33 +1,15 @@
--- Behavioural suite for the lunet.security extension: HMAC-SHA-256
--- sign/verify, base64url helpers, and JWT HS256 encode/decode — the
--- glue layer over the EXISTING lunet.sodium primitives and
--- lunet.jsonic. What ONLY this suite can pin is the glue: the RFC 7518
--- raw-secret key policy (the HMAC key is the secret's own octets,
--- RFC 2104-padded — never derived, never truncated), the constant-time
--- verify, the JWT profile (canonical header, exp policy), and the
--- named error strings (malformed / sig / exp) that token handling
--- dispatches on.
+-- Suite for lunet.security: HMAC-SHA-256 sign/verify, base64url, JWT
+-- HS256. Pins the glue: the RFC 7518 raw-secret key policy, the
+-- constant-time verify, the JWT profile, and the named error strings.
 --
--- Module resolution mirrors spec/sodium_spec.lua and
--- spec/jsonic_spec.lua: the module is the Lua file
--- ext/security/security.lua; package.preload routes
--- require("lunet.security") to the dev-tree file explicitly, together
--- with the two loaders it needs (lunet.sodium, lunet.jsonic). The
--- pending gates fire exactly when the dependencies are absent:
--- lunet.sodium needs liblunet_paxe at load time, so a missing cdylib
--- pends the whole suite through the failed require; lunet.jsonic's
--- native decoder is probed once, and the jwt half pends without it
--- (crypto is pure glue over sodium and runs regardless).
+-- Module resolution mirrors spec/sodium_spec.lua: package.preload
+-- routes require("lunet.security") to the dev-tree file. The pending
+-- gates fire exactly when the dependencies are absent.
 --
--- KNOWN-ANSWER VECTORS: the HMAC-SHA-256 tags were computed with an
--- independent implementation (Python's hmac module) against plain
--- RFC 2104 HMAC-SHA-256 over the RAW secret, so a wrong FFI binding or
--- a reintroduced key derivation fails loudly here. RFC 4231 test cases
--- 1 and 2 appear verbatim (their short keys take the raw path) and
--- cases 5 and 7 verbatim (their 131-byte keys exceed the block size and
--- take the standard hash-the-key path). The tags the RETIRED
--- SHA-256-subkey derivation produced are pinned as negatives: they must
--- no longer verify.
+-- KNOWN-ANSWER VECTORS: RFC 4231 cases 1, 2, 5 and 7 verbatim (short
+-- and oversize keys), plus tags computed with Python's hmac against
+-- plain RFC 2104 HMAC-SHA-256 over the raw secret. The retired
+-- SHA-256-subkey tags are pinned as negatives: they must not verify.
 --
 -- TAMPER-TEST GEOMETRY: base64url carries 6 bits per character, so the
 -- final character of an unpadded segment holds bits the decoder may

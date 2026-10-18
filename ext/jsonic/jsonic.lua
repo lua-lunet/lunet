@@ -127,13 +127,6 @@ function M.decode(str, position, nullval)
   return result, position + #input
 end
 
--- Fixed-shape render helpers for response builders that assemble JSON byte
--- strings with static prefixes. jstr quotes a string with dkjson's own
--- quotestring (the escaper encode itself uses, so escaping matches encode
--- byte for byte) and defers any other value to encode; jint defers to
--- encode's number branch so integers share one formatting authority with
--- the encoder (non-finite numbers render as null, never as tostring's
--- invalid JSON literals).
 function M.jstr(value)
   if type(value) ~= "string" then
     return M.encode(value)

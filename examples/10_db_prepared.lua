@@ -113,12 +113,6 @@ lunet.spawn(function()
     assert(werr, "write SQL on ro must fail at prepare")
     print("Write SQL on ro rejected at prepare: " .. werr)
 
-    -- A busy statement fails loudly instead of corrupting mid-step state.
-    -- (One call is in flight here only conceptually; a real server hits
-    -- this when two requests share one statement handle.)
-    -- Shutdown: close every statement, then the handles. Closing the
-    -- connection with statements still open is safe — they are finalized
-    -- with it — but the explicit close is the readable contract.
     assert(ins:close() == nil, "insert close failed")
     assert(list:close() == nil, "list close failed")
     assert(older:close() == nil, "filter close failed")

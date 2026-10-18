@@ -1,44 +1,16 @@
--- lunet.security: authenticated-token helpers for lunet applications —
--- HMAC-SHA-256 sign/verify, base64url, and JWT HS256 (encode / decode).
+-- lunet.security: HMAC-SHA-256 sign/verify, base64url, JWT HS256.
 --
--- ONE flat module, pure Lua, opt-in like the database drivers. It owns
--- NO primitives of its own: every byte-level operation goes through the
--- EXISTING lunet.sodium surface (SHA-256 and the URLSAFE base64
--- variants, both backed by liblunet_paxe — libsodium statically
--- linked), HMAC-SHA-256 is composed in pure Lua on sodium.sha256 per
--- RFC 2104 (the one pad-and-concatenate step HMAC itself is), and
--- claims JSON goes through the EXISTING lunet.jsonic. Nothing here
--- hashes, pads, or parses on its own beyond gluing the pieces.
+-- Pure Lua over the existing lunet.sodium surface (SHA-256, URLSAFE
+-- base64) and lunet.jsonic (jwt claims only, loaded on first use).
+-- Malformed arguments raise (caller bug); untrusted token content comes
+-- back as nil plus an error string: malformed / sig / exp.
 --
--- DEPENDENCY CONTRACT (docs/SECURITY.md states it too):
---   * lunet.sodium — required at load time (so a missing liblunet_paxe
---     fails the require itself, never mid-request). In a release archive
---     both loaders sit side by side in lunet/ and resolve via the
---     runtime's lunet/?.lua path entry; the operator's only system-level
---     obligation is libsodium, which PAXE already links statically.
---   * lunet.jsonic — required by jwt.* only, loaded on first use, so
---     crypto.* works everywhere lunet.sodium works (jsonic's native
---     decoder does not ship on the Windows archives yet).
---
--- ERROR CONVENTION (same shape as lunet.sodium): malformed arguments
--- RAISE a Lua error — they are bugs in the calling script (a nil
--- payload, an empty secret). Token CONTENT is untrusted input, not a
--- bug, so jwt.decode reports it as nil plus an error string that names
--- the failure kind: malformed / sig / exp. Operational failures
--- (libsodium could not be initialised) surface as nil, message from
--- sign/encode and are re-raised from the boolean verify.
---
--- KEY HANDLING (the compliance contract, stated): HS256 is RFC 7518 —
--- the HMAC key is the RAW secret octets, so tags from any standard JWT
--- library verify unchanged and no tag is produced that a standard
--- library would refuse. libsodium's crypto_auth_hmacsha256 fixes the
--- key at exactly 32 bytes and lunet.sodium deliberately refuses any
--- other length rather than silently pad or truncate, so HMAC-SHA-256
--- itself is composed in pure Lua (RFC 2104) on sodium.sha256: a key
--- longer than the 64-byte block is hashed first (the standard's own
--- reduction), every other key is used as-is and zero-padded to the
--- block exactly as HMAC pads. The tag is plain HMAC-SHA-256 for EVERY
--- key length — no subkey derivation, no re-hashing of short secrets.
+-- KEY HANDLING: RFC 7518 HS256 — the HMAC key is the raw secret
+-- octets. sodium's hmac fixes the key at 32 bytes and refuses other
+-- lengths, so HMAC-SHA-256 is composed in pure Lua (RFC 2104) on
+-- sodium.sha256: a key longer than the 64-byte block is hashed first,
+-- every other key is zero-padded to the block exactly as HMAC pads.
+-- Tags are bit-identical to plain HMAC-SHA-256 for every key length.
 
 local sodium = require("lunet.sodium")
 local bit = require("bit")
@@ -50,13 +22,8 @@ M.jwt = {}
 local crypto = M.crypto
 local jwt = M.jwt
 
--- HMAC-SHA-256 block size (RFC 2104); the tag stays 32 bytes
--- (lunet.sodium.BYTES).
 local BLOCK_BYTES = 64
 
--- lunet.jsonic is jwt-only and loaded on first use: the require itself
--- succeeds without the native decoder (encode is pure Lua) and the
--- decoder is what needs liblunet_jsonic.
 local jsonic_mod
 local function claims_json()
   if not jsonic_mod then
@@ -77,12 +44,7 @@ local function check_string(v, name)
   return v
 end
 
--- Constant-time equality over equal-length strings: every byte position
--- contributes to one accumulated difference, so the work done does not
--- depend on where (or whether) the strings diverge. The loop count is
--- fixed by the tag length. Length itself is not hidden — comparing
--- lengths is unavoidable in Lua and leaks nothing an attacker cannot
--- already see (the tag length is public).
+-- Constant-time equality; the loop count is fixed by the tag length.
 local function ct_equal(a, b)
   local diff = 0
   for i = 1, #a do
@@ -91,15 +53,9 @@ local function ct_equal(a, b)
   return diff == 0
 end
 
--- RFC 2104 HMAC-SHA-256 over `data` under the RAW `key` octets,
--- composed in pure Lua on sodium.sha256: a key longer than the block
--- is hashed first (the standard's own reduction), every other key is
--- used as-is and zero-padded to the block exactly as HMAC pads. The
--- result is bit-identical to plain HMAC-SHA-256 for every key length,
--- so tags from standard JWT libraries verify unchanged. Returns the
--- raw 32-byte tag, or nil plus a message on operational failure
--- (libsodium could not be initialised) — the failure paths are
--- crypto.sign's and jwt's shared authority.
+-- RFC 2104 HMAC-SHA-256 over the raw key octets (see the header note).
+-- Returns the raw 32-byte tag, or nil plus a message on operational
+-- failure — crypto.sign's and jwt's shared authority.
 local function hmac_sha256(data, key)
   if #key > BLOCK_BYTES then
     local reduced, err = sodium.sha256(key)
@@ -117,17 +73,8 @@ local function hmac_sha256(data, key)
   return sodium.sha256(table.concat(outer) .. digest)
 end
 
--- The HMAC-SHA-256 sign of `data` under `key`: the raw 32-byte tag, or
--- nil plus a message on operational failure (libsodium could not be
--- initialised). The key is the raw secret octets (see the header note).
----
 ---HMAC-SHA-256 over the raw secret octets, composed per RFC 2104 on
----the existing lunet.sodium.sha256 primitive.
----
----`key` may be any non-empty string: the tag is plain HMAC-SHA-256
----over the raw key bytes for every length (RFC 7518 HS256 — a key
----longer than the 64-byte block is hashed first, every other key is
----zero-padded to the block, exactly as HMAC pads). Malformed arguments
+---the existing lunet.sodium.sha256 primitive. Malformed arguments
 ---raise; an operational failure (libsodium init) returns nil, message.
 ---@param data string Data to authenticate
 ---@param key string Non-empty secret key
@@ -147,11 +94,7 @@ function crypto.sign(data, key)
   return hmac_sha256(data, key)
 end
 
----Verify the HMAC-SHA-256 tag of `data` under `key` in constant time:
----computes the expected tag with `sign` and compares it against `sig`
----byte-by-byte through an accumulated XOR difference (the work done
----does not depend on where the strings diverge). Returns true or
----false; a `sig` of any other length than 32 bytes is simply false.
+---Verify the HMAC-SHA-256 tag of `data` under `key` in constant time.
 ---Malformed arguments raise; an operational failure (libsodium init)
 ---is re-raised rather than silently reported as a bad signature.
 ---@param data string Data that was signed
@@ -238,12 +181,10 @@ local ERR = {
 ---lunet.jsonic. Signature verification is the decode-side twin, so a
 ---token from encode always round-trips through decode.
 ---
----exp handling (the reconciled design, stated): `opts.expires_in`
----(positive integer seconds) injects exp = now + expires_in on a COPY
----of the payload — the caller's table is never mutated, and an exp set
----this way wins over one already in the payload. Without expires_in the
----payload passes through unchanged, exp claim or not. A token without
----an exp claim never expires on decode.
+---exp handling: `opts.expires_in` (integer seconds) injects exp = now +
+---expires_in on a COPY of the payload (never mutated); without it the
+---payload passes through unchanged. A token without an exp claim never
+---expires on decode.
 ---
 ---Malformed arguments raise (a nil payload, an empty secret); JSON
 ---encoding failures (cycles, unsupported types) raise from jsonic.

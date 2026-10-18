@@ -7,7 +7,7 @@ local signal = {}
 ---
 ---One-shot: the FIRST matching signal resumes the waiter with the signal name
 ---and tears the watcher down. While the watcher is armed the process default
----is overridden — e.g. the first SIGTERM is delivered to this coroutine and
+---is overridden  -  e.g. the first SIGTERM is delivered to this coroutine and
 ---does NOT terminate the process. To stop the process on TERM, exit from the
 ---handler (os.exit, or set _G.__lunet_exit_code and close your listeners so
 ---the event loop drains).

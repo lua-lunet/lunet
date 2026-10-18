@@ -47,7 +47,7 @@ end
 ---afterwards they are per-connection and last-write-wins:
 ---  db.exec(handle, "PRAGMA busy_timeout = 5000") overrides one handle only.
 ---
----The ro handle runs queries and execs INLINE on the loop thread — no
+---The ro handle runs queries and execs INLINE on the loop thread  -  no
 ---background thread, no yield. Short hot reads are what it is for; a heavy
 ---read stalls the loop for its duration.
 ---@param params table { path = "app.db", create = "WAL" }

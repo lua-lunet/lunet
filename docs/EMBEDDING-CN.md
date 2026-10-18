@@ -17,10 +17,10 @@ LuaJIT、libuv 或 zlib；请为目标平台安装匹配的开发库和运行时
 | 条目 | 类别 | 说明 |
 |-------|------|------|
 | `lib/liblunet-static.a`（Windows 为 `liblunet-static.lib`） | 链接 | 静态核心运行时：Lua 状态、事件循环、仅回环的 socket/timer/fs/signal 原语 |
-| `include/lunet.h` | 链接 | 嵌入 API —— 下文一切内容的契约；头文件内的 doc 注释即参考文档 |
+| `include/lunet.h` | 链接 | 嵌入 API - 下文一切内容的契约；头文件内的 doc 注释即参考文档 |
 | `include/lunet_exports.h` | 链接 | 符号可见性管线；包含它即可，无需阅读 |
 | `bin/generate_embed_scripts.lua` | 运行 | 把 Lua 应用目录树编译成可嵌入的头文件 blob（三个环境变量，见下文） |
-| `examples/sdk_embed/main.c` | 示例 | 最小宿主：init、embed、run —— 以此文件为起步点 |
+| `examples/sdk_embed/main.c` | 示例 | 最小宿主：init、embed、run - 以此文件为起步点 |
 | `examples/sdk_embed/app/main.lua` | 示例 | 该示例所嵌入的 Lua 应用 |
 | `README.md` / `README-CN.md` | 文档 | 本文档 |
 | `LICENSE` | 文档 | 许可证 |
@@ -28,7 +28,7 @@ LuaJIT、libuv 或 zlib；请为目标平台安装匹配的开发库和运行时
 可选的扩展模块（`lunet.http`、`lunet.security`、各数据库驱动、`lunet.paxe`、
 `lunet.jsonic`、`lunet.lnt_shared`、`lunet.httpc`）**不在**静态核心内。它们以
 Lua 加载器的形式随配套运行时压缩包（`lunet-<os>.tar.gz`）发布在 `lunet-run`
-旁边，类型注解在 `types/` —— 见
+旁边，类型注解在 `types/` - 见
 [docs/RELEASE-LAYOUT-CN.md](RELEASE-LAYOUT-CN.md)。需要它们的嵌入式应用，应把
 加载器与其 cdylib 一并发布在自己的可执行文件旁边。
 
@@ -91,22 +91,22 @@ cl /nologo /std:c11 /I include /I generated `
 
 `include/lunet.h` 提供不透明的 `lunet_runtime_t` 和六个函数，分三组：
 
-**生命周期** —— 按此顺序调用：
+**生命周期** - 按此顺序调用：
 
-1. `lunet_runtime_init` —— 仅一次；可选地提供可执行文件路径以及
+1. `lunet_runtime_init` - 仅一次；可选地提供可执行文件路径以及
    `dangerously_skip_loopback_restriction=1`。
-2. `lunet_runtime_run_file` 或 `lunet_runtime_run_embedded` —— 二选一，仅一次。
-3. `lunet_runtime_shutdown` —— 初始化成功后始终调用。
+2. `lunet_runtime_run_file` 或 `lunet_runtime_run_embedded` - 二选一，仅一次。
+3. `lunet_runtime_shutdown` - 初始化成功后始终调用。
 
 **控制：**
 
-- `lunet_runtime_request_stop` —— 请求主动停止（让运行时经历下面的排水点）。
+- `lunet_runtime_request_stop` - 请求主动停止（让运行时经历下面的排水点）。
   这是唯一线程安全的调用：宿主可在其他线程调用它，同时 `run_file` /
   `run_embedded` 在运行时线程上阻塞。
 
 **内省：**
 
-- `lunet_runtime_get_lua_state` —— 宿主获取活跃 `lua_State*` 的出口
+- `lunet_runtime_get_lua_state` - 宿主获取活跃 `lua_State*` 的出口
   （示例用它在其入口脚本运行前设置 `arg` 等全局量）。运行时为 `NULL`
   时返回 `NULL`。
 

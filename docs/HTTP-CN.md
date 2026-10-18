@@ -2,9 +2,9 @@
 
 构建于 `lunet.socket` 之上的纯 Lua HTTP/1.1 三件套：
 
-- [`lunet.http`](#lunethttp--请求解析与响应构建) — 请求解析、响应构建、可选 CORS
-- [`lunet.http_context`](#lunethttpcontext--每请求上下文) — 每请求全新的上下文对象
-- [`lunet.http_router`](#lunethttprouter--路由与中间件) — 带 `:参数` 与中间件的方法+路径分发
+- [`lunet.http`](#lunethttp--请求解析与响应构建) - 请求解析、响应构建、可选 CORS
+- [`lunet.http_context`](#lunethttpcontext--每请求上下文) - 每请求全新的上下文对象
+- [`lunet.http_router`](#lunethttprouter--路由与中间件) - 带 `:参数` 与中间件的方法+路径分发
 
 这些模块是普通的 Lua 文件，没有 C 核心，也没有新依赖：它们随发布压缩包发布
 （压缩包内容见 [docs/RELEASE-LAYOUT-CN.md](RELEASE-LAYOUT-CN.md)）。从源码构建
@@ -17,7 +17,7 @@ close）由调用方负责；JSON 辅助函数仅在被调用时才惰性地依�
 ## 帧格式子集
 
 先说部署安全：[docs/SECURITY_ARCHITECTURE-CN.md](SECURITY_ARCHITECTURE-CN.md)
-中的 qmail 式模型 —— 一台久经考验的 nginx（或同类）在网络接口上终结 TLS，
+中的 qmail 式模型 - 一台久经考验的 nginx（或同类）在网络接口上终结 TLS，
 通过回环接口与你本地的 lunet 进程对话；若你更想用文件系统权限而非 IP 规则，
 也可以用 Unix 域套接字。本模块的示例只绑定回环；它不是 TLS 终结器，也永远
 不应是。
@@ -49,7 +49,7 @@ close）由调用方负责；JSON 辅助函数仅在被调用时才惰性地依�
 这一类解析器不只由规格测试覆盖，还有探针验证：[Http11Probe](https://github.com/uNetworkingAB/Http11Probe)
 探针装置（`ext/http/Dockerfile.http`）对本目录下的快乐路径目标运行它的
 213 例矩阵并固化断言结果。范围之外的用例通过，是因为子集**有意拒绝**该特性
-—— chunked 与任何 `Transfer-Encoding` 答 501，HTTP/1.0 答 400，`OPTIONS *`
+ -  chunked 与任何 `Transfer-Encoding` 答 501，HTTP/1.0 答 400，`OPTIONS *`
 答 400，最小 echo 目标对未注册方法答 405 并带 `Allow` 头。`ext/http`
 代码变更时重跑装置并提交再生成的期望清单：
 
@@ -58,7 +58,7 @@ docker build -f ext/http/Dockerfile.http -t lunet-http-probe .
 docker run --rm lunet-http-probe
 ```
 
-## lunet.http — 请求解析与响应构建
+## lunet.http - 请求解析与响应构建
 
 ```lua
 local http = require("lunet.http")
@@ -68,14 +68,14 @@ local http = require("lunet.http")
 |------|------|------|
 | `http.parse_request(raw)` | `request, err, status` | 解析一个完整的原始请求（头 + 体）。请求体必须与 `Content-Length` 完全一致。 |
 | `http.read_request(read_chunk)` | `request, err, status` | 增量变体：反复调用 `read_chunk()` 直到请求完整；读取器返回字符串分块，EOF/失败时返回 nil 加可选错误信息。 |
-| `http.response(status, headers, body, cors?, persistent?)` | `string` | 构建完整响应。帧格式由本函数负责：调用方的 `Content-Length`/`Connection` 头会被丢弃并替换（`Content-Length` 取自请求体）。连接默认持久 —— 按 HTTP/1.1 不带 `Connection` 头；`persistent=false` 则声明 `Connection: close`。`Content-Type` 默认为 `application/json`。 |
+| `http.response(status, headers, body, cors?, persistent?)` | `string` | 构建完整响应。帧格式由本函数负责：调用方的 `Content-Length`/`Connection` 头会被丢弃并替换（`Content-Length` 取自请求体）。连接默认持久 - 按 HTTP/1.1 不带 `Connection` 头；`persistent=false` 则声明 `Connection: close`。`Content-Type` 默认为 `application/json`。 |
 | `http.json_response(status, data, cors?, persistent?)` | `string` | `response()`，数据经 JSON 编码。 |
 | `http.error_response(status, data, cors?, persistent?)` | `string` | `json_response()`，数据包装为 `{"errors": data}`。 |
 | `http.parse_query_string(query)` | `table` | 将 `a=1&b=2` 解码为表；值经过 URL 解码。 |
 | `http.url_decode(str)` | `string` | `%xx` 字节转义。 |
 | `http.cors_headers(cors)` | `table` | 根据配置（见下）生成 `Access-Control-*` 头集合。 |
 | `http.is_preflight(request)` | `boolean` | `OPTIONS` 请求且同时带有 `Origin` 与 `Access-Control-Request-Method` 时为真。 |
-| `http.preflight_response(cors, persistent?)` | `string` | 携带所配置 CORS 头、空请求体的 200 —— 即预检短路响应。 |
+| `http.preflight_response(cors, persistent?)` | `string` | 携带所配置 CORS 头、空请求体的 200 - 即预检短路响应。 |
 
 解析出的请求是一个全新的表：
 
@@ -90,7 +90,7 @@ request.query_string  -- "by=2"（缺省时为 ""）
 request.query_params  -- { by = "2" }（URL 解码后）
 ```
 
-典型的连接循环 —— 一个连接上按顺序服务多个请求，在客户端 EOF、帧格式错误
+典型的连接循环 - 一个连接上按顺序服务多个请求，在客户端 EOF、帧格式错误
 或请求声明的 `Connection: close` 时结束：
 
 ```lua
@@ -130,7 +130,7 @@ local function handle_connection(client)
 end
 ```
 
-## lunet.http_context — 每请求上下文
+## lunet.http_context - 每请求上下文
 
 ```lua
 local http_context = require("lunet.http_context")
@@ -150,7 +150,7 @@ local ctx = http_context.new(request)
 | `ctx.response_body()` | 响应 | 读回累计的 `write()` 输出。 |
 | `ctx.env_config` | 接线 | 应用配置，由调用方在路由前设置；路由器将其作为第一个实参传给处理器。 |
 
-## lunet.http_router — 路由与中间件
+## lunet.http_router - 路由与中间件
 
 ```lua
 local router = require("lunet.http_router")
@@ -159,7 +159,7 @@ local router = require("lunet.http_router")
 路由器是模块级单例：路由模块在被 require 时自行注册，连接循环只负责接好套接字。
 
 ```lua
--- routes/articles.lua —— require 时自行注册
+-- routes/articles.lua - require 时自行注册
 local router = require("lunet.http_router")
 
 router.route("GET", "/articles/:id", function(config, ctx, params)
@@ -175,7 +175,7 @@ end)
 | `router.use(fn)` | 注册分发前中间件（见下）。 |
 | `router.reset()` | 清空所有路由与中间件（测试、热重载）。 |
 
-处理器契约 —— 处理器以 `pcall(handler, ctx.env_config, ctx, params)` 运行：
+处理器契约 - 处理器以 `pcall(handler, ctx.env_config, ctx, params)` 运行：
 
 - 返回**表**：JSON 编码后作为响应体；带 `status` 字段的表会设置响应状态码，
   其 `body` 字段（若存在）则替代整表成为编码载荷
@@ -184,7 +184,7 @@ end)
   驱动响应，上下文保持处理器写入的原样
 
 每个被分发的响应都通过 `ctx.write()` 写出并带 `Content-Type: application/json`；
-状态码 204 写空响应体。未知路径 —— 或路径匹配但方法不支持的请求 —— 报 404，
+状态码 204 写空响应体。未知路径 - 或路径匹配但方法不支持的请求 - 报 404，
 响应体为 `{"error":"Not found","path":...}`。处理器或中间件的错误不会外抛：
 通过 `ctx.log("err", ...)` 记录，并以 500 与 `{"error":"Internal server error"}`
 响应体应答。
@@ -194,7 +194,7 @@ end)
 `router.use(fn)` 注册分发前中间件。中间件按注册顺序在路由分发之前运行，并与
 处理器共用同一错误契约：
 
-- 中间件可以**短路**：返回表或字符串 —— 该值与处理器返回值完全同法落地
+- 中间件可以**短路**：返回表或字符串 - 该值与处理器返回值完全同法落地
   （包括 `{ status, body }` 的解包）
 - 返回 `nil`、`false` 或不返回则继续下一个中间件，继而分发
 - 中间件出错按 500 记录并应答；路由处理器不会被调用
@@ -236,8 +236,8 @@ local cors = {
 ## 示例
 
 [`examples/08_http.lua`](../examples/08_http.lua) 将三件套接到作为刻意简化的
-kv 存储的 `lnt_shared` 计数器上 —— GET 读取计数器、POST 递增、PATCH 按 JSON
-增量调整 —— 并带有日志中间件、403 短路守卫、已启用的 CORS，以及一段 keep-alive
+kv 存储的 `lnt_shared` 计数器上 - GET 读取计数器、POST 递增、PATCH 按 JSON
+增量调整 - 并带有日志中间件、403 短路守卫、已启用的 CORS，以及一段 keep-alive
 演示（两个请求在一个连接上按顺序服务）：
 
 ```bash

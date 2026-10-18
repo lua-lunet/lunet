@@ -1,5 +1,5 @@
 --[[
-  lunet.postgres_tx — transaction wrapper for lunet.postgres
+  lunet.postgres_tx  -  transaction wrapper for lunet.postgres
 
   Deliberately standalone. The sqlite3 and mysql drivers ship their own
   equivalent modules (lunet.sqlite3_tx, lunet.mysql_tx). An application
@@ -55,8 +55,8 @@
 
   * COMMIT happens only if fn returns a non-nil first value. Returning nil
     (optionally with a reason) rolls back. This is what lets an
-    optimistic-concurrency miss — an UPDATE ... WHERE version = $n matching
-    zero rows — undo earlier statements instead of committing half the work.
+    optimistic-concurrency miss  -  an UPDATE ... WHERE version = $n matching
+    zero rows  -  undo earlier statements instead of committing half the work.
 
   * An error raised inside fn rolls back and is surfaced; it never partially
     commits.
@@ -65,7 +65,7 @@
 
   * err is a table: err.message (also what tostring(err) and concatenation
     give) and err.poisoned. poisoned is true when BEGIN, COMMIT or ROLLBACK
-    itself failed, which leaves the session in an unknown state — close the
+    itself failed, which leaves the session in an unknown state  -  close the
     connection instead of returning it to a pool.
 
   Postgres notes
@@ -76,7 +76,7 @@
     libpq's extended-query protocol, not a lunet restriction; the driver
     routes parameterised statements through PQexecParams. Statements with no
     parameters go through PQexec and may contain several commands separated
-    by ';', but only the last command's results come back — so do not try to
+    by ';', but only the last command's results come back  -  so do not try to
     smuggle a whole transaction into one string.
 
   * After any statement error inside a transaction, Postgres puts the

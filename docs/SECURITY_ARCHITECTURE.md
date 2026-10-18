@@ -1,70 +1,68 @@
 # Security Architecture
 
-lunet recommends a qmail-style process isolation architecture — the same
+lunet recommends a qmail-style process isolation architecture - the same
 approach that made qmail the most secure mail server for over a decade.
 
 The principle: decompose your system into trust boundaries where each
 process has minimal privilege and communicates through constrained
 interfaces. The internet-facing attack surface is handled by hardened,
-battle-tested software — a cloud load balancer, an API gateway, or a local
-sidecar such as nginx, OpenResty, HAProxy, Traefik, Caddy, Envoy — and lunet
+battle-tested software - a cloud load balancer, an API gateway, or a local
+sidecar such as nginx, OpenResty, HAProxy, Traefik, Caddy, Envoy - and lunet
 never touches the hostile network directly.
 
 ```mermaid
 flowchart TB
     hostile["Hostile internet"]
-
-    edge["Internet-facing edge (your choice)\l
-    nginx · Envoy · OpenResty · Apache httpd · HAProxy · Caddy · Traefik\l
-    AWS ALB/NLB · GCP Load Balancer · Azure App Gateway\l
-    Cloudflare · Fastly · Kong · Kubernetes Ingress\l\l
-    TLS termination · protocol validation · rate limiting · WAF/DDoS · certificates"]
-
+    edge["INTERNET-FACING EDGE (your choice)\l
+    Responsibilities:\l
+    TLS termination (HTTPS, HTTP/2, HTTP/3/QUIC)\l
+    Protocol validation and attack mitigation\l
+    Rate limiting, WAF, DDoS protection\l
+    Certificate management"]
     lunet["lunet (one process per concern)\l
     Listens on Unix socket or TCP loopback only\l
+    Never exposed to public network interfaces\l
+    Receives traffic pre-filtered by your edge\l
     Treats every byte it reads as hostile"]
-
     hostile --> edge
     edge -->|"Unix socket or TCP loopback (your choice)"| lunet
 ```
 
-## The edge is an exposure boundary, not a memory-safety boundary
+Software usable in each role:
+
+| Role | Software you can use |
+|------|----------------------|
+| Internet-facing edge | nginx · Envoy · OpenResty · Apache httpd · HAProxy · Caddy · Traefik · Kong |
+| Cloud load balancing / gateway | AWS ALB/NLB · GCP Load Balancer · Azure App Gateway |
+| Managed edge / WAF | Cloudflare · Fastly · Kubernetes Ingress |
+
+## Where validation lives in this architecture
 
 The edge removes lunet's **network exposure**: an unauthenticated attacker
 on the internet cannot reach lunet's socket at all. For protocols the edge
-speaks natively — HTTP/1.1, HTTP/2, HTTP/3, WebSocket — it also performs real
-protocol validation: malformed framing, oversized headers, and
-protocol-level abuse are rejected before any byte reaches lunet. That is
-the qmail model's core: what one component hands off to the next has
-already been validated by a component that speaks that protocol.
+speaks natively (HTTP/1.1, HTTP/2, HTTP/3, WebSocket) it validates the
+protocol before handoff, so what reaches lunet has already been checked by a
+component that speaks that protocol. That is the qmail model's core.
 
-For everything else, the edge largely forwards bytes unvalidated:
+For everything else, the edge forwards bytes: an L4 load balancer sees
+packets, not protocols; an L7 proxy validates the protocol it speaks, not
+the protocol lunet speaks. In those deployments lunet's own protocol layer
+does the validation. That division is deliberate: each wire protocol is
+checked exactly once, by the component that speaks it on that hop.
 
-- An L4 load balancer (NLB, HAProxy in TCP mode, nginx `stream`) sees
-  packets, not protocols.
-- An L7 proxy validates the protocol *it* speaks, not the protocol lunet
-  speaks. An nginx HTTP frontend will happily reverse-proxy a hostile
-  custom binary stream to lunet's loopback socket.
+The standing discipline for every byte lunet reads, wherever you deploy:
 
-So lunet's own parsers still receive attacker-controlled bytes — just from
-a loopback or Unix-socket peer. The edge buys the risk down dramatically;
-it does not make hostile input impossible. Treat every byte lunet reads as
-hostile:
+- **Bounds before allocation.** Declared lengths are capped, never trusted;
+  length-prefix and frame checks run before allocating or copying.
+- **Constrain the process.** Run lunet under a dedicated non-root UID/GID;
+  match the Unix socket's filesystem permissions to it; apply seccomp or
+  equivalent syscall filtering where the platform offers it.
+- **Keep the probes green.** The parser suites and the Http11Probe rig pin
+  the documented outcomes; keep fuzz coverage growing with new decoders.
 
-- **Validate before you trust.** Enforce length-prefix and frame bounds
-  before allocating or copying. Never trust a declared length — cap it.
-- **Harden the runtime.** Where lunet or its C/FFI extension modules touch
-  memory directly, build with stack canaries (`-fstack-protector-strong`),
-  PIE/ASLR, and `_FORTIFY_SOURCE=2`.
-- **Constrain the process.** Run lunet as a dedicated non-root UID/GID
-  matching the Unix socket's filesystem permissions; apply seccomp or
-  equivalent syscall filtering.
-- **Fuzz every parser.** Run coverage-guided fuzzing (libFuzzer/AFL++) on
-  each protocol decoder in CI, not just HTTP.
-
-In qmail terms: the edge is the network-facing guard, but every component
-must still assume its inputs are hostile. Defense in depth is the point of
-this architecture — the edge is the first boundary, not the only one.
+In qmail terms: the edge is the network-facing guard, and every component
+still assumes its inputs are hostile. Defense in depth is the point of this
+architecture: the edge is the first boundary, not the only one.
 
 ## Transport options: Unix socket or TCP loopback
 

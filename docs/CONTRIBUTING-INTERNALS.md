@@ -1,7 +1,7 @@
 # Contributing: Engineering Internals
 
 This document collects the generic engineering knowledge that any
-contributor to the lunet C core needs — naming conventions, debugging
+contributor to the lunet C core needs - naming conventions, debugging
 methodology, and testing protocol. It is internal reference material, not
 shipped in the SDK archive.
 
@@ -23,7 +23,7 @@ This section defines naming conventions and safety rules for C code. These are e
 
 **Rule**: Code outside of `trace.h` and `*_impl.c` files MUST NOT call `_lunet_*` functions directly.
 
-**Exception (raw coroutine core)**: `src/co.c` (declared in `include/co.h`) is the raw coroutine implementation home — `_lunet_ensure_coroutine` lives there and is consumed only by the `trace.h` wrappers.
+**Exception (raw coroutine core)**: `src/co.c` (declared in `include/co.h`) is the raw coroutine implementation home - `_lunet_ensure_coroutine` lives there and is consumed only by the `trace.h` wrappers.
 
 **Exception (public SDK API)**: All `LUNET_API` symbols declared in `include/lunet.h` (`lunet_runtime_init`, `lunet_runtime_run_file`, `lunet_runtime_run_embedded`, `lunet_runtime_request_stop`, `lunet_runtime_get_lua_state`, `lunet_runtime_shutdown`) are the embedding API shipped to downstream consumers in the release SDK. They are not trace wrappers over `_lunet_*` internals and are exempt from the wrapper convention.
 
@@ -144,7 +144,7 @@ After fixing the stack issue, discovered a crash in `db.close()`:
 
 ## Debugging Methodology: Memory Corruption & Segfaults
 
-This section documents the tools and techniques used to debug runtime crashes in lunet. The codebase has a layered debugging strategy — use them in order of increasing cost.
+This section documents the tools and techniques used to debug runtime crashes in lunet. The codebase has a layered debugging strategy - use them in order of increasing cost.
 
 ### Level 1: Domain Tracing (fprintf bisection)
 
@@ -184,7 +184,7 @@ The `--asan` option adds `-fsanitize=address -fno-omit-frame-pointer` to the lun
 
 **Important:** ASan's output goes to stderr, so check your log files. The process exits with `Abort trap: 6` (SIGABRT) instead of `Segmentation fault: 11`.
 
-**Limitations:** ASan links against the system LuaJIT dylib, so LuaJIT-internal frames may show as `lua_rawgeti+0x14` without source info. Our C functions may be inlined and missing from the trace. Register values (`x[0]` through `x[28]` on arm64) are still useful — `x[0]` is usually the first function argument.
+**Limitations:** ASan links against the system LuaJIT dylib, so LuaJIT-internal frames may show as `lua_rawgeti+0x14` without source info. Our C functions may be inlined and missing from the trace. Register values (`x[0]` through `x[28]` on arm64) are still useful - `x[0]` is usually the first function argument.
 
 ### Level 4: Memory Tracing (lunet_mem)
 
@@ -249,14 +249,14 @@ xmake stress
 ```
 
 ### 3. Application Load Testing (RealWorld Conduit)
-For full-stack load testing (HTTP -> Router -> Controller -> DB -> Coroutines), use the demo applications in [examples/realworld/](../examples/realworld/README.md) — in particular [realworld-lua](https://github.com/lua-lunet/realworld-lua).
+For full-stack load testing (HTTP -> Router -> Controller -> DB -> Coroutines), use the demo applications in [examples/realworld/](../examples/realworld/README.md) - in particular [realworld-lua](https://github.com/lua-lunet/realworld-lua).
 
 If the server crashes during load testing (exit code > 0 or SIGABRT), it is a **CRITICAL FAILURE**. Check logs for `[TRACE]` assertions.
 
 ## Type Annotations on API Surfaces (STRICT)
 
-Every **external API surface** — each `lunet.*` module and loader that ships
-in the release archives (`ext/*/*.lua` files installed into `lunet/`) — MUST
+Every **external API surface** - each `lunet.*` module and loader that ships
+in the release archives (`ext/*/*.lua` files installed into `lunet/`) - MUST
 carry complete LuaCATS annotations: a `---` summary plus a `---@param` for
 every argument and a `---@return` for every return value on every public
 function. The `types/lunet` shadow files and their `d.tl` counterparts stay
@@ -264,13 +264,13 @@ in step with the sources.
 
 The type gate makes this material: `xmake check-types` checks `types/`,
 `ext/` AND `examples/` with lua-language-server, so the demos are checked
-against the annotations — a demo that misuses a surface is a gate failure,
+against the annotations - a demo that misuses a surface is a gate failure,
 and an annotation that lies about a return type is a gate failure. The gate
 is mutation-verified each release train: changing one return type in a hinted
 file must fail the gate.
 
-**Internal exemption**: Lua that is not an external surface — C-facing glue,
-spec/test helpers, scripts under `bin/` — is exempt from full annotation
+**Internal exemption**: Lua that is not an external surface - C-facing glue,
+spec/test helpers, scripts under `bin/` - is exempt from full annotation
 when (a) the test suite covers it and (b) the names say what things do. Add
 annotations where the checker or a reviewer needs them.
 

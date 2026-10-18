@@ -13,7 +13,7 @@
 --
 -- TAMPER-TEST GEOMETRY: base64url carries 6 bits per character, so the
 -- final character of an unpadded segment holds bits the decoder may
--- ignore — flipping it can be a no-op. Tampering flips the FIRST
+-- ignore  -  flipping it can be a no-op. Tampering flips the FIRST
 -- character (or raw bytes), which always changes the decoded bytes.
 
 local bit = require("bit")
@@ -32,7 +32,7 @@ describe("security module #native", function()
 
   local ok, security = pcall(require, "lunet.security")
   if not ok then
-    pending("lunet.security not loadable — lunet.sodium needs liblunet_paxe (xmake build-paxe)",
+    pending("lunet.security not loadable  -  lunet.sodium needs liblunet_paxe (xmake build-paxe)",
       function() end)
     return
   end
@@ -95,8 +95,8 @@ describe("security module #native", function()
     end)
 
     it("reproduces the RFC 4231 long-key vectors through the standard hash-the-key path", function()
-      -- Keys longer than the HMAC block size are hashed first — RFC
-      -- 2104's own reduction — so the published RFC 4231 tags for the
+      -- Keys longer than the HMAC block size are hashed first  -  RFC
+      -- 2104's own reduction  -  so the published RFC 4231 tags for the
       -- 131-byte 0xaa key must come out exactly.
       local tag5 = crypto.sign("Test Using Larger Than Block-Size Key - Hash Key First", K_AA131)
       assert.equals("60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54",
@@ -110,7 +110,7 @@ describe("security module #native", function()
 
     it("reproduces the RFC 4231 short-key vectors over the raw secret", function()
       -- RFC 4231 test cases 1 and 2 verbatim: keys far shorter than
-      -- the block size, signed RAW (RFC 7518 HS256) — the retired
+      -- the block size, signed RAW (RFC 7518 HS256)  -  the retired
       -- derivation never produced these tags.
       local k20 = string.rep("\11", 20)
       local tag1 = crypto.sign("Hi There", k20)
@@ -131,7 +131,7 @@ describe("security module #native", function()
     it("produces the exact external-implementation signature for a short secret", function()
       -- The message is a JWT signing input (canonical HS256 header,
       -- fixed claims); the expected tag was computed with Python's
-      -- hmac module over the raw secret "secret" — the tag any
+      -- hmac module over the raw secret "secret"  -  the tag any
       -- standard HS256 library produces and expects.
       local message = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1MSJ9"
       local tag = crypto.sign(message, "secret")
@@ -143,8 +143,8 @@ describe("security module #native", function()
     it("rejects subkey-derived tags", function()
       -- Regression pin: the old implementation reduced every secret to
       -- a 32-byte SHA-256 subkey before HMAC. Its tag over the same
-      -- message and secret — reproduced here with an independent
-      -- implementation — must FAIL to verify under the raw-secret
+      -- message and secret  -  reproduced here with an independent
+      -- implementation  -  must FAIL to verify under the raw-secret
       -- policy, for both crypto.verify and jwt.decode.
       local message = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1MSJ9"
       local old_tag = unhex("2b603854b5a9b8840d7666007b8580493918757724941f784db808cb6949d2c8")
@@ -268,7 +268,7 @@ describe("security module #native", function()
   local native_jsonic = jok and pcall(jsonic.decode, "[1]")
 
   if not native_jsonic then
-    pending("lunet.jsonic native decoder not built (xmake build-jsonic) — jwt half pends",
+    pending("lunet.jsonic native decoder not built (xmake build-jsonic)  -  jwt half pends",
       function() end)
     return
   end
@@ -279,7 +279,7 @@ describe("security module #native", function()
     -- Segment helpers: the MAC covers the RAW base64url text
     -- (header_b64 .. "." .. payload_b64), so a valid signature for an
     -- arbitrary segment pair is computable even when the segments are
-    -- deliberately bogus — that isolates each decode-side check.
+    -- deliberately bogus  -  that isolates each decode-side check.
     local function seg(text)
       return crypto.b64url_encode(text)
     end
@@ -310,7 +310,7 @@ describe("security module #native", function()
       -- Fixed token bytes: the canonical HS256 header, {"sub":"u1"}
       -- claims, secret "secret", and the signature an external
       -- HMAC-SHA-256 (Python's hmac module) computes over the RAW
-      -- secret — the token any standard HS256 library emits MUST
+      -- secret  -  the token any standard HS256 library emits MUST
       -- decode here.
       local token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1MSJ9." ..
         "e1nQDHRa3tJWY02MUXI8-wDl0Q6cpqw0JpzJLvJOUZk"
@@ -341,7 +341,7 @@ describe("security module #native", function()
       assert.is_nil(err)
       assert.are.equal("u1", claims.sub)
       -- Reconciled design, stated: no exp claim means the token never
-      -- expires — decode succeeds without an exp check.
+      -- expires  -  decode succeeds without an exp check.
       local immortal = jwt.encode({ sub = "u1" }, SECRET)
       claims, err = jwt.decode(immortal, SECRET)
       assert.is_nil(err)
@@ -402,7 +402,7 @@ describe("security module #native", function()
     it("rejects an alg-confused header even under a valid signature", function()
       -- A token whose header declares alg=none (or any other
       -- algorithm) is malformed for this verifier even when the
-      -- signature over it is genuinely valid — the alg check runs
+      -- signature over it is genuinely valid  -  the alg check runs
       -- after the signature check and refuses anything but HS256.
       local none_header = seg('{"alg":"none","typ":"JWT"}')
       local payload_b64 = seg('{"sub":"u1"}')

@@ -8,20 +8,20 @@ A high-performance coroutine-based networking library for LuaJIT, built on top o
 
 > This project is based on [xialeistudio/lunet](https://github.com/xialeistudio/lunet) by [夏磊 (Xia Lei)](https://github.com/xialeistudio). See also his excellent write-up: [Lunet: Design and Implementation of a High-Performance Coroutine Network Library](https://www.ddhigh.com/en/2025/07/12/lunet-high-performance-coroutine-network-library/).
 
-Lunet's front-page use case is **tiny localhost MCP servers** — Model Context Protocol tools that sit next to an LLM client on loopback, idle in single-digit megabytes of RAM, and start instantly. Long-form motivation: **[The Talos, Ethos and 無為 of Lunet](docs/PHILOSOPHY.md)**.
+Lunet's front-page use case is **tiny localhost MCP servers** - Model Context Protocol tools that sit next to an LLM client on loopback, idle in single-digit megabytes of RAM, and start instantly. Long-form motivation: **[The Talos, Ethos and 無為 of Lunet](docs/PHILOSOPHY.md)**.
 
 ## Three ways to use Lunet
 
 | Path | Who it is for | What you need | Start here |
 |------|---------------|---------------|------------|
 | **Run Lua** | You write Lua apps; no C toolchain | A release archive for your OS | [Releases](https://github.com/lua-lunet/lunet/releases) |
-| **Package an appliance** | You ship one self-contained executable — your `main()` + Lunet + your app | The release SDK + a C compiler | [docs/EMBEDDING.md](docs/EMBEDDING.md) |
+| **Package an appliance** | You ship one self-contained executable - your `main()` + Lunet + your app | The release SDK + a C compiler | [docs/EMBEDDING.md](docs/EMBEDDING.md) |
 | **Hack the core** | You develop Lunet itself, or want a minimal feature build | xmake + system dev libraries | `make init`, then [docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md) |
 
 ## Get a runtime
 
 **The easy option: download a prebuilt release archive.** No toolchain at
-all — each [release](https://github.com/lua-lunet/lunet/releases) publishes
+all - each [release](https://github.com/lua-lunet/lunet/releases) publishes
 a self-contained archive (`lunet-linux-amd64.tar.gz`,
 `lunet-linux-arm64.tar.gz`, `lunet-macos.tar.gz`,
 `lunet-windows-amd64.zip`) containing `lunet-run` and every extension as a
@@ -35,7 +35,7 @@ tar -xzf lunet-macos.tar.gz
 ```
 
 (On Windows, download and unzip `lunet-windows-amd64.zip`.) The runtime
-packages your OS already ships satisfy the shared-library references — on
+packages your OS already ships satisfy the shared-library references - on
 Debian/Ubuntu: `libluajit-5.1-2 libuv1 zlib1g`, plus one package per
 extension you actually `require()` (for example `libsqlite3-0` for the
 SQLite driver, `libcurl4` for `lunet.httpc`). Verbatim dependency list and
@@ -45,19 +45,19 @@ What is inside the archive:
 
 | File | What it is |
 |------|-----------|
-| `lunet-run` | standalone executable — run Lua apps directly |
+| `lunet-run` | standalone executable - run Lua apps directly |
 | `lunet.so` | core shared library for `require("lunet")` |
-| `lunet/` | prebuilt extension modules: the `sqlite3` driver as `sqlite3core.so` + its `sqlite3.lua` loader (full reference: `ext/sqlite3/SQLITE.md`), `mysql` / `postgres` drivers + transaction wrappers, `httpc`, the Rust extensions (`lnt_shared`, `jsonic`, `paxe`, `sodium`) as `.so` / `.dylib` / `.dll` — canonical list: [docs/RELEASE-LAYOUT.md](docs/RELEASE-LAYOUT.md) |
+| `lunet/` | prebuilt extension modules: the `sqlite3` driver as `sqlite3core.so` + its `sqlite3.lua` loader (full reference: `ext/sqlite3/SQLITE.md`), `mysql` / `postgres` drivers + transaction wrappers, `httpc`, the Rust extensions (`lnt_shared`, `jsonic`, `paxe`, `sodium`) as `.so` / `.dylib` / `.dll` - canonical list: [docs/RELEASE-LAYOUT.md](docs/RELEASE-LAYOUT.md) |
 | `types/` | LuaCATS annotations for editor completion |
 | `*.md` | bundled docs |
 
-You can also build from source to get into the low levels — see
+You can also build from source to get into the low levels - see
 [docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md). That path is required
 when the target rules out prebuilt binaries; otherwise use the archive.
 
 ## Security posture: loopback by default
 
-Lunet refuses to bind listeners to anything other than `127.0.0.1`, `::1`, or a Unix socket — **no remote security holes by default**. To expose a service, put a battle-hardened sidecar in front (nginx, OpenResty, Caddy, Envoy — the admin picks) so protocol-smashing attacks die at the proxy, not in your Lua coroutine. On a private network whose only ingress is a hardened cloud proxy that scrubs bad traffic and absorbs DDoS, binding all interfaces can be safe — but Lunet makes you say that out loud with the explicit `--dangerously-skip-loopback-restriction` flag. Details: [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md).
+Lunet refuses to bind listeners to anything other than `127.0.0.1`, `::1`, or a Unix socket - **no remote security holes by default**. To expose a service, put a battle-hardened sidecar in front (nginx, OpenResty, Caddy, Envoy - the admin picks) so protocol-smashing attacks die at the proxy, not in your Lua coroutine. On a private network whose only ingress is a hardened cloud proxy that scrubs bad traffic and absorbs DDoS, binding all interfaces can be safe - but Lunet makes you say that out loud with the explicit `--dangerously-skip-loopback-restriction` flag. Details: [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md).
 
 ## Philosophy: No Bloat, No Kitchen Sink
 
@@ -65,19 +65,19 @@ Lunet is **modular by design**. You build only what you need:
 
 - **Core** (`lunet`): TCP/UDP sockets, filesystem, timers, signals
 - **Database drivers** (optional xmake targets):
-  - `lunet-sqlite3` - SQLite3 driver
-  - `lunet-mysql` - MySQL/MariaDB driver
-  - `lunet-postgres` - PostgreSQL driver
+ - `lunet-sqlite3` - SQLite3 driver
+ - `lunet-mysql` - MySQL/MariaDB driver
+ - `lunet-postgres` - PostgreSQL driver
 - **Outbound HTTPS client** (optional xmake target):
-  - `lunet-httpc` - HTTPS client via libcurl (`require("lunet.httpc")`; reference: [docs/HTTPC.md](docs/HTTPC.md))
+ - `lunet-httpc` - HTTPS client via libcurl (`require("lunet.httpc")`; reference: [docs/HTTPC.md](docs/HTTPC.md))
 - **Shared dictionary** (optional Rust extension, Linux/macOS):
-  - `lunet.lnt_shared` - lunet-style shared dict via Rust FFI (`xmake build-lnt-shared`)
+ - `lunet.lnt_shared` - lunet-style shared dict via Rust FFI (`xmake build-lnt-shared`)
 - **JSON** (optional Rust extension, Linux/macOS):
-  - `lunet.jsonic` - dkjson-style encode/decode; decode via Rust FFI wrapping [jsonic](https://github.com/g1mv/jsonic) (`xmake build-jsonic`)
+ - `lunet.jsonic` - dkjson-style encode/decode; decode via Rust FFI wrapping [jsonic](https://github.com/g1mv/jsonic) (`xmake build-jsonic`)
 - **Datagram encryption** (optional Rust extension, all platforms):
-  - `lunet.paxe` - AES-256-GCM datagram encryption via Rust FFI, statically linking libsodium (`xmake build-paxe`; reference: [docs/PAXE.md](docs/PAXE.md))
-- **Crypto / JWT** (Lua module, no binary of its own — its crypto is libsodium reached through the FFI via `lunet.sodium` / `liblunet_paxe`):
-  - `lunet.security` - HMAC-SHA-256 sign/verify, base64url, and JWT HS256 over `lunet.sodium` + `lunet.jsonic` (reference: [docs/CRYPTO_SECURITY.md](docs/CRYPTO_SECURITY.md))
+ - `lunet.paxe` - AES-256-GCM datagram encryption via Rust FFI, statically linking libsodium (`xmake build-paxe`; reference: [docs/PAXE.md](docs/PAXE.md))
+- **Crypto / JWT** (Lua module, no binary of its own - its crypto is libsodium reached through the FFI via `lunet.sodium` / `liblunet_paxe`):
+ - `lunet.security` - HMAC-SHA-256 sign/verify, base64url, and JWT HS256 over `lunet.sodium` + `lunet.jsonic` (reference: [docs/CRYPTO_SECURITY.md](docs/CRYPTO_SECURITY.md))
 
 Build one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
 
@@ -106,7 +106,7 @@ LuaJIT, libuv, and zlib are required dependencies; each driver adds only its own
 
 ## Example: MCP-SSE Servers
 
-For a minimal in-repo starting point see [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) — an SSE-transport MCP server that calls the [OpenAlex](https://openalex.org/) scholarly API via `lunet.httpc`, with no database and no filesystem state.
+For a minimal in-repo starting point see [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) - an SSE-transport MCP server that calls the [OpenAlex](https://openalex.org/) scholarly API via `lunet.httpc`, with no database and no filesystem state.
 
 [lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) is a fuller MCP (Model Context Protocol) server with Tavily web search.
 
@@ -122,7 +122,7 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1
 If you downloaded a prebuilt release archive instead of building, point
 `LUNET_BIN` at its `lunet-run`: the `lunet/` directory next to it already
 ships every extension listed in the "Requires" column below as a prebuilt
-binary — `xmake build <target>` is only needed when you build from source.
+binary - `xmake build <target>` is only needed when you build from source.
 
 | # | Example | What it shows | Requires | Run |
 |---:|---------|---------------|----------|-----|
@@ -131,11 +131,11 @@ binary — `xmake build <target>` is only needed when you build from source.
 | 03 | [`examples/03_db_sqlite3.lua`](examples/03_db_sqlite3.lua) | SQLite3 CRUD + the `(rw, ro)` read/write split (reads inline on the loop thread) | `xmake build lunet-sqlite3` | `"$LUNET_BIN" examples/03_db_sqlite3.lua` |
 | 04 | [`examples/04_db_mysql.lua`](examples/04_db_mysql.lua) | MySQL CRUD + prepared statements (`?`) | `xmake build lunet-mysql` + MySQL server | `"$LUNET_BIN" examples/04_db_mysql.lua` |
 | 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + prepared statements (`$1`) | `xmake build lunet-postgres` + Postgres server | `"$LUNET_BIN" examples/05_db_postgres.lua` |
-| 08 | [`examples/08_http.lua`](examples/08_http.lua) | HTTP server + router (`lunet.http`, `lunet.http_router`) with middleware and opt-in CORS; `lnt_shared` counters as a contrived kv store — GET reads, POST increments, PATCH adjusts | `xmake build-release` + `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_http.lua` |
+| 08 | [`examples/08_http.lua`](examples/08_http.lua) | HTTP server + router (`lunet.http`, `lunet.http_router`) with middleware and opt-in CORS; `lnt_shared` counters as a contrived kv store - GET reads, POST increments, PATCH adjusts | `xmake build-release` + `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_http.lua` |
 | 09 | [`examples/09_jsonic_demo.lua`](examples/09_jsonic_demo.lua) | dkjson-style JSON encode/decode via Rust FFI | `xmake build-jsonic` | `"$LUNET_BIN" examples/09_jsonic_demo.lua` |
 | 10 | [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) | **Canonical tiny MCP server**: SSE transport + OpenAlex API via `lunet.httpc`, no DB, loopback only | `xmake build lunet-httpc` + `OPEN_ALEX_API_KEY` in `.env` | `"$LUNET_BIN" examples/mcp_openalex_sse/main.lua` |
 
-See [`examples/realworld/README.md`](examples/realworld/README.md) — which
+See [`examples/realworld/README.md`](examples/realworld/README.md) - which
 signposts the complete RealWorld "Conduit" implementation at
 [lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua) for how
 to build a more typical app with Lunet with a smaller footprint and faster
@@ -203,7 +203,7 @@ xmake build lunet-postgres  # PostgreSQL
 ```lua
 local db = require("lunet.sqlite3")
 
--- Open: returns TWO connections — rw (worker pool) + ro (reads run
+-- Open: returns TWO connections - rw (worker pool) + ro (reads run
 -- inline on the loop thread). The pair is cached per path; create="WAL"
 -- provisions a new file with the sticky WAL journal mode in one act.
 -- Full reference: ext/sqlite3/SQLITE.md
@@ -275,7 +275,7 @@ db.close(conn)
 
 | Function | Description | Returns |
 |----------|-------------|---------|
-| `db.open(config)` | Open connection(s): sqlite3 returns the cached `(rw, ro)` pair per path — `create = "WAL"\|"NORMAL"` lets the driver provision a new file (without it the file must exist); postgres/mysql return one connection (optionally pooled via `pool_size`, default 1) | connection handle(s) |
+| `db.open(config)` | Open connection(s): sqlite3 returns the cached `(rw, ro)` pair per path - `create = "WAL"\|"NORMAL"` lets the driver provision a new file (without it the file must exist); postgres/mysql return one connection (optionally pooled via `pool_size`, default 1) | connection handle(s) |
 | `db.close(conn)` | Close connection | - |
 | `db.query(conn, sql, ...)` | Execute SELECT (with optional parameters) | array of row tables |
 | `db.exec(conn, sql, ...)` | Execute INSERT/UPDATE/DELETE (with optional parameters) | result table (`affected_rows`, `last_insert_id`) |
@@ -306,12 +306,12 @@ Two properties to be aware of:
   the last command's rows and `affected_rows` are returned.
 - **The transaction lives on the connection handle, not on the coroutine.** All
   statements in a transaction must use the same `conn`. If your application
-  pools connections, pin one handle for the whole transaction — a pool that
+  pools connections, pin one handle for the whole transaction - a pool that
   leases a connection per call will scatter `BEGIN` and `COMMIT` across
   different sessions. Do not let another coroutine use that handle until you
   have committed.
 
-### Shared Dictionary (`lunet.lnt_shared`) — Linux / macOS
+### Shared Dictionary (`lunet.lnt_shared`) - Linux / macOS
 
 A lunet-style shared dictionary backed by a Rust FFI library. It is a pure
 opt-in extension.
@@ -362,14 +362,14 @@ dictionary; all state lives in the region (no heap for persistent data);
 FNV-1a open-address hash table; bump allocator; single spinlock.  Multiple
 handles opened with the same name share the same region within a process.
 
-### JSON (`lunet.jsonic`) — Linux / macOS
+### JSON (`lunet.jsonic`) - Linux / macOS
 
 A dkjson-compatible `encode`/`decode`/`null` API, plus fixed-shape render
 helpers (`jstr` quotes a string with the same escaper as `encode`; `jint`
 renders a number exactly as `encode` would) for response builders that
 assemble JSON byte strings with static prefixes. Decoding is backed by a
 Rust FFI wrapper around [jsonic](https://github.com/g1mv/jsonic) (MIT /
-Apache-2.0, zero runtime dependencies) — see `ext/jsonic/NOTICE.md` for full
+Apache-2.0, zero runtime dependencies) - see `ext/jsonic/NOTICE.md` for full
 attribution. `jsonic` itself only parses; `encode()` is plain, dependency-free
 Lua.
 
@@ -401,7 +401,7 @@ Build with `xmake build-debug` to enable coroutine reference tracking and stack 
 
 ## Debugging
 
-Lunet has a layered debugging strategy for runtime crashes. Use them in order — each level is more expensive but gives more detail.
+Lunet has a layered debugging strategy for runtime crashes. Use them in order - each level is more expensive but gives more detail.
 
 ### Quick Reference
 
@@ -560,8 +560,8 @@ xmake ci      # Full local CI parity check
 
 ## Downstream Integration
 
-- **[Integration guide](docs/XMAKE_INTEGRATION.md)** — Build Lunet and integrate it into your project (beginner-friendly)
-- **[Badge guide](docs/BADGES.md)** — Add badges (build status, Lunet version) to your project README
+- **[Integration guide](docs/XMAKE_INTEGRATION.md)** - Build Lunet and integrate it into your project (beginner-friendly)
+- **[Badge guide](docs/BADGES.md)** - Add badges (build status, Lunet version) to your project README
 
 ## License
 

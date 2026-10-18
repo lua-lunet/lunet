@@ -498,7 +498,7 @@ describe("http extension modules", function()
 
       assert.are.equal("request-close", outcome)
       assert.are.equal(2, #responses)
-      -- First response: persistent — no Connection header, loop stayed open.
+      -- First response: persistent  -  no Connection header, loop stayed open.
       assert.are.truthy(responses[1]:find('{"name":"one"}', 1, true))
       assert.is_nil(responses[1]:find("connection:", 1, false))
       -- Second response: the request declared close, so the response does

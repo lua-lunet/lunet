@@ -8,17 +8,17 @@
 -- (the C ABI has no fanout sealer).
 --
 -- ERROR CONVENTION (uniform, documented in docs/PAXE.md):
---   * Malformed arguments RAISE a Lua error — they are bugs in the
+--   * Malformed arguments RAISE a Lua error  -  they are bugs in the
 --     calling script. This covers wrong Lua types (checked here) and
 --     out-of-range / constraint-violating values (checked in Rust, where
 --     the message names the constraint: node id 0-65535, epoch 0-31,
 --     channels 1-99 reserved, key exactly 32 bytes).
---   * Operational failures return nil, message — conditions the script
+--   * Operational failures return nil, message  -  conditions the script
 --     handles: not initialised, AES-GCM unavailable, no key installed,
 --     payload over the mode maximum, keystore at capacity.
 --   * open() is special: EVERY frame-level failure returns nil plus ONE
 --     opaque message ("lunet.paxe: frame rejected"). The rejection
---     reason is never surfaced — a receiver that explains why a forgery
+--     reason is never surfaced  -  a receiver that explains why a forgery
 --     failed is a decryption oracle (docs/PAXE.md "Failure Handling").
 --
 -- NO PANIC GUARANTEE: the cdylib is built panic = "abort", so a Rust
@@ -28,7 +28,7 @@
 -- out-of-range values reach the Rust checks untruncated; this module
 -- guarantees the conversion is exact (integer within uint32).
 --
--- Protected UDP sockets are HERE — paxe.protect / unprotect /
+-- Protected UDP sockets are HERE  -  paxe.protect / unprotect /
 -- is_protected below, wired in THIS Lua layer by intercepting the
 -- lunet.udp module table (the recorded integration decision is in the
 -- comment block above the protect section). set_enabled/is_enabled
@@ -42,7 +42,7 @@
 --
 -- KEY MATERIAL: all keys live in the Rust keystore (guarded, mlocked,
 -- zeroed-on-drop libsodium allocations). The 32-byte string passed to
--- keystore_set transits the Lua VM unguarded — see docs/PAXE.md "Lua API"
+-- keystore_set transits the Lua VM unguarded  -  see docs/PAXE.md "Lua API"
 -- for the honest statement of that limitation.
 
 local ffi = require("ffi")
@@ -109,7 +109,7 @@ local function find_lib()
 end
 
 -- Loaded eagerly at require: the protocol constants below are read from
--- the cdylib at load time (single source of truth — they are NOT
+-- the cdylib at load time (single source of truth  -  they are NOT
 -- restated as literals here), so the library must be present either way.
 local C = ffi.load(find_lib())
 
@@ -138,7 +138,7 @@ local M = {}
 -- C hard-coded 36 and 82 in a #define and in the docs and both were
 -- wrong; these can never drift from the implementation. The DEK pair
 -- describes reusable-DEK fanout frames this host may RECEIVE from a Rust
--- fanout host — the C ABI seals standard frames only.
+-- fanout host  -  the C ABI seals standard frames only.
 M.OVERHEAD_STANDARD = tonumber(C.lunet_paxe_overhead_standard())   -- 37
 M.OVERHEAD_DEK = tonumber(C.lunet_paxe_overhead_dek())             -- 97
 M.MAX_PAYLOAD_STANDARD = tonumber(C.lunet_paxe_max_payload_standard()) -- 65470
@@ -157,7 +157,7 @@ local function last_error()
 end
 
 -- Dispatch a non-zero return code: RC_INVAL raises (a bug in the calling
--- script — error level 3 lands on the caller of the public function),
+-- script  -  error level 3 lands on the caller of the public function),
 -- RC_ERR returns nil, message (a condition the script handles).
 local function check_rc(rc)
   local msg = last_error()
@@ -205,10 +205,10 @@ end
 -- Whether set_local_id has configured the module through THIS loader
 -- (the FFI store is per-process and this module is its only client, so
 -- the mirror is exact). protect() refuses to arm a socket while the
--- module is unconfigured — otherwise every datagram would drop silently.
+-- module is unconfigured  -  otherwise every datagram would drop silently.
 local configured = false
 
---- Configure this node's identity — ONCE. node_id must fit u16
+--- Configure this node's identity  -  ONCE. node_id must fit u16
 --- (0-65535). A second call without an intervening shutdown() raises:
 --- silently re-creating the keystore would erase installed keys.
 --- Returns true.
@@ -267,11 +267,11 @@ function M.keystore_clear()
 end
 
 --- Seal `payload` (string) for `to_id` on `channel` as a standard
---- one-recipient frame — the C ABI's only sealing mode (reusable-DEK
+--- one-recipient frame  -  the C ABI's only sealing mode (reusable-DEK
 --- fanout sealing is Rust API-only; this host can still OPEN such frames
 --- received from a Rust fanout host). The frame's fromId is the
 --- configured local id; the send epoch is the NEWEST epoch installed for
---- to_id (installing a new epoch switches senders to it — docs/PAXE.md
+--- to_id (installing a new epoch switches senders to it  -  docs/PAXE.md
 --- "Rotation"). channel must fit u16 and must not be in the reserved
 --- system range 1-99 (application channels start at 100; channel 0 is
 --- permitted). Returns the frame string, or nil, message (not configured,
@@ -297,8 +297,8 @@ end
 
 --- Open one received `frame` (string). On success returns the payload
 --- string, the authenticated from_id, the channel, and the mode as a
---- string ("standard" or "dek"). On ANY failure — malformed, unknown
---- key, authentication, unconfigured — returns nil plus the ONE opaque
+--- string ("standard" or "dek"). On ANY failure  -  malformed, unknown
+--- key, authentication, unconfigured  -  returns nil plus the ONE opaque
 --- message OPEN_REJECTED: the reason is deliberately never surfaced.
 ---@param frame string The received frame
 ---@return string|nil payload Decrypted payload, or nil on rejection
@@ -342,7 +342,7 @@ local STAT_FIELDS = {
 --- of numbers. Because open() never reveals WHY a frame was rejected
 --- (decryption-oracle avoidance), these counters are the only diagnostic
 --- channel: rx_total must always equal rx_ok plus the sum of the seven
---- rx_ reject reasons. The counters NEVER reset while the process lives —
+--- rx_ reject reasons. The counters NEVER reset while the process lives  - 
 --- measure DELTAS: snapshot before and after the window of interest;
 --- never assert an absolute value.
 ---@return lunet.paxe.stats stats
@@ -381,12 +381,12 @@ end
 -- ── Protected UDP sockets ──────────────────────────────────────────────
 --
 -- INTEGRATION LAYER (recorded decision): protection is wired HERE, in
--- Lua, by intercepting the lunet.udp module table — NOT in src/udp.c.
+-- Lua, by intercepting the lunet.udp module table  -  NOT in src/udp.c.
 --  * The Rust core is already reachable from Lua through this FFI loader;
 --    wiring udp.c would need a new C ABI into Rust AND would link the
 --    cdylib into lunet-run, which is deliberately NOT linked (PAXE is a
 --    pure opt-in extension).
---  * udp.c's recv callback runs on the libuv loop, not a Lua coroutine —
+--  * udp.c's recv callback runs on the libuv loop, not a Lua coroutine  - 
 --    exactly the context the project notes (AGENTS.md) document for
 --    use-after-free crashes (dangling lua_State* in long-lived handles,
 --    registry ops on ctx->co). No crypto or key material goes near it.
@@ -395,24 +395,24 @@ end
 --    untouched, and unprotected sockets pay only one table lookup.
 --
 -- DECRYPTION TIME (recorded decision): DELIVERY-time, when Lua calls
--- udp.recv — not arrival-time in the libuv callback. Consequences,
+-- udp.recv  -  not arrival-time in the libuv callback. Consequences,
 -- accepted deliberately:
 --  * The C receive queue holds CIPHERTEXT, never plaintext: no opened
 --    payload lingers in C memory between arrival and recv, and no key
 --    material is needed at queue-drain time.
 --  * A close-flush (udp.close draining its queue) discards ciphertext
---    that was never authenticated — uncounted, because it never reached
+--    that was never authenticated  -  uncounted, because it never reached
 --    the gate below. That is the same end state as a drop, for frames
 --    that were undeliverable anyway (the socket is closing).
 --  * The trade-off accepted: crypto work happens per recv call in
---    coroutine context rather than per arrival in the event loop — which
+--    coroutine context rather than per arrival in the event loop  -  which
 --    is also where Lua errors can be raised safely.
 --
 -- TRACING: no parallel mechanism is invented here. Datagram arrival is
 -- already visible through udp.c's UDP_TRACE_RX in trace builds; every
 -- drop below (plaintext gate or open rejection) is counted in Rust and
--- flows through the failure policy — silent / log_once / verbose
--- "[PAXE] drop: <reason>" lines — exactly like a synchronous paxe.open.
+-- flows through the failure policy  -  silent / log_once / verbose
+-- "[PAXE] drop: <reason>" lines  -  exactly like a synchronous paxe.open.
 
 local udp_mod -- the shared lunet.udp module table, captured on first protect
 local raw_send, raw_recv, raw_close
@@ -433,7 +433,7 @@ local function protected_send(sock, host, port, data, peer, channel)
   local frame, err = M.seal(data, peer, channel)
   if frame == nil then
     -- Operational failure (unconfigured, no key for the peer, or an
-    -- oversized payload — the message names the standard-mode maximum
+    -- oversized payload  -  the message names the standard-mode maximum
     -- and tx_oversize was counted in Rust): the send FAILS with a clear
     -- error and NOTHING is transmitted. Never truncated, never raw.
     return nil, err
@@ -453,7 +453,7 @@ local function protected_recv(sock)
     end
     -- The explicit plaintext gate FIRST: a datagram that is not a PAXE
     -- frame addressed to this node (under the 9-byte prefix, or a toId
-    -- that is not us) is dropped and counted as rx_plaintext in Rust —
+    -- that is not us) is dropped and counted as rx_plaintext in Rust  - 
     -- by the addressing check, NEVER by the flags byte, which crafted
     -- plaintext could pass.
     if C.lunet_paxe_frame_for_us(data, #data) == 1 then
@@ -465,8 +465,8 @@ local function protected_recv(sock)
         return plain, host, port, from_id, channel
       end
       -- Rejected: the reason counter already moved inside Rust. Deliver
-      -- NOTHING — no data, no error indicator (decryption-oracle
-      -- avoidance) — and wait for the next datagram.
+      -- NOTHING  -  no data, no error indicator (decryption-oracle
+      -- avoidance)  -  and wait for the next datagram.
     end
   end
 end
@@ -496,14 +496,14 @@ local function check_u16(v, name)
   return v
 end
 
---- Opt ONE UDP socket into PAXE protection (per-socket decision — there
+--- Opt ONE UDP socket into PAXE protection (per-socket decision  -  there
 --- is deliberately no process-global switch: a global cannot express
 --- mixed encrypted/unencrypted traffic, and with one mechanism there is
 --- no precedence question).
 ---
 --- `sock` is a handle from udp.bind(). `config` is a table:
 ---   peer    (required) the PAXE node id this socket seals for and
----           expects frames from — the PAXE identity of the remote end,
+---           expects frames from  -  the PAXE identity of the remote end,
 ---           independent of the IP address sent to (the frame's
 ---           authenticated toId is what protects against misdelivery).
 ---   channel (optional, default 0) the channel outgoing datagrams are
@@ -523,7 +523,7 @@ end
 ---
 --- Raises (a bug in the calling script) on a non-handle socket, a
 --- non-table config, an out-of-range peer/channel, or when the module
---- is not configured (set_local_id first) — arming an unconfigured
+--- is not configured (set_local_id first)  -  arming an unconfigured
 --- socket would silently drop every datagram. Returns true.
 ---@param sock userdata UDP handle from `udp.bind()`
 ---@param config lunet.paxe.config

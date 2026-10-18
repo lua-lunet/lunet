@@ -8,19 +8,19 @@
 
 > 本项目基于 [夏磊 (Xia Lei)](https://github.com/xialeistudio) 的 [xialeistudio/lunet](https://github.com/xialeistudio/lunet)。详见他的精彩文章：[Lunet：高性能协程网络库的设计与实现](https://www.ddhigh.com/2025/07/12/lunet-high-performance-coroutine-network-library/)。
 
-Lunet 的首页用例是**微型 localhost MCP 服务器** —— 运行在 LLM 客户端旁、回环地址上的 Model Context Protocol 工具：空闲时只占个位数 MB 内存，瞬间启动。长篇理念阐述请阅读：**[Lunet 的 Talos、Ethos 与無為](docs/PHILOSOPHY-CN.md)**。
+Lunet 的首页用例是**微型 localhost MCP 服务器** - 运行在 LLM 客户端旁、回环地址上的 Model Context Protocol 工具：空闲时只占个位数 MB 内存，瞬间启动。长篇理念阐述请阅读：**[Lunet 的 Talos、Ethos 与無為](docs/PHILOSOPHY-CN.md)**。
 
 ## 三种使用 Lunet 的方式
 
 | 路径 | 适合谁 | 需要什么 | 从这里开始 |
 |------|--------|----------|------------|
 | **运行 Lua** | 你写 Lua 应用；不想碰 C 工具链 | 对应 OS 的发布压缩包 | [发布页](https://github.com/lua-lunet/lunet/releases) |
-| **打包一体机** | 你要交付单一自包含可执行文件 —— 你的 `main()` + Lunet + 你的应用 | 发布版 SDK + 一个 C 编译器 | [docs/EMBEDDING-CN.md](docs/EMBEDDING-CN.md) |
+| **打包一体机** | 你要交付单一自包含可执行文件 - 你的 `main()` + Lunet + 你的应用 | 发布版 SDK + 一个 C 编译器 | [docs/EMBEDDING-CN.md](docs/EMBEDDING-CN.md) |
 | **hack 核心** | 你开发 Lunet 本身，或想要最小化功能构建 | xmake + 系统开发库 | `make init`，然后 [docs/XMAKE_INTEGRATION-CN.md](docs/XMAKE_INTEGRATION-CN.md) |
 
 ## 获取运行时
 
-**最省事的办法：直接下载预构建发布包。** 无需任何工具链 —— 每个
+**最省事的办法：直接下载预构建发布包。** 无需任何工具链 - 每个
 [发布](https://github.com/lua-lunet/lunet/releases) 都会发布自包含压缩包
 （`lunet-linux-amd64.tar.gz`、`lunet-linux-arm64.tar.gz`、
 `lunet-macos.tar.gz`、`lunet-windows-amd64.zip`），内含 `lunet-run` 与全部
@@ -34,7 +34,7 @@ tar -xzf lunet-macos.tar.gz
 ```
 
 （Windows 用户：下载并解压 `lunet-windows-amd64.zip`。）共享库引用由你
-操作系统已有的运行时包满足 —— 在 Debian/Ubuntu 上：`libluajit-5.1-2
+操作系统已有的运行时包满足 - 在 Debian/Ubuntu 上：`libluajit-5.1-2
 libuv1 zlib1g`，再为你实际 `require()` 的每个扩展装一个运行时包（例如
 SQLite 驱动装 `libsqlite3-0`，`lunet.httpc` 装 `libcurl4`）。完整的依赖
 清单与平台说明见：[docs/RELEASE-LAYOUT-CN.md](docs/RELEASE-LAYOUT-CN.md)。
@@ -43,19 +43,19 @@ SQLite 驱动装 `libsqlite3-0`，`lunet.httpc` 装 `libcurl4`）。完整的依
 
 | 文件 | 是什么 |
 |------|--------|
-| `lunet-run` | 独立可执行文件 —— 直接运行 Lua 应用 |
+| `lunet-run` | 独立可执行文件 - 直接运行 Lua 应用 |
 | `lunet.so` | `require("lunet")` 使用的核心共享库 |
-| `lunet/` | 预构建扩展模块：`sqlite3` 驱动为 `sqlite3core.so` + 其 `sqlite3.lua` 加载器（完整参考：`ext/sqlite3/SQLITE-CN.md`）、`mysql` / `postgres` 驱动 + 事务包装、`httpc`、Rust 扩展（`lnt_shared`、`jsonic`、`paxe`、`sodium`）的 `.so` / `.dylib` / `.dll` —— 规范清单见 [docs/RELEASE-LAYOUT-CN.md](docs/RELEASE-LAYOUT-CN.md) |
+| `lunet/` | 预构建扩展模块：`sqlite3` 驱动为 `sqlite3core.so` + 其 `sqlite3.lua` 加载器（完整参考：`ext/sqlite3/SQLITE-CN.md`）、`mysql` / `postgres` 驱动 + 事务包装、`httpc`、Rust 扩展（`lnt_shared`、`jsonic`、`paxe`、`sodium`）的 `.so` / `.dylib` / `.dll` - 规范清单见 [docs/RELEASE-LAYOUT-CN.md](docs/RELEASE-LAYOUT-CN.md) |
 | `types/` | 用于编辑器补全的 LuaCATS 注解 |
 | `*.md` | 随附文档 |
 
-你也可以从源码构建、深入底层细节 —— 见
+你也可以从源码构建、深入底层细节 - 见
 [docs/XMAKE_INTEGRATION-CN.md](docs/XMAKE_INTEGRATION-CN.md)。当目标环境
 不允许使用预构建二进制时必须走这条路；除此之外请直接使用发布压缩包。
 
 ## 安全姿态：默认仅回环
 
-Lunet 拒绝把监听器绑定到 `127.0.0.1`、`::1` 或 Unix socket 以外的地址 —— **默认没有远程安全漏洞**。要对外暴露服务，请在前面放一个久经考验的 sidecar（nginx、OpenResty、Caddy、Envoy，由管理员选择），让协议拆分攻击死在代理层而不是你的 Lua 协程里。在唯一入口是加固云代理（清洗畸形流量、吸收 DDoS）的私有网络中，绑定所有网卡可以是安全的 —— 但 Lunet 要求你用显式的 `--dangerously-skip-loopback-restriction` 标志郑重声明这一点。详见 [docs/SECURITY_ARCHITECTURE-CN.md](docs/SECURITY_ARCHITECTURE-CN.md)。
+Lunet 拒绝把监听器绑定到 `127.0.0.1`、`::1` 或 Unix socket 以外的地址 - **默认没有远程安全漏洞**。要对外暴露服务，请在前面放一个久经考验的 sidecar（nginx、OpenResty、Caddy、Envoy，由管理员选择），让协议拆分攻击死在代理层而不是你的 Lua 协程里。在唯一入口是加固云代理（清洗畸形流量、吸收 DDoS）的私有网络中，绑定所有网卡可以是安全的 - 但 Lunet 要求你用显式的 `--dangerously-skip-loopback-restriction` 标志郑重声明这一点。详见 [docs/SECURITY_ARCHITECTURE-CN.md](docs/SECURITY_ARCHITECTURE-CN.md)。
 
 ## 设计理念：无冗余，无臃肿
 
@@ -63,25 +63,25 @@ Lunet 采用**模块化设计**。只构建你需要的：
 
 - **核心** (`lunet`)：TCP/UDP 套接字、文件系统、定时器、信号
 - **数据库驱动**（可选 xmake 目标）：
-  - `lunet-sqlite3` - SQLite3 驱动
-  - `lunet-mysql` - MySQL/MariaDB 驱动
-  - `lunet-postgres` - PostgreSQL 驱动
+ - `lunet-sqlite3` - SQLite3 驱动
+ - `lunet-mysql` - MySQL/MariaDB 驱动
+ - `lunet-postgres` - PostgreSQL 驱动
 - **出站 HTTPS 客户端**（可选 xmake 目标）：
-  - `lunet-httpc` - 基于 libcurl 的 HTTPS 客户端（`require("lunet.httpc")`；参考：[docs/HTTPC-CN.md](docs/HTTPC-CN.md)）
+ - `lunet-httpc` - 基于 libcurl 的 HTTPS 客户端（`require("lunet.httpc")`；参考：[docs/HTTPC-CN.md](docs/HTTPC-CN.md)）
 - **共享字典**（可选 Rust 扩展，Linux/macOS）：
-  - `lunet.lnt_shared` - lunet 风格的共享字典，通过 Rust FFI 实现（`xmake build-lnt-shared`）
+ - `lunet.lnt_shared` - lunet 风格的共享字典，通过 Rust FFI 实现（`xmake build-lnt-shared`）
 - **JSON**（可选 Rust 扩展，Linux/macOS）：
-  - `lunet.jsonic` - dkjson 风格的编解码；解码通过 Rust FFI 封装 [jsonic](https://github.com/g1mv/jsonic)（`xmake build-jsonic`）
+ - `lunet.jsonic` - dkjson 风格的编解码；解码通过 Rust FFI 封装 [jsonic](https://github.com/g1mv/jsonic)（`xmake build-jsonic`）
 - **数据报加密**（可选 Rust 扩展，全平台）：
-  - `lunet.paxe` - 通过 Rust FFI 的 AES-256-GCM 数据报加密，静态链接 libsodium（`xmake build-paxe`；参考：[docs/PAXE-CN.md](docs/PAXE-CN.md)）
-- **加密 / JWT**（Lua 模块，本身无二进制 —— 其加密是经 FFI 由 `lunet.sodium` / `liblunet_paxe` 调用 libsodium 实现）：
-  - `lunet.security` - 基于 `lunet.sodium` + `lunet.jsonic` 的 HMAC-SHA-256 签名/验证、base64url 与 JWT HS256（参考：[docs/CRYPTO_SECURITY-CN.md](docs/CRYPTO_SECURITY-CN.md)）
+ - `lunet.paxe` - 通过 Rust FFI 的 AES-256-GCM 数据报加密，静态链接 libsodium（`xmake build-paxe`；参考：[docs/PAXE-CN.md](docs/PAXE-CN.md)）
+- **加密 / JWT**（Lua 模块，本身无二进制 - 其加密是经 FFI 由 `lunet.sodium` / `liblunet_paxe` 调用 libsodium 实现）：
+ - `lunet.security` - 基于 `lunet.sodium` + `lunet.jsonic` 的 HMAC-SHA-256 签名/验证、base64url 与 JWT HS256（参考：[docs/CRYPTO_SECURITY-CN.md](docs/CRYPTO_SECURITY-CN.md)）
 
 只构建一个数据库驱动，而不是全部。没有未使用的依赖。不需要为从未使用的库打安全补丁。
 
 ### 为什么使用 lunet 数据库驱动？
 
-你可能会想"我可以直接用 LuaJIT FFI 调用 sqlite3/libpq/libmysqlclient"——确实可以。但这些调用是**阻塞的**。它们会在等待数据库时冻结整个事件循环。
+你可能会想"我可以直接用 LuaJIT FFI 调用 sqlite3/libpq/libmysqlclient" - 确实可以。但这些调用是**阻塞的**。它们会在等待数据库时冻结整个事件循环。
 
 Lunet 数据库驱动是**协程安全的**：
 - 查询在 libuv 线程池上运行 (`uv_work_t`)
@@ -104,7 +104,7 @@ LuaJIT、libuv 和 zlib 是必需依赖；每个驱动只增加自己的客户�
 
 ## 示例：MCP-SSE 服务器
 
-仓内最小入门示例见 [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) —— 一个通过 `lunet.httpc` 调用 [OpenAlex](https://openalex.org/) 学术 API 的 SSE 传输 MCP 服务器，无数据库、无文件系统状态。
+仓内最小入门示例见 [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) - 一个通过 `lunet.httpc` 调用 [OpenAlex](https://openalex.org/) 学术 API 的 SSE 传输 MCP 服务器，无数据库、无文件系统状态。
 
 [lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) 是一个更完整的 MCP（Model Context Protocol）服务器，带 Tavily 网络搜索。
 
@@ -123,7 +123,7 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1
 
 如果你下载的是预构建的发布压缩包而不是自己构建，把 `LUNET_BIN` 指向压缩包里的
 `lunet-run` 即可：旁边的 `lunet/` 目录已经把下表中「需要」列的每个扩展都作为预构
-建二进制一并携带 —— 只有从源码构建时才需要 `xmake build <target>`。
+建二进制一并携带 - 只有从源码构建时才需要 `xmake build <target>`。
 
 | # | 示例 | 演示内容 | 需要 | 运行 |
 |---:|---------|---------------|----------|-----|
@@ -132,7 +132,7 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1
 | 03 | [`examples/03_db_sqlite3.lua`](examples/03_db_sqlite3.lua) | SQLite3 CRUD + `(rw, ro)` 读写拆分（读在循环线程内联执行） | `xmake build lunet-sqlite3` | `"$LUNET_BIN" examples/03_db_sqlite3.lua` |
 | 04 | [`examples/04_db_mysql.lua`](examples/04_db_mysql.lua) | MySQL CRUD + 预处理语句（`?`） | `xmake build lunet-mysql` + MySQL 服务器 | `"$LUNET_BIN" examples/04_db_mysql.lua` |
 | 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + 预处理语句（`$1`） | `xmake build lunet-postgres` + Postgres 服务器 | `"$LUNET_BIN" examples/05_db_postgres.lua` |
-| 08 | [`examples/08_http.lua`](examples/08_http.lua) | HTTP 服务器 + 路由器（`lunet.http`、`lunet.http_router`），带中间件与可选 CORS；以 `lnt_shared` 计数器作为刻意简化的 kv 存储——GET 读取、POST 递增、PATCH 调整 | `xmake build-release` + `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_http.lua` |
+| 08 | [`examples/08_http.lua`](examples/08_http.lua) | HTTP 服务器 + 路由器（`lunet.http`、`lunet.http_router`），带中间件与可选 CORS；以 `lnt_shared` 计数器作为刻意简化的 kv 存储 - GET 读取、POST 递增、PATCH 调整 | `xmake build-release` + `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_http.lua` |
 | 09 | [`examples/09_jsonic_demo.lua`](examples/09_jsonic_demo.lua) | 经 Rust FFI 的 dkjson 风格 JSON 编解码 | `xmake build-jsonic` | `"$LUNET_BIN" examples/09_jsonic_demo.lua` |
 | 10 | [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) | **规范级微型 MCP 服务器**：SSE 传输 + 经 `lunet.httpc` 的 OpenAlex API，无数据库、仅回环 | `xmake build lunet-httpc` + `.env` 中的 `OPEN_ALEX_API_KEY` | `"$LUNET_BIN" examples/mcp_openalex_sse/main.lua` |
 
@@ -197,7 +197,7 @@ xmake build lunet-postgres  # PostgreSQL
 ```lua
 local db = require("lunet.sqlite3")
 
--- 打开：返回两个连接 —— rw（worker 池）+ ro（读在循环线程内联执行）。
+-- 打开：返回两个连接 - rw（worker 池）+ ro（读在循环线程内联执行）。
 -- 调用对按路径缓存；create="WAL" 一步完成建文件并设上持久的 WAL 日志
 -- 模式。完整参考见 ext/sqlite3/SQLITE-CN.md
 local rw, ro, err = db.open({ path = "myapp.db", create = "WAL" })
@@ -268,7 +268,7 @@ db.close(conn)
 
 | 函数 | 描述 | 返回值 |
 |------|------|--------|
-| `db.open(config)` | 打开连接：sqlite3 返回按路径缓存的 `(rw, ro)` 对——`create = "WAL"\|"NORMAL"` 允许驱动创建新文件（不传则文件必须已存在）；postgres/mysql 返回单个连接（可用 `pool_size` 池化，默认 1） | 连接句柄 |
+| `db.open(config)` | 打开连接：sqlite3 返回按路径缓存的 `(rw, ro)` 对 - `create = "WAL"\|"NORMAL"` 允许驱动创建新文件（不传则文件必须已存在）；postgres/mysql 返回单个连接（可用 `pool_size` 池化，默认 1） | 连接句柄 |
 | `db.close(conn)` | 关闭连接 | - |
 | `db.query(conn, sql, ...)` | 执行 SELECT（可带参数） | 行表数组 |
 | `db.exec(conn, sql, ...)` | 执行 INSERT/UPDATE/DELETE（可带参数） | 结果表（`affected_rows`、`last_insert_id`） |
@@ -296,11 +296,11 @@ db.exec(conn, ok and "COMMIT" or "ROLLBACK")
   Lunet 的限制。**不带**参数的语句可以包含多条以 `;` 分隔的命令，但只会返回最后
   一条命令的行数据与 `affected_rows`。
 - **事务属于连接句柄，而不属于协程。** 事务中的所有语句必须使用同一个 `conn`。
-  如果应用层使用连接池，请在整个事务期间固定同一个句柄——每次调用都从池中租借
+  如果应用层使用连接池，请在整个事务期间固定同一个句柄 - 每次调用都从池中租借
   连接的做法会把 `BEGIN` 与 `COMMIT` 分散到不同会话上。在提交之前，不要让其他
   协程使用该句柄。
 
-### 共享字典（`lunet.lnt_shared`）— Linux / macOS
+### 共享字典（`lunet.lnt_shared`） -  Linux / macOS
 
 lunet 风格的共享字典，由 Rust FFI 库支撑。纯可选扩展。
 
@@ -337,13 +337,13 @@ cache:close()
 所有状态均在该区域内（无堆分配持久数据）；FNV-1a 开放地址哈希表；
 bump 分配器；单自旋锁。同一进程内以相同名称打开的多个句柄共享同一区域。
 
-### JSON（`lunet.jsonic`）— Linux / macOS
+### JSON（`lunet.jsonic`） -  Linux / macOS
 
 dkjson 兼容的 `encode`/`decode`/`null` API，外加定形渲染辅助函数（`jstr`
 使用与 `encode` 相同的转义器处理字符串；`jint` 按 `encode` 的输出原样渲染
 数字），供以静态前缀拼接 JSON 字节串的响应构造器使用。解码由 Rust FFI 封装
 [jsonic](https://github.com/g1mv/jsonic)（MIT / Apache-2.0，无运行时依赖）
-实现——完整署名见 `ext/jsonic/NOTICE.md`。`jsonic` 本身只做解析；`encode()`
+实现 - 完整署名见 `ext/jsonic/NOTICE.md`。`jsonic` 本身只做解析；`encode()`
 是纯 Lua 实现，无任何依赖。
 
 **构建**（需要 Rust 1.85+ / 2024 edition）：
@@ -405,7 +405,7 @@ xmake ci      # 完整的本地 CI 一致性检查
 
 ## 调试
 
-Lunet 对运行期崩溃有分层的调试策略。请按顺序使用——每一级都更昂贵，但给出更多细节。
+Lunet 对运行期崩溃有分层的调试策略。请按顺序使用 - 每一级都更昂贵，但给出更多细节。
 
 ### 快速参考
 
@@ -531,8 +531,8 @@ if ok and jit then jit.off() end
 
 ## 下游集成
 
-- **[集成指南](docs/XMAKE_INTEGRATION-CN.md)** —— 构建 Lunet 并集成进你的项目（对新手友好）
-- **[Badge 指南](docs/BADGES-CN.md)** —— 在项目 README 中添加徽章（构建状态、Lunet 版本）
+- **[集成指南](docs/XMAKE_INTEGRATION-CN.md)** - 构建 Lunet 并集成进你的项目（对新手友好）
+- **[Badge 指南](docs/BADGES-CN.md)** - 在项目 README 中添加徽章（构建状态、Lunet 版本）
 
 ## 许可证
 

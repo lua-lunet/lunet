@@ -5,7 +5,7 @@
 -- Malformed arguments raise (caller bug); untrusted token content comes
 -- back as nil plus an error string: malformed / sig / exp.
 --
--- KEY HANDLING: RFC 7518 HS256 — the HMAC key is the raw secret
+-- KEY HANDLING: RFC 7518 HS256  -  the HMAC key is the raw secret
 -- octets. sodium's hmac fixes the key at 32 bytes and refuses other
 -- lengths, so HMAC-SHA-256 is composed in pure Lua (RFC 2104) on
 -- sodium.sha256: a key longer than the 64-byte block is hashed first,
@@ -55,7 +55,7 @@ end
 
 -- RFC 2104 HMAC-SHA-256 over the raw key octets (see the header note).
 -- Returns the raw 32-byte tag, or nil plus a message on operational
--- failure — crypto.sign's and jwt's shared authority.
+-- failure  -  crypto.sign's and jwt's shared authority.
 local function hmac_sha256(data, key)
   if #key > BLOCK_BYTES then
     local reduced, err = sodium.sha256(key)
@@ -120,7 +120,7 @@ function crypto.verify(data, key, sig)
 end
 
 ---Encode `data` as unpadded base64url (the JWT profile) using the
----existing lunet.sodium URLSAFE base64 variant — the URL-safe alphabet
+---existing lunet.sodium URLSAFE base64 variant  -  the URL-safe alphabet
 ---(- and _) with no = padding. Malformed arguments raise with the
 ---underlying library's diagnostic, like lunet.sodium itself.
 ---@param data string Bytes to encode
@@ -139,7 +139,7 @@ end
 ---Decode unpadded base64url back to bytes using the existing
 ---lunet.sodium URLSAFE base64 variant. Malformed input raises with the
 ---underlying library's diagnostic (the same convention as
----lunet.sodium.base64_decode) — jwt.decode converts that into its
+---lunet.sodium.base64_decode)  -  jwt.decode converts that into its
 ---named "malformed" error because token bytes are untrusted input,
 ---while direct callers keep the raise.
 ---@param data string Encoded text
@@ -233,19 +233,19 @@ end
 ---is untrusted input, so every content failure is reported as nil plus
 ---an error string that names the kind of failure:
 ---
----  * malformed — not three dot-separated base64url segments, a segment
+---  * malformed  -  not three dot-separated base64url segments, a segment
 ---    that does not decode, a header/payload that is not a JSON object,
 ---    a header whose alg is not HS256 (the alg-confusion defence: a
 ---    token is only ever accepted under the algorithm it was issued
 ---    with), or an exp claim that is not a number.
----  * sig — the signature over header.payload does not match, compared
+---  * sig  -  the signature over header.payload does not match, compared
 ---    in constant time.
----  * exp — the token carries an exp claim that is strictly before the
+---  * exp  -  the token carries an exp claim that is strictly before the
 ---    current time. A token without an exp claim never expires.
 ---
 ---The signature is verified before any JSON is parsed, so no byte of
 ---the token body influences anything but the bytes the MAC covers.
----Malformed ARGUMENTS (a non-string secret, an empty secret) raise —
+---Malformed ARGUMENTS (a non-string secret, an empty secret) raise  - 
 ---those are bugs in the calling script, not attacker input.
 ---@param token string The compact JWT (as produced by encode)
 ---@param secret string Non-empty secret key (as passed to encode)

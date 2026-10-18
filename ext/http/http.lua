@@ -1,5 +1,5 @@
 --[[
-lunet.http — HTTP/1.1 request parsing and response building (pure Lua)
+lunet.http  -  HTTP/1.1 request parsing and response building (pure Lua)
 
 Ported from the RealWorld demo application's lib/http.lua, stripped of
 application-specific shapes. Framing, limits and response building are
@@ -11,7 +11,7 @@ Framing subset (deliberately small and explicit):
   - at most one value per header field, optional decimal Content-Length
   - chunked and every other Transfer-Encoding are rejected
   - connections are persistent by default (HTTP/1.1); pass
-    persistent=false to the response builders for "Connection: close" —
+    persistent=false to the response builders for "Connection: close"  - 
     a request declaring close gets one, and the caller stops serving
   - pipelining is excluded: bytes running past the end of a request body
     are a hard 400. The caller closes the socket after writing a close

@@ -19,10 +19,10 @@ your scripts, and a **worked example** to start from.
 | Thing | Kind | What it is |
 |-------|------|------------|
 | `lib/liblunet-static.a` (`liblunet-static.lib` on Windows) | link | The static core runtime: Lua state, event loop, the loopback-only socket/timer/fs/signal primitives |
-| `include/lunet.h` | link | The embedding API — the contract for everything below; the header's doc comments are the reference |
+| `include/lunet.h` | link | The embedding API - the contract for everything below; the header's doc comments are the reference |
 | `include/lunet_exports.h` | link | Symbol-visibility plumbing; include it, do not read it |
 | `bin/generate_embed_scripts.lua` | run | Compiles a Lua application tree into the embeddable header blob (three environment variables, shown below) |
-| `examples/sdk_embed/main.c` | example | A minimal host: init, embed, run — copy this file as your starting point |
+| `examples/sdk_embed/main.c` | example | A minimal host: init, embed, run - copy this file as your starting point |
 | `examples/sdk_embed/app/main.lua` | example | The Lua application that example embeds |
 | `README.md` / `README-CN.md` | docs | This document |
 | `LICENSE` | docs | The licence |
@@ -31,7 +31,7 @@ The optional extension modules (`lunet.http`, `lunet.security`, the database
 drivers, `lunet.paxe`, `lunet.jsonic`, `lunet.lnt_shared`, `lunet.httpc`) are
 NOT in the static core. They ship in the companion runtime archive
 (`lunet-<os>.tar.gz`) as Lua loaders beside `lunet-run`, with their type
-annotations in `types/` — see
+annotations in `types/` - see
 [docs/RELEASE-LAYOUT.md](RELEASE-LAYOUT.md) for that archive's map. An
 embedded application that wants them ships the loaders and their cdylibs
 beside its own executable.
@@ -98,23 +98,23 @@ extracted script tree and nothing else installed.
 `include/lunet.h` exposes an opaque `lunet_runtime_t` and six functions,
 in three groups:
 
-**Lifecycle** — call in this order:
+**Lifecycle** - call in this order:
 
-1. `lunet_runtime_init` — once, optionally supplying the executable path
+1. `lunet_runtime_init` - once, optionally supplying the executable path
    and `dangerously_skip_loopback_restriction=1`.
 2. Exactly one of `lunet_runtime_run_file` or `lunet_runtime_run_embedded`.
-3. `lunet_runtime_shutdown` — always, after successful initialization.
+3. `lunet_runtime_shutdown` - always, after successful initialization.
 
 **Control:**
 
-- `lunet_runtime_request_stop` — requests a deliberate stop (the runtime
+- `lunet_runtime_request_stop` - requests a deliberate stop (the runtime
   passes through the drain point below). This one call is thread-safe: a
   host may call it from another thread while `run_file` / `run_embedded`
   blocks on the runtime thread.
 
 **Introspection:**
 
-- `lunet_runtime_get_lua_state` — the host's escape hatch to the live
+- `lunet_runtime_get_lua_state` - the host's escape hatch to the live
   `lua_State*` (the embed example uses it to set up globals like `arg`
   before the entry script runs). Returns `NULL` for a `NULL` runtime.
 

@@ -20,11 +20,11 @@
 ---@field tx_oversize integer Seals refused: payload over the standard-mode maximum
 
 ---@class lunet.paxe
----PAXE (Packet Encryption) — AES-256-GCM authenticated datagram encryption.
+---PAXE (Packet Encryption)  -  AES-256-GCM authenticated datagram encryption.
 ---
 ---Implemented as a zero-dependency Rust cdylib (`ext/paxe`) loaded over LuaJIT
 ---FFI; it is not linked into `lunet-run`. Requires libsodium with a hardware
----AES-256-GCM path — `init()` reports a plain error where that is unavailable.
+---AES-256-GCM path  -  `init()` reports a plain error where that is unavailable.
 ---
 ---Keys are addressed by `(peer, epoch)`, never by a bare key id, and are held
 ---in guarded, locked, zero-on-drop memory owned by Rust. Call `set_local_id()`
@@ -106,8 +106,8 @@ function paxe.keystore_clear() end
 ---@return string|nil error Not configured, no key for the peer, payload oversized, or crypto failure
 function paxe.seal(payload, to_id, channel) end
 
----Open one received frame. On ANY failure — malformed, unknown key,
----authentication, unconfigured — returns nil plus a single opaque message; the
+---Open one received frame. On ANY failure  -  malformed, unknown key,
+---authentication, unconfigured  -  returns nil plus a single opaque message; the
 ---reason is deliberately never surfaced (decryption-oracle avoidance). Use
 ---`stats()` deltas for diagnostics.
 ---@param frame string The received frame
@@ -123,7 +123,7 @@ function paxe.open(frame) end
 function paxe.shutdown() end
 
 ---Snapshot the process-global cumulative counters. Counters never reset while
----the process lives — measure DELTAS, never assert an absolute value.
+---the process lives  -  measure DELTAS, never assert an absolute value.
 ---`rx_total` always equals `rx_ok` plus the sum of the seven `rx_` reject reasons.
 ---@return lunet.paxe.stats stats
 function paxe.stats() end

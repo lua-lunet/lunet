@@ -1,10 +1,10 @@
 --[[
-  lunet.lnt_shared — shared dictionary for LuaJIT
+  lunet.lnt_shared  -  shared dictionary for LuaJIT
 
   This module exposes an lnt-style shared dictionary API.
 
   The backing store is a Rust library (liblnt_shared) that manages an
-  anonymous mmap(2) region.  All state lives inside the mmap — no heap
+  anonymous mmap(2) region.  All state lives inside the mmap  -  no heap
   allocation for persistent dictionary data.
 
   Usage

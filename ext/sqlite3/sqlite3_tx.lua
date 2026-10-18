@@ -1,5 +1,5 @@
 --[[
-  lunet.sqlite3_tx — transaction wrapper for lunet.sqlite3
+  lunet.sqlite3_tx  -  transaction wrapper for lunet.sqlite3
 
   Deliberately standalone. The postgres and mysql drivers ship their own
   equivalent modules (lunet.postgres_tx, lunet.mysql_tx). An application
@@ -62,7 +62,7 @@
 
   * err is a table: err.message (also what tostring(err) and concatenation
     give) and err.poisoned. poisoned is true when the BEGIN, COMMIT or
-    ROLLBACK itself failed — close the connection rather than reusing it.
+    ROLLBACK itself failed  -  close the connection rather than reusing it.
 
   SQLite notes
   ------------
@@ -87,7 +87,7 @@
     usually wrong, but it will not fail every subsequent statement.
 
   * SQLite has no server. "Pinning" here is about not letting a pool hand
-    the same handle to another coroutine mid-transaction — a single file
+    the same handle to another coroutine mid-transaction  -  a single file
     handle with an open transaction is not shareable.
 ]]
 

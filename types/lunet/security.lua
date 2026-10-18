@@ -1,6 +1,6 @@
 ---@meta
 
----lunet.security — a Lua wrapper over libsodium (via liblunet_paxe,
+---lunet.security  -  a Lua wrapper over libsodium (via liblunet_paxe,
 ---through lunet.sodium): SHA-256 and the URLSAFE base64 variants are
 ---libsodium's, reached through the FFI; HMAC-SHA-256 is composed in
 ---Lua on lunet.sodium.sha256 per RFC 2104, and claims JSON goes
@@ -13,11 +13,11 @@
 ---and jwt.decode reports it as nil plus an error string naming the
 ---failure kind: malformed / sig / exp.
 ---
----Key handling: RFC 7518 HS256 — the HMAC key is the RAW secret
+---Key handling: RFC 7518 HS256  -  the HMAC key is the RAW secret
 ---octets, composed per RFC 2104 on lunet.sodium.sha256 (a key longer
 ---than the 64-byte block is hashed first, every other key is used
 ---as-is and zero-padded to the block, exactly as HMAC pads). Tags are
----bit-identical to plain HMAC-SHA-256 for every key length — a short
+---bit-identical to plain HMAC-SHA-256 for every key length  -  a short
 ---secret never sees a subkey derivation.
 local security = {}
 
@@ -61,7 +61,7 @@ function crypto.sign(data, key) end
 function crypto.verify(data, key, sig) end
 
 ---Encode `data` as unpadded base64url (the JWT profile) using the
----existing lunet.sodium URLSAFE base64 variant — the URL-safe alphabet
+---existing lunet.sodium URLSAFE base64 variant  -  the URL-safe alphabet
 ---(- and _) with no = padding. Malformed arguments raise with the
 ---underlying library's diagnostic, like lunet.sodium itself.
 ---@param data string Bytes to encode
@@ -77,7 +77,7 @@ function crypto.b64url_encode(data) end
 ---Decode unpadded base64url back to bytes using the existing
 ---lunet.sodium URLSAFE base64 variant. Malformed input raises with the
 ---underlying library's diagnostic (the same convention as
----lunet.sodium.base64_decode) — jwt.decode converts that into its
+---lunet.sodium.base64_decode)  -  jwt.decode converts that into its
 ---named "malformed" error because token bytes are untrusted input,
 ---while direct callers keep the raise.
 ---@param data string Encoded text
@@ -100,7 +100,7 @@ local jwt = {}
 ---lunet.jsonic.
 ---
 ---exp handling: `opts.expires_in` (positive integer seconds) injects
----exp = now + expires_in on a COPY of the payload — the caller's table
+---exp = now + expires_in on a COPY of the payload  -  the caller's table
 ---is never mutated, and an exp set this way wins over one already in
 ---the payload. Without expires_in the payload passes through
 ---unchanged, exp claim or not. A token without an exp claim never
@@ -130,7 +130,7 @@ function jwt.encode(payload, secret, opts) end
 ---token carries an exp claim strictly before the current time; a token
 ---without exp never expires). The signature is verified before any
 ---JSON is parsed. Malformed ARGUMENTS (a non-string or empty secret)
----raise — those are bugs in the calling script, not attacker input.
+---raise  -  those are bugs in the calling script, not attacker input.
 ---@param token string The compact JWT (as produced by encode)
 ---@param secret string Non-empty secret key (as passed to encode)
 ---@return table payload Claims table

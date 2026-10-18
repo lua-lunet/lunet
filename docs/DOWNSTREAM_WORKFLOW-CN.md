@@ -14,7 +14,7 @@
 
 ## 推荐的 `xmake.lua` 结构
 
-让你的 `xmake.lua` 聚焦于*你的*应用。不要复制 Lunet 的构建目标——
+让你的 `xmake.lua` 聚焦于*你的*应用。不要复制 Lunet 的构建目标 - 
 消费发布压缩包或子项目，在其上叠加你自己的任务。
 
 ```lua
@@ -37,7 +37,7 @@ set_version("1.0.0")
 xmake 任务是定义 CI、发布和冒烟测试入口的习惯方式。与 Make 目标不同，
 它们在进程内运行，可以组合其他 xmake 操作。
 
-### `xmake app-ci` — 你的 CI 门控
+### `xmake app-ci` - 你的 CI 门控
 
 ```lua
 task("app-ci")
@@ -55,7 +55,7 @@ task("app-ci")
 task_end()
 ```
 
-### `xmake app-smoke` — 快速健康检查
+### `xmake app-smoke` - 快速健康检查
 
 ```lua
 task("app-smoke")
@@ -67,7 +67,7 @@ task("app-smoke")
 task_end()
 ```
 
-### `xmake app-release` — 发布前门控
+### `xmake app-release` - 发布前门控
 
 ```lua
 task("app-release")
@@ -134,7 +134,7 @@ task_end()
 
 - **不要**把 lunet 的 `xmake.lua` 任务（`xmake lint`、`xmake test` 等）
   复制到你自己的项目中。那些是测试 lunet 本身的。定义你自己的任务。
-- **不要** fork lunet 的构建目标——使用 `includes("lunet")` 或消费
+- **不要** fork lunet 的构建目标 - 使用 `includes("lunet")` 或消费
   发布压缩包。
-- **不要**假设你的项目中存在 lunet 的 `test/` 目录——busted 规格是
+- **不要**假设你的项目中存在 lunet 的 `test/` 目录 - busted 规格是
   为 lunet 开发准备的，不是给下游应用的。

@@ -1,5 +1,5 @@
 --[[
-lunet.http_context — per-request HTTP request context (pure Lua)
+lunet.http_context  -  per-request HTTP request context (pure Lua)
 
 Ported from the RealWorld demo application's lib/http_context.lua,
 unchanged in behaviour.

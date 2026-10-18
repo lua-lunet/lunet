@@ -1,6 +1,6 @@
 # 贡献指南：工程内部细节
 
-本文档汇集了参与 lunet C 核心开发所需的通用工程知识——命名约定、
+本文档汇集了参与 lunet C 核心开发所需的通用工程知识 - 命名约定、
 调试方法论和测试协议。这是内部参考资料，不会随 SDK 压缩包发布。
 
 关于面向智能体（Agent）的操作规则（超时、防止数据丢失、i18n/类型注解
@@ -20,7 +20,7 @@
 
 **规则**：`trace.h` 和 `*_impl.c` 文件之外的代码禁止直接调用 `_lunet_*` 函数。
 
-**例外（原始协程核心）**：`src/co.c`（声明于 `include/co.h`）是原始协程实现的家 —— `_lunet_ensure_coroutine` 位于此处，仅被 `trace.h` 封装消费。
+**例外（原始协程核心）**：`src/co.c`（声明于 `include/co.h`）是原始协程实现的家 - `_lunet_ensure_coroutine` 位于此处，仅被 `trace.h` 封装消费。
 
 **例外（公开 SDK API）**：`include/lunet.h` 中声明的所有 `LUNET_API` 符号
 （`lunet_runtime_init`、`lunet_runtime_run_file`、`lunet_runtime_run_embedded`、
@@ -50,7 +50,7 @@
 2. **使用安全包装器**：用于协程检查和引用管理
 3. **运行 lint**：`xmake lint` 必须通过（不能有直接的 `_lunet_*` 调用）
 4. **启用追踪测试**：`xmake stress`（以 `LUNET_TRACE=ON` 构建）
-5. **崩溃是好事**：如果追踪断言失败，说明发现了 bug——发布前必须修复
+5. **崩溃是好事**：如果追踪断言失败，说明发现了 bug - 发布前必须修复
 6. **发布构建**：`xmake release` 会先运行测试和压力测试，再进行优化构建
 
 ### 示例：异步操作模式
@@ -60,7 +60,7 @@
 #include "trace.h"  // 始终在 co.h 之后引入
 
 int my_async_operation(lua_State *L) {
-    // 使用安全包装器——若栈损坏，调试构建下会崩溃
+    // 使用安全包装器 - 若栈损坏，调试构建下会崩溃
     lunet_ensure_coroutine(L, "my_operation");
     
     // 分配上下文……
@@ -143,11 +143,11 @@ DEBUG: stack[4] type=thread
 - `lunet_sqlite_conn_close()` - 关闭 SQLite 连接但保留互斥锁
 - `lunet_sqlite_conn_destroy()` - 完整清理，包括互斥锁（仅由 GC 调用）
 
-**待办：** 更详细地记录此次调试过程——这是 Lua-C 栈调试方法论的一个好例子。
+**待办：** 更详细地记录此次调试过程 - 这是 Lua-C 栈调试方法论的一个好例子。
 
 ## 调试方法论：内存损坏与段错误
 
-本节记录了用于调试 lunet 运行时崩溃的工具和技术。代码库采用分层调试策略——
+本节记录了用于调试 lunet 运行时崩溃的工具和技术。代码库采用分层调试策略 - 
 按成本从低到高依次使用。
 
 ### 第一层：领域追踪（fprintf 二分法）
@@ -201,7 +201,7 @@ xmake build lunet-bin
 
 **局限性：** ASan 链接的是系统 LuaJIT 动态库，因此 LuaJIT 内部帧可能显示为
 `lua_rawgeti+0x14` 而没有源码信息。我们的 C 函数可能被内联，从而在堆栈跟踪中
-缺失。寄存器值（arm64 上的 `x[0]` 到 `x[28]`）仍然有用——`x[0]` 通常是第一个
+缺失。寄存器值（arm64 上的 `x[0]` 到 `x[28]`）仍然有用 - `x[0]` 通常是第一个
 函数参数。
 
 ### 第四层：内存追踪（lunet_mem）
@@ -280,7 +280,7 @@ xmake stress
 
 ### 3. 应用级负载测试（RealWorld Conduit）
 关于全栈负载测试（HTTP -> 路由 -> 控制器 -> 数据库 -> 协程），请使用
-[examples/realworld/](../examples/realworld/README-CN.md) 中的演示应用 ——
+[examples/realworld/](../examples/realworld/README-CN.md) 中的演示应用 - 
 尤其是 [realworld-lua](https://github.com/lua-lunet/realworld-lua)。
 
 如果服务器在负载测试期间崩溃（退出码 > 0 或 SIGABRT），这是**严重故障**。
@@ -288,18 +288,18 @@ xmake stress
 
 ## API 表面的类型注解（严格）
 
-每个**外部 API 表面** —— 随发布压缩包发布（安装进 `lunet/` 的 `ext/*/*.lua`
-文件）的每个 `lunet.*` 模块与加载器 —— 必须携带完整的 LuaCATS 注解：每个公开
+每个**外部 API 表面** - 随发布压缩包发布（安装进 `lunet/` 的 `ext/*/*.lua`
+文件）的每个 `lunet.*` 模块与加载器 - 必须携带完整的 LuaCATS 注解：每个公开
 函数都要有 `---` 摘要、每个参数的 `---@param`、每个返回值的 `---@return`。
 `types/lunet` 影子文件及其 `d.tl` 对应文件与源码保持同步。
 
 类型门让这一切成为硬约束：`xmake check-types` 用 lua-language-server 检查
-`types/`、`ext/` 与 `examples/` —— 演示对着注解做检查：误用表面的演示是门失败，
+`types/`、`ext/` 与 `examples/` - 演示对着注解做检查：误用表面的演示是门失败，
 撒谎的返回注解也是门失败。每次发布列车都要对门做变异验证：改动任一被注解文件
 里的一个返回类型，门必须失败。
 
-**内部豁免**：非外部表面的 Lua —— 面向 C 的胶水、spec/测试辅助、`bin/` 下的
-脚本 —— 在满足以下条件时可豁免完整注解：(a) 测试套件覆盖它，(b) 命名已说明其
+**内部豁免**：非外部表面的 Lua - 面向 C 的胶水、spec/测试辅助、`bin/` 下的
+脚本 - 在满足以下条件时可豁免完整注解：(a) 测试套件覆盖它，(b) 命名已说明其
 行为。在检查器或评审者需要处补注解即可。
 
 ## UDP 模块追踪

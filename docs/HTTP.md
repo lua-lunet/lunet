@@ -2,9 +2,9 @@
 
 A pure-Lua HTTP/1.1 trio for building small servers on `lunet.socket`:
 
-- [`lunet.http`](#lunethttp--request-framing-and-responses) — request parsing, response building, opt-in CORS
-- [`lunet.http_context`](#lunethttpcontext--per-request-context) — one fresh per-request context object
-- [`lunet.http_router`](#lunethttprouter--routes-and-middleware) — method+path dispatch with `:params` and middleware
+- [`lunet.http`](#lunethttp--request-framing-and-responses) - request parsing, response building, opt-in CORS
+- [`lunet.http_context`](#lunethttpcontext--per-request-context) - one fresh per-request context object
+- [`lunet.http_router`](#lunethttprouter--routes-and-middleware) - method+path dispatch with `:params` and middleware
 
 The modules are plain Lua files, no C core and no new dependency: they ship
 in the release archives (see [docs/RELEASE-LAYOUT.md](RELEASE-LAYOUT.md) for
@@ -18,7 +18,7 @@ A runnable end-to-end demo lives at [`examples/08_http.lua`](../examples/08_http
 ## The framing subset
 
 Deployment security first: the qmail-style model in
-[docs/SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md) — a battle-hardened
+[docs/SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md) - a battle-hardened
 nginx (or similar) terminates the network interface and talks to your lunet
 process over the loopback interface, or over a Unix domain socket if you
 prefer filesystem permissions to IP rules. This module's server example binds
@@ -56,7 +56,7 @@ loop can answer `http.error_response(status, { message })` directly.
 This class is probed, not just spec'd: the [Http11Probe](https://github.com/uNetworkingAB/Http11Probe)
 rig (`ext/http/Dockerfile.http`) runs the probe's 213-case matrix against the
 happy-path target in this folder and asserts the outcome. Out-of-scope tests
-pass because the subset rejects the feature by design — chunked bodies and
+pass because the subset rejects the feature by design - chunked bodies and
 any `Transfer-Encoding` answer 501, HTTP/1.0 answers 400, `OPTIONS *`
 answers 400, and the minimal echo target answers 405 with an `Allow` header
 for un-routed methods. Rerun and commit the regenerated expectation manifest
@@ -67,7 +67,7 @@ docker build -f ext/http/Dockerfile.http -t lunet-http-probe .
 docker run --rm lunet-http-probe
 ```
 
-## lunet.http — request framing and responses
+## lunet.http - request framing and responses
 
 ```lua
 local http = require("lunet.http")
@@ -77,14 +77,14 @@ local http = require("lunet.http")
 |----------|---------|-------|
 | `http.parse_request(raw)` | `request, err, status` | Parses one complete raw request (head + body). The body must exactly match `Content-Length`. |
 | `http.read_request(read_chunk)` | `request, err, status` | Incremental variant: `read_chunk()` is called until the request is complete and must return a string chunk, or nil plus an optional error on EOF/failure. |
-| `http.response(status, headers, body, cors?, persistent?)` | `string` | Builds the full response. Framing is owned here: caller `Content-Length`/`Connection` headers are dropped and replaced (`Content-Length` from the body). The connection is persistent by default — no `Connection` header, per HTTP/1.1; `persistent=false` declares `Connection: close`. `Content-Type` defaults to `application/json`. |
+| `http.response(status, headers, body, cors?, persistent?)` | `string` | Builds the full response. Framing is owned here: caller `Content-Length`/`Connection` headers are dropped and replaced (`Content-Length` from the body). The connection is persistent by default - no `Connection` header, per HTTP/1.1; `persistent=false` declares `Connection: close`. `Content-Type` defaults to `application/json`. |
 | `http.json_response(status, data, cors?, persistent?)` | `string` | `response()` with the data JSON-encoded. |
 | `http.error_response(status, data, cors?, persistent?)` | `string` | `json_response()` wrapping the data as `{"errors": data}`. |
 | `http.parse_query_string(query)` | `table` | Decodes `a=1&b=2` into a table; values are URL-decoded. |
 | `http.url_decode(str)` | `string` | `%xx` byte escapes. |
 | `http.cors_headers(cors)` | `table` | The `Access-Control-*` header set for a config (below). |
 | `http.is_preflight(request)` | `boolean` | True for `OPTIONS` requests with both `Origin` and `Access-Control-Request-Method`. |
-| `http.preflight_response(cors, persistent?)` | `string` | 200 with an empty body carrying the configured CORS headers — the preflight short-circuit. |
+| `http.preflight_response(cors, persistent?)` | `string` | 200 with an empty body carrying the configured CORS headers - the preflight short-circuit. |
 
 A parsed request is a fresh table:
 
@@ -99,7 +99,7 @@ request.query_string  -- "by=2" ("" when absent)
 request.query_params  -- { by = "2" } (URL-decoded)
 ```
 
-A typical connection loop — sequential requests on one connection, ending
+A typical connection loop - sequential requests on one connection, ending
 on the client's EOF, a framing error, or a request-declared
 `Connection: close`:
 
@@ -140,7 +140,7 @@ local function handle_connection(client)
 end
 ```
 
-## lunet.http_context — per-request context
+## lunet.http_context - per-request context
 
 ```lua
 local http_context = require("lunet.http_context")
@@ -160,7 +160,7 @@ coroutines never share mutable state.
 | `ctx.response_body()` | response | Read back the accumulated `write()` output. |
 | `ctx.env_config` | wiring | App config, set by the caller before routing; the router passes it to handlers as their first argument. |
 
-## lunet.http_router — routes and middleware
+## lunet.http_router - routes and middleware
 
 ```lua
 local router = require("lunet.http_router")
@@ -170,7 +170,7 @@ The router is a module-level singleton: route modules register themselves when
 they are required, and the connection loop only wires the socket.
 
 ```lua
--- routes/articles.lua — registers itself on require
+-- routes/articles.lua - registers itself on require
 local router = require("lunet.http_router")
 
 router.route("GET", "/articles/:id", function(config, ctx, params)
@@ -186,7 +186,7 @@ end)
 | `router.use(fn)` | Registers before-dispatch middleware (below). |
 | `router.reset()` | Drops every route and middleware (tests, hot reload). |
 
-Handler contract — handlers run as `pcall(handler, ctx.env_config, ctx, params)`:
+Handler contract - handlers run as `pcall(handler, ctx.env_config, ctx, params)`:
 
 - return a **table**: JSON-encoded as the body; a table carrying a `status`
   field sets the response status, and its `body` field (when present) becomes
@@ -199,7 +199,7 @@ Handler contract — handlers run as `pcall(handler, ctx.env_config, ctx, params
 
 Every dispatched response is written through `ctx.write()` with
 `Content-Type: application/json`; status 204 writes an empty body. An unknown
-path — or a supported path with the wrong method — reports 404 with a
+path - or a supported path with the wrong method - reports 404 with a
 `{"error":"Not found","path":...}` body. A handler or middleware error never
 escapes: it is reported via `ctx.log("err", ...)` and answered with 500 and a
 `{"error":"Internal server error"}` body.
@@ -210,7 +210,7 @@ escapes: it is reported via `ctx.log("err", ...)` and answered with 500 and a
 registration order before route dispatch, inside the same error contract as
 handlers:
 
-- a middleware may **short-circuit** by returning a table or string — the
+- a middleware may **short-circuit** by returning a table or string - the
   value is finalised exactly like a handler result (including the `{ status,
   body }` unwrap)
 - returning `nil`, `false` or nothing continues to the next middleware and
@@ -256,8 +256,8 @@ comes last).
 ## Demo
 
 [`examples/08_http.lua`](../examples/08_http.lua) wires the whole trio to
-`lnt_shared` counters as a contrived kv store — GET reads a counter, POST
-increments it, PATCH adjusts it by a JSON delta — with a logging middleware, a
+`lnt_shared` counters as a contrived kv store - GET reads a counter, POST
+increments it, PATCH adjusts it by a JSON delta - with a logging middleware, a
 403 short-circuit guard, CORS enabled, and one keep-alive exchange (two
 requests served sequentially on a single connection):
 

@@ -183,18 +183,18 @@ end
 local function read_response(client)
   local received = ""
   while not received:find("\r\n\r\n", 1, true) do
-    local chunk = socket.read(client)
-    if not chunk then return nil, "connection closed before response head" end
-    received = received .. chunk
+    local buf = socket.read(client)
+    if not buf then return nil, "connection closed before response head" end
+    received = received .. buf
   end
   local head_end = received:find("\r\n\r\n", 1, true)
   local head = received:sub(1, head_end + 3)
   local body = received:sub(head_end + 4)
   local length = tonumber(head:match("Content%-Length: (%d+)")) or 0
   while #body < length do
-    local chunk = socket.read(client)
-    if not chunk then break end
-    body = body .. chunk
+    local buf = socket.read(client)
+    if not buf then break end
+    body = body .. buf
   end
   return head .. body
 end

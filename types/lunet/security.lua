@@ -1,14 +1,10 @@
 ---@meta
 
----lunet.security — authenticated-token helpers: HMAC-SHA-256
----sign/verify, base64url, and JWT HS256.
----
----ONE flat, pure-Lua module over the EXISTING primitives: every
----byte-level operation goes through lunet.sodium (SHA-256 and the
----URLSAFE base64 variants, both backed by liblunet_paxe — libsodium
----statically linked), HMAC-SHA-256 is composed in pure Lua on
----lunet.sodium.sha256 per RFC 2104, and claims JSON goes through
----lunet.jsonic.
+---lunet.security — a Lua wrapper over libsodium (via liblunet_paxe,
+---through lunet.sodium): SHA-256 and the URLSAFE base64 variants are
+---libsodium's, reached through the FFI; HMAC-SHA-256 is composed in
+---Lua on lunet.sodium.sha256 per RFC 2104, and claims JSON goes
+---through lunet.jsonic.
 ---Requires lunet.sodium at load time; lunet.jsonic is jwt-only and
 ---loaded on first use. See `docs/SECURITY.md`.
 ---

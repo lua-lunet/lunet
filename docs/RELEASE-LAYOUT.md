@@ -20,9 +20,8 @@ lunet/                              # extension modules
   httpc.so                          # HTTPS client (libcurl)
   sqlite3core.so / postgres.so      # DB driver shared libraries
   mysql.so                          #   (.dll on Windows)
-  sqlite3.lua                       # sqlite3 loader: public surface + the
-                                    #   path-keyed handle cache (the binary
-                                    #   registers as lunet.sqlite3core)
+  sqlite3.lua                       # sqlite3 loader (the binary registers
+                                    #   as lunet.sqlite3core)
   sqlite3_tx.lua / postgres_tx.lua  # DB transaction wrappers
   mysql_tx.lua
   http.lua                          # HTTP/1.1 request framing + responses,
@@ -30,11 +29,9 @@ lunet/                              # extension modules
   http_context.lua                  # per-request context object
                                     #   (lunet.http_context)
   http_router.lua                   # method+path router with :params and
-                                    #   middleware (lunet.http_router;
-                                    #   source: ext/http/router.lua)
+                                    #   middleware (lunet.http_router)
   security.lua                      # crypto + JWT HS256 helpers
-                                    #   (lunet.security; pure Lua over
-                                    #   lunet.sodium + lunet.jsonic)
+                                    #   (lunet.security)
   liblnt_shared.so                  # lnt_shared shared dictionary (Linux)
   liblnt_shared.dylib               #   (macOS — not shipped on Windows)
   lnt_shared.lua                    # lnt_shared Lua FFI loader
@@ -50,7 +47,7 @@ lunet/                              # extension modules
                                     #   (SHA-256 / HMAC-SHA-256 / randombytes,
                                     #   shims in the same cdylib)
 types/                              # LuaCATS type annotations (---@meta, documentation only)
-  lunet.lua
+  lunet.lua                         #   each has a Teal counterpart (*.d.tl)
   lunet/
     db.lua                          # unified DB backend
     fs.lua                          # filesystem operations
@@ -64,6 +61,7 @@ types/                              # LuaCATS type annotations (---@meta, docume
     signal.lua                      # OS signal handling
     socket.lua                      # TCP socket operations
     sodium.lua                      # SHA-256 / HMAC-SHA-256 / randombytes
+    sqlite3.lua                     # sqlite3 loader (binary: lunet.sqlite3core)
     udp.lua                         # UDP socket operations
 *.md                                # bundled docs (see "Bundled documentation" below)
 ```
@@ -132,6 +130,7 @@ that the corresponding loader checks:
 | lnt_shared | `LUNET_LNT_SHARED_LIB`       |
 | jsonic     | `LUNET_JSONIC_LIB`           |
 | sodium     | `LUNET_SODIUM_LIB` (falls back to `LUNET_PAXE_LIB`) |
+| paxe       | `LUNET_PAXE_LIB`             |
 
 ## Using extensions standalone (without lunet-run)
 
@@ -236,9 +235,8 @@ ffi.cdef[[
 ### Symbol naming
 
 FFI symbols use the `ngx_shared_*` prefix (rather than `lnt_shared_*`). This
-is a legacy name retained for ABI compatibility after the rename from
-`ngx_shared` to `lnt_shared` in v0.4.3. The symbols are stable and will not
-change.
+is a legacy name retained for ABI compatibility; the symbols are stable and
+will not change.
 
 ### Minimal example (standalone FFI)
 
@@ -364,9 +362,10 @@ and `conn:rollback()` methods to the native driver connections.
 ## Platform notes
 
 - **Linux (amd64 / arm64)**: All extensions are included. The archive is
-  built on Ubuntu 24.04 and links against system `glibc` and `openssl`.
+  built on the Ubuntu 24.04 runner images and links against system `glibc`
+  and `openssl`.
 - **macOS (arm64)**: All extensions are included. The archive is built on
-  macOS 15+ and targets `macosx-version-min=14.0`.
+  the `macos-latest` GitHub runner (arm64).
 - **Windows (amd64)**: Rust extensions (`lnt_shared`, `jsonic`) are not
   included because the underlying crates are POSIX-only. Database drivers
   and transaction wrappers are shipped.
@@ -393,8 +392,6 @@ apt-get install -y libsqlite3-0      # lunet.sqlite3
 
 The PAXE extension (`liblunet_paxe`) links libsodium **statically**;
 no `libsodium23` package or unversioned `.so` symlink is needed.
-Downstream apps that previously carried the
-`ln -sf libsodium.so.23 libsodium.so` workaround should remove it.
 
 **macOS**:
 

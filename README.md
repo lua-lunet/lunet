@@ -8,7 +8,7 @@ A high-performance coroutine-based networking library for LuaJIT, built on top o
 
 > This project is based on [xialeistudio/lunet](https://github.com/xialeistudio/lunet) by [夏磊 (Xia Lei)](https://github.com/xialeistudio). See also his excellent write-up: [Lunet: Design and Implementation of a High-Performance Coroutine Network Library](https://www.ddhigh.com/en/2025/07/12/lunet-high-performance-coroutine-network-library/).
 
-Lunet began as a way to write **tiny localhost MCP servers** — Model Context Protocol tools that sit next to an LLM client on loopback, idle in single-digit megabytes of RAM, and start instantly. That is still the front-page use case. Long-form motivation: **[The Talos, Ethos and 無為 of Lunet](docs/PHILOSOPHY.md)**.
+Lunet's front-page use case is **tiny localhost MCP servers** — Model Context Protocol tools that sit next to an LLM client on loopback, idle in single-digit megabytes of RAM, and start instantly. Long-form motivation: **[The Talos, Ethos and 無為 of Lunet](docs/PHILOSOPHY.md)**.
 
 ## Three ways to use Lunet
 
@@ -69,20 +69,17 @@ Lunet is **modular by design**. You build only what you need:
   - `lunet-mysql` - MySQL/MariaDB driver
   - `lunet-postgres` - PostgreSQL driver
 - **Outbound HTTPS client** (optional xmake target):
-  - `lunet-httpc` - HTTPS client via libcurl (`require("lunet.httpc")`)
+  - `lunet-httpc` - HTTPS client via libcurl (`require("lunet.httpc")`; reference: [docs/HTTPC.md](docs/HTTPC.md))
 - **Shared dictionary** (optional Rust extension, Linux/macOS):
   - `lunet.lnt_shared` - lunet-style shared dict via Rust FFI (`xmake build-lnt-shared`)
 - **JSON** (optional Rust extension, Linux/macOS):
   - `lunet.jsonic` - dkjson-style encode/decode; decode via Rust FFI wrapping [jsonic](https://github.com/g1mv/jsonic) (`xmake build-jsonic`)
-- **Crypto / JWT** (optional pure-Lua extension):
+- **Datagram encryption** (optional Rust extension, all platforms):
+  - `lunet.paxe` - AES-256-GCM datagram encryption via Rust FFI, statically linking libsodium (`xmake build-paxe`; reference: [docs/PAXE.md](docs/PAXE.md))
+- **Crypto / JWT** (Lua module, no binary of its own — its crypto is libsodium reached through the FFI via `lunet.sodium` / `liblunet_paxe`):
   - `lunet.security` - HMAC-SHA-256 sign/verify, base64url, and JWT HS256 over `lunet.sodium` + `lunet.jsonic` (reference: [docs/SECURITY.md](docs/SECURITY.md))
 
 Build one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
-
-Getting started (build flow, profiles, and integration details):
-- **[docs/PHILOSOPHY.md](docs/PHILOSOPHY.md)** (the long-form why)
-- **[docs/XMAKE_INTEGRATION.md](docs/XMAKE_INTEGRATION.md)**
-- **[docs/HTTPC.md](docs/HTTPC.md)** (optional outbound HTTPS client)
 
 ### Why use lunet database drivers?
 
@@ -111,32 +108,7 @@ LuaJIT, libuv, and zlib are required dependencies; each driver adds only its own
 
 For a minimal in-repo starting point see [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) — an SSE-transport MCP server that calls the [OpenAlex](https://openalex.org/) scholarly API via `lunet.httpc`, with no database and no filesystem state.
 
-[lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) is a fuller MCP (Model Context Protocol) server with Tavily web search, demonstrating:
-
-- **SSE transport** - Server-Sent Events for real-time streaming
-- **JSON-RPC over HTTP** - Stateful session management
-- **External API calls** - Tavily search integration via curl
-- **Zero-cost tracing** - Debug logging with no production overhead
-
-**Why lunet for MCP servers?**
-
-MCP servers are often deployed as sidecar processes. Lunet's dependencies (libuv, LuaJIT) are mature, stable libraries with Debian LTS support - no npm/pip churn or constant security patches.
-
-| Implementation | Image Size | Runtime Memory |
-|----------------|------------|----------------|
-| **lunet-mcp-sse** | **171 MB** | **7 MB** |
-| tavily-mcp (Node.js) | 420 MB | 18 MB |
-| tavily-mcp (Bun) | 382 MB | 14 MB |
-| FastMCP (Python) | 367 MB | 28 MB |
-
-```bash
-# Quick start
-curl -L -o lunet-mcp-sse.tar.gz \
-  https://github.com/lua-lunet/lunet-mcp-sse/releases/download/nightly/lunet-mcp-sse-linux-arm64.tar.gz
-tar -xzf lunet-mcp-sse.tar.gz
-echo "TAVILY_API_KEY=your_key" > .env
-./run.sh
-```
+[lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) is a fuller MCP (Model Context Protocol) server with Tavily web search.
 
 ## How-To Examples
 
@@ -423,10 +395,6 @@ json.jstr('say "hi"')  -- '"say \"hi\""'
 json.jint(42)          -- '42'
 ```
 
-**Maelstrom rig**: [`ext/jsonic/maelstrom/`](ext/jsonic/maelstrom/README.md)
-runs the jsonic demo as a Maelstrom (Jepsen) node — Docker on arm64, no
-volume mounts, loopback-only — via `make -C ext/jsonic/maelstrom test`.
-
 ## Safety: Zero-Cost Tracing
 
 Build with `xmake build-debug` to enable coroutine reference tracking and stack integrity checks. The runtime will assert and crash on leaks or stack pollution.
@@ -594,7 +562,6 @@ xmake ci      # Full local CI parity check
 
 - **[Integration guide](docs/XMAKE_INTEGRATION.md)** — Build Lunet and integrate it into your project (beginner-friendly)
 - **[Badge guide](docs/BADGES.md)** — Add badges (build status, Lunet version) to your project README
-- **[EasyMem report](docs/EASY_MEMORY_REPORT.md)** — Profiling findings and next-step memory recommendations
 
 ## License
 

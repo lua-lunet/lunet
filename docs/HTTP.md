@@ -14,10 +14,7 @@ shipped beside `sqlite3.lua` in the release archives (see
 write, close) stays with the caller; the JSON helpers require `lunet.jsonic`
 lazily, only when called.
 
-The trio was ported from the [RealWorld example
-app](https://github.com/lua-lunet/realworld-lua) with the application-specific
-shapes stripped out; middleware and CORS were restored on the way in. A
-runnable end-to-end demo lives at [`examples/08_http.lua`](../examples/08_http.lua).
+A runnable end-to-end demo lives at [`examples/08_http.lua`](../examples/08_http.lua).
 
 ## The framing subset
 

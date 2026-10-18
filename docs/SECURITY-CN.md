@@ -1,8 +1,8 @@
 # Security：HMAC + JWT 扩展模块
 
-`lunet.security` 是一个可选的纯 Lua 扩展，为 lunet 应用提供每个 Web 应用都需要的认证令牌层：HMAC-SHA-256 签名/验证、base64url 辅助函数，以及 JWT HS256（`encode` / `decode`）。
+`lunet.security` 是一个可选的 Lua 封装，为 lunet 应用提供每个 Web 应用都需要的认证令牌层：HMAC-SHA-256 签名/验证、base64url 辅助函数，以及 JWT HS256（`encode` / `decode`）。
 
-它是薄封装层，而不是加密库：SHA-256 与 base64url 来自 `lunet.sodium`，HMAC-SHA-256 是在 `lunet.sodium.sha256` 之上按 RFC 2104 用纯 Lua 组合而成（见下文"密钥处理"），claims JSON 则通过 `lunet.jsonic` 完成。
+关键在于加密出自谁之手：每一个加密的字节级操作都来自 libsodium，经 FFI（`liblunet_paxe`，通过 `lunet.sodium`）调用——封装层自身不实现任何加密。它在 Lua 中做的唯一组合是基于 `lunet.sodium.sha256` 按 RFC 2104 构造 HMAC-SHA-256（一个密钥填充步骤——见下文"密钥处理"），claims JSON 则通过 `lunet.jsonic` 完成。
 
 ## 概览
 
@@ -11,11 +11,11 @@
 
 ## 依赖与加载
 
-依赖契约与数据库驱动相同——扩展声明自己需要什么，运维者负责安装：
+扩展声明自己需要什么，运维者负责安装：
 
 | 依赖 | 何时 | 原因 |
 |------------|------|-----|
-| libsodium（经 `liblunet_paxe`） | 始终需要——`lunet.sodium` 在加载时 require | HMAC-SHA-256 与 base64 原语；PAXE 已静态链接 libsodium，二进制压缩包本就携带这些字节 |
+| libsodium（经 `liblunet_paxe`） | 始终需要——`lunet.sodium` 在加载时 require | HMAC-SHA-256 与 base64 原语 |
 | `lunet.jsonic` | 仅 JWT——首次使用时加载 | claims JSON 编解码；其加载器随本模块一起打包在压缩包中（其原生解码器目前仅限 POSIX） |
 
 在发布压缩包中，各加载器并排位于 `lunet/` 目录下，通过运行时的 `lunet/?.lua` 路径条目解析——见 [docs/RELEASE-LAYOUT-CN.md](RELEASE-LAYOUT-CN.md)。在仓库内或任何 LuaJIT 程序中，直接加载文件：
@@ -71,7 +71,7 @@ local crypto, jwt = security.crypto, security.jwt
 
 HS256 遵循 RFC 7518：HMAC-SHA-256 的密钥就是**原始 secret 八位组**——标准 JWT 库用来签名和验证的正是这些字节。本模块产生的和接受的标签恰好就是这些标签，secret 长度不限。
 
-libsodium 的 `crypto_auth_hmacsha256` 将 HMAC 密钥固定为恰好 32 字节，而 `lunet.sodium` 刻意拒绝任何其他长度，而不是悄悄填充或截断——因此本模块在 `lunet.sodium.sha256` 之上用纯 Lua 按 RFC 2104 组合 HMAC-SHA-256：
+libsodium 的 `crypto_auth_hmacsha256` 将 HMAC 密钥固定为恰好 32 字节，而 `lunet.sodium` 刻意拒绝任何其他长度，而不是悄悄填充或截断——因此本模块在 `lunet.sodium.sha256` 之上用 Lua 组合 HMAC-SHA-256（仍是 libsodium 的哈希，经 FFI），遵循 RFC 2104：
 
 - **长于 64 字节块的密钥先做哈希**——这是标准自身的归约，长密钥产生的标签与普通 HMAC-SHA-256 完全一致；
 - **其余任何密钥按原样使用**，按 HMAC 自身的填充方式零填充到块大小——这正是短 secret（`"Jefe"`、`"secret"`、二十个 `0x0b` 字节）能验证标准库所签发标签的原因。
@@ -109,7 +109,7 @@ end
 
 ## 打包
 
-`lunet/security.lua` 与 `sqlite3.lua` 并排随每个发布压缩包发布——纯 Lua，没有自己的二进制产物。`lunet/sodium.lua`、`lunet/paxe.lua` 和 `lunet/jsonic.lua`（依赖项）随其一同发布；见 [docs/RELEASE-LAYOUT-CN.md](RELEASE-LAYOUT-CN.md)。
+`lunet/security.lua` 与 `sqlite3.lua` 并排随每个发布压缩包发布——一个没有自己二进制产物的 Lua 模块；其加密由 libsodium 提供，经 `liblunet_paxe` 链接。`lunet/sodium.lua`、`lunet/paxe.lua` 和 `lunet/jsonic.lua`（依赖项）随其一同发布；见 [docs/RELEASE-LAYOUT-CN.md](RELEASE-LAYOUT-CN.md)。
 
 ## 测试
 

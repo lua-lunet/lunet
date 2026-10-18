@@ -12,9 +12,7 @@
 `lunet/?.lua` 路径条目即可解析到。套接字 I/O（listen、accept、read、write、
 close）由调用方负责；JSON 辅助函数仅在被调用时才惰性地依赖 `lunet.jsonic`。
 
-这三件套移植自 [RealWorld 示例应用](https://github.com/lua-lunet/realworld-lua)，
-并剥离了应用特有的形态；中间件与 CORS 是移植过程中恢复的约定。可运行的端到端
-示例见 [`examples/08_http.lua`](../examples/08_http.lua)。
+可运行的端到端示例见 [`examples/08_http.lua`](../examples/08_http.lua)。
 
 ## 帧格式子集
 

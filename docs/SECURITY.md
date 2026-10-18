@@ -1,13 +1,14 @@
 # Security: HMAC + JWT Extension Module
 
-`lunet.security` is an opt-in, pure-Lua extension that gives lunet
-applications the authenticated-token layer every web app needs: HMAC-SHA-256
-sign/verify, base64url helpers, and JWT HS256 (`encode` / `decode`).
+`lunet.security` is an opt-in Lua wrapper that gives lunet applications the
+authenticated-token layer every web app needs: HMAC-SHA-256 sign/verify,
+base64url helpers, and JWT HS256 (`encode` / `decode`).
 
-It is a thin layer, not a crypto library: SHA-256 and base64url come from
-`lunet.sodium`, HMAC-SHA-256 is composed in pure Lua on `lunet.sodium.sha256`
-(RFC 2104 — see "Key handling" below), and claims JSON goes through
-`lunet.jsonic`.
+The virtue is whose crypto it is: every cryptographic byte-level operation is
+libsodium's, reached through the FFI (`liblunet_paxe`, via `lunet.sodium`) —
+the wrapper implements no crypto itself. The one composition it does in Lua is
+HMAC-SHA-256 built on `lunet.sodium.sha256` per RFC 2104 (a key-padding step —
+see "Key handling" below), and claims JSON goes through `lunet.jsonic`.
 
 ## Overview
 
@@ -20,12 +21,11 @@ It is a thin layer, not a crypto library: SHA-256 and base64url come from
 
 ## Requirements and loading
 
-The dependency contract is the same one the database drivers have — the
-extension declares what it needs, the operator installs it:
+The extension declares what it needs, the operator installs it:
 
 | Dependency | When | Why |
 |------------|------|-----|
-| libsodium (via `liblunet_paxe`) | Always — `lunet.sodium` is required at load time | HMAC-SHA-256 and base64 primitives; PAXE already links libsodium statically, so a binary-archive consumer carries the bytes already |
+| libsodium (via `liblunet_paxe`) | Always — `lunet.sodium` is required at load time | HMAC-SHA-256 and base64 primitives |
 | `lunet.jsonic` | JWT only — loaded on first use | Claims JSON encode/decode; the loader ships in the archive beside this module (its native decoder is POSIX-only for now) |
 
 In a release archive the loaders sit side by side in `lunet/` and resolve
@@ -118,8 +118,8 @@ produces and accepts precisely those tags, for a secret of any length.
 
 libsodium's `crypto_auth_hmacsha256` fixes the HMAC key at exactly 32 bytes, and
 `lunet.sodium` deliberately refuses any other length rather than silently pad or
-truncate — so the module composes HMAC-SHA-256 itself, in pure Lua on
-`lunet.sodium.sha256`, following RFC 2104:
+truncate — so the module composes HMAC-SHA-256 in Lua on `lunet.sodium.sha256`
+(still libsodium's hash, through the FFI), following RFC 2104:
 
 - a **key longer than the 64-byte block is hashed first** — the standard's own
   reduction, so long keys produce exactly the tags plain HMAC-SHA-256 produces;
@@ -164,7 +164,8 @@ end
 ## Packaging
 
 `lunet/security.lua` ships in every release archive beside `sqlite3.lua` —
-pure Lua, no binary of its own. `lunet/sodium.lua`, `lunet/paxe.lua` and
+a Lua module with no binary of its own; its crypto is libsodium's, linked
+via `liblunet_paxe`. `lunet/sodium.lua`, `lunet/paxe.lua` and
 `lunet/jsonic.lua` (the dependencies) ship alongside it; see
 [docs/RELEASE-LAYOUT.md](RELEASE-LAYOUT.md).
 

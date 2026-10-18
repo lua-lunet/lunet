@@ -8,7 +8,7 @@
 
 > 本项目基于 [夏磊 (Xia Lei)](https://github.com/xialeistudio) 的 [xialeistudio/lunet](https://github.com/xialeistudio/lunet)。详见他的精彩文章：[Lunet：高性能协程网络库的设计与实现](https://www.ddhigh.com/2025/07/12/lunet-high-performance-coroutine-network-library/)。
 
-Lunet 最初的用途是编写**微型 localhost MCP 服务器** —— 运行在 LLM 客户端旁、回环地址上的 Model Context Protocol 工具：空闲时只占个位数 MB 内存，瞬间启动。这至今仍是首页用例。长篇理念阐述请阅读：**[Lunet 的 Talos、Ethos 与無為](docs/PHILOSOPHY-CN.md)**。
+Lunet 的首页用例是**微型 localhost MCP 服务器** —— 运行在 LLM 客户端旁、回环地址上的 Model Context Protocol 工具：空闲时只占个位数 MB 内存，瞬间启动。长篇理念阐述请阅读：**[Lunet 的 Talos、Ethos 与無為](docs/PHILOSOPHY-CN.md)**。
 
 ## 三种使用 Lunet 的方式
 
@@ -67,20 +67,17 @@ Lunet 采用**模块化设计**。只构建你需要的：
   - `lunet-mysql` - MySQL/MariaDB 驱动
   - `lunet-postgres` - PostgreSQL 驱动
 - **出站 HTTPS 客户端**（可选 xmake 目标）：
-  - `lunet-httpc` - 基于 libcurl 的 HTTPS 客户端（`require("lunet.httpc")`）
+  - `lunet-httpc` - 基于 libcurl 的 HTTPS 客户端（`require("lunet.httpc")`；参考：[docs/HTTPC-CN.md](docs/HTTPC-CN.md)）
 - **共享字典**（可选 Rust 扩展，Linux/macOS）：
   - `lunet.lnt_shared` - lunet 风格的共享字典，通过 Rust FFI 实现（`xmake build-lnt-shared`）
 - **JSON**（可选 Rust 扩展，Linux/macOS）：
   - `lunet.jsonic` - dkjson 风格的编解码；解码通过 Rust FFI 封装 [jsonic](https://github.com/g1mv/jsonic)（`xmake build-jsonic`）
-- **加密 / JWT**（可选纯 Lua 扩展）：
+- **数据报加密**（可选 Rust 扩展，全平台）：
+  - `lunet.paxe` - 通过 Rust FFI 的 AES-256-GCM 数据报加密，静态链接 libsodium（`xmake build-paxe`；参考：[docs/PAXE-CN.md](docs/PAXE-CN.md)）
+- **加密 / JWT**（Lua 模块，本身无二进制 —— 其加密是经 FFI 由 `lunet.sodium` / `liblunet_paxe` 调用 libsodium 实现）：
   - `lunet.security` - 基于 `lunet.sodium` + `lunet.jsonic` 的 HMAC-SHA-256 签名/验证、base64url 与 JWT HS256（参考：[docs/SECURITY-CN.md](docs/SECURITY-CN.md)）
 
 只构建一个数据库驱动，而不是全部。没有未使用的依赖。不需要为从未使用的库打安全补丁。
-
-入门（完整构建流程、配置档位、集成方式）：
-- **[docs/PHILOSOPHY-CN.md](docs/PHILOSOPHY-CN.md)**（长篇理念阐述）
-- **[docs/XMAKE_INTEGRATION-CN.md](docs/XMAKE_INTEGRATION-CN.md)**
-- **[docs/HTTPC-CN.md](docs/HTTPC-CN.md)**（可选出站 HTTPS 客户端）
 
 ### 为什么使用 lunet 数据库驱动？
 
@@ -109,32 +106,7 @@ LuaJIT、libuv 和 zlib 是必需依赖；每个驱动只增加自己的客户�
 
 仓内最小入门示例见 [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) —— 一个通过 `lunet.httpc` 调用 [OpenAlex](https://openalex.org/) 学术 API 的 SSE 传输 MCP 服务器，无数据库、无文件系统状态。
 
-[lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) 是一个更完整的 MCP（Model Context Protocol）服务器，带 Tavily 网络搜索，展示：
-
-- **SSE 传输** —— 用于实时流式的 Server-Sent Events
-- **HTTP 上的 JSON-RPC** —— 有状态的会话管理
-- **外部 API 调用** —— 通过 curl 集成 Tavily 搜索
-- **零开销追踪** —— 生产环境零代价的调试日志
-
-**为什么 MCP 服务器选 lunet？**
-
-MCP 服务器常常以 sidecar 进程部署。Lunet 的依赖（libuv、LuaJIT）都是成熟、稳定、有 Debian LTS 支持的库——没有 npm/pip 的反复变更，也不用没完没了地打安全补丁。
-
-| 实现 | 镜像大小 | 运行内存 |
-|----------------|------------|----------------|
-| **lunet-mcp-sse** | **171 MB** | **7 MB** |
-| tavily-mcp (Node.js) | 420 MB | 18 MB |
-| tavily-mcp (Bun) | 382 MB | 14 MB |
-| FastMCP (Python) | 367 MB | 28 MB |
-
-```bash
-# 快速开始
-curl -L -o lunet-mcp-sse.tar.gz \
-  https://github.com/lua-lunet/lunet-mcp-sse/releases/download/nightly/lunet-mcp-sse-linux-arm64.tar.gz
-tar -xzf lunet-mcp-sse.tar.gz
-echo "TAVILY_API_KEY=your_key" > .env
-./run.sh
-```
+[lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) 是一个更完整的 MCP（Model Context Protocol）服务器，带 Tavily 网络搜索。
 
 [`examples/realworld/README-CN.md`](examples/realworld/README-CN.md) 是路标：完整的 RealWorld "Conduit" 实现位于
 [lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua)，演示如何
@@ -163,8 +135,6 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1
 | 08 | [`examples/08_http.lua`](examples/08_http.lua) | HTTP 服务器 + 路由器（`lunet.http`、`lunet.http_router`），带中间件与可选 CORS；以 `lnt_shared` 计数器作为刻意简化的 kv 存储——GET 读取、POST 递增、PATCH 调整 | `xmake build-release` + `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_http.lua` |
 | 09 | [`examples/09_jsonic_demo.lua`](examples/09_jsonic_demo.lua) | 经 Rust FFI 的 dkjson 风格 JSON 编解码 | `xmake build-jsonic` | `"$LUNET_BIN" examples/09_jsonic_demo.lua` |
 | 10 | [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) | **规范级微型 MCP 服务器**：SSE 传输 + 经 `lunet.httpc` 的 OpenAlex API，无数据库、仅回环 | `xmake build lunet-httpc` + `.env` 中的 `OPEN_ALEX_API_KEY` | `"$LUNET_BIN" examples/mcp_openalex_sse/main.lua` |
-
-## 核心模块
 
 ## 核心模块
 
@@ -397,10 +367,6 @@ json.jstr('say "hi"')  -- '"say \"hi\""'
 json.jint(42)          -- '42'
 ```
 
-**Maelstrom 测试平台**:[`ext/jsonic/maelstrom/`](ext/jsonic/maelstrom/README-CN.md)
-将 jsonic 演示作为 Maelstrom(Jepsen)节点运行 —— Docker arm64、无卷挂载、
-仅回环 —— 通过 `make -C ext/jsonic/maelstrom test` 执行。
-
 ## 安全性：零开销追踪
 
 使用 `xmake build-debug` 构建可启用协程引用追踪和栈完整性检查。运行时会在检测到泄漏或栈污染时触发断言并崩溃。
@@ -567,7 +533,6 @@ if ok and jit then jit.off() end
 
 - **[集成指南](docs/XMAKE_INTEGRATION-CN.md)** —— 构建 Lunet 并集成进你的项目（对新手友好）
 - **[Badge 指南](docs/BADGES-CN.md)** —— 在项目 README 中添加徽章（构建状态、Lunet 版本）
-- **[EasyMem 报告](docs/EASY_MEMORY_REPORT-CN.md)** —— 性能画像发现与下一步内存建议
 
 ## 许可证
 

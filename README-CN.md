@@ -72,6 +72,8 @@ Lunet 采用**模块化设计**。只构建你需要的：
   - `lunet.lnt_shared` - lunet 风格的共享字典，通过 Rust FFI 实现（`xmake build-lnt-shared`）
 - **JSON**（可选 Rust 扩展，Linux/macOS）：
   - `lunet.jsonic` - dkjson 风格的编解码；解码通过 Rust FFI 封装 [jsonic](https://github.com/g1mv/jsonic)（`xmake build-jsonic`）
+- **加密 / JWT**（可选纯 Lua 扩展）：
+  - `lunet.security` - 基于 `lunet.sodium` + `lunet.jsonic` 的 HMAC-SHA-256 签名/验证、base64url 与 JWT HS256（参考：[docs/SECURITY-CN.md](docs/SECURITY-CN.md)）
 
 只构建一个数据库驱动，而不是全部。没有未使用的依赖。不需要为从未使用的库打安全补丁。
 

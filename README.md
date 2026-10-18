@@ -74,6 +74,8 @@ Lunet is **modular by design**. You build only what you need:
   - `lunet.lnt_shared` - lunet-style shared dict via Rust FFI (`xmake build-lnt-shared`)
 - **JSON** (optional Rust extension, Linux/macOS):
   - `lunet.jsonic` - dkjson-style encode/decode; decode via Rust FFI wrapping [jsonic](https://github.com/g1mv/jsonic) (`xmake build-jsonic`)
+- **Crypto / JWT** (optional pure-Lua extension):
+  - `lunet.security` - HMAC-SHA-256 sign/verify, base64url, and JWT HS256 over `lunet.sodium` + `lunet.jsonic` (reference: [docs/SECURITY.md](docs/SECURITY.md))
 
 Build one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
 

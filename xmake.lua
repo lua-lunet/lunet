@@ -309,7 +309,9 @@ target("lunet-bin")
     -- the binary so require() resolves them via the runtime's lunet/?.
     -- lua path entry — same convention as the sqlite3 Lua loader. The
     -- router's source file (ext/http/router.lua) installs under its
-    -- module name, http_router.lua.
+    -- module name, http_router.lua. lunet.security (ext/security/
+    -- security.lua) ships the same way: pure Lua over lunet.sodium and
+    -- lunet.jsonic, no binary of its own.
     after_build(function (target)
         local moddir = path.join(target:targetdir(), "lunet")
         if not os.isdir(moddir) then
@@ -318,6 +320,7 @@ target("lunet-bin")
         os.cp("ext/http/http.lua", moddir)
         os.cp("ext/http/http_context.lua", moddir)
         os.cp("ext/http/router.lua", path.join(moddir, "http_router.lua"))
+        os.cp("ext/security/security.lua", moddir)
     end)
 
     

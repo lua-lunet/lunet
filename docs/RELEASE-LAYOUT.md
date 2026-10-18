@@ -32,6 +32,9 @@ lunet/                              # extension modules
   http_router.lua                   # method+path router with :params and
                                     #   middleware (lunet.http_router;
                                     #   source: ext/http/router.lua)
+  security.lua                      # crypto + JWT HS256 helpers
+                                    #   (lunet.security; pure Lua over
+                                    #   lunet.sodium + lunet.jsonic)
   liblnt_shared.so                  # lnt_shared shared dictionary (Linux)
   liblnt_shared.dylib               #   (macOS — not shipped on Windows)
   lnt_shared.lua                    # lnt_shared Lua FFI loader
@@ -57,6 +60,7 @@ types/                              # LuaCATS type annotations (---@meta, docume
     mysql.lua                       # MySQL driver
     postgres.lua                    # PostgreSQL driver
     paxe.lua                        # AES-256-GCM encryption
+    security.lua                    # crypto + JWT HS256 helpers
     signal.lua                      # OS signal handling
     socket.lua                      # TCP socket operations
     sodium.lua                      # SHA-256 / HMAC-SHA-256 / randombytes

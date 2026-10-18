@@ -10,6 +10,10 @@ local postgres = {}
 --- - user: string? (default "")
 --- - password: string? (default "")
 --- - database: string? (default "")
+--- - connect_timeout: integer? seconds libpq waits before the connect attempt
+---   fails; unset leaves the libpq default untouched
+--- - sslmode: string? one of "disable"|"allow"|"prefer"|"require"|"verify-ca"|"verify-full";
+---   unset leaves the libpq default untouched
 --- - pool_size: integer? (default 1) connections behind the returned handle,
 ---   round-robin; postgres_tx requires the default
 ---@return lightuserdata|nil conn The connection handle (a pool of pool_size connections), or nil on error

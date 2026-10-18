@@ -39,4 +39,38 @@ describe("postgres module #native", function()
       assert.matches("pool_size", tostring(err))
     end)
   end)
+
+  describe("open passthrough validation", function()
+    local function open_error(params)
+      local co = coroutine.create(function()
+        return pg.open(params)
+      end)
+      local resumed, err = coroutine.resume(co)
+      return resumed, err
+    end
+
+    it("rejects a non-numeric connect_timeout", function()
+      local resumed, err = open_error({ host = "127.0.0.1", connect_timeout = "five" })
+      assert.is_false(resumed)
+      assert.matches("connect_timeout", tostring(err))
+    end)
+
+    it("rejects a non-positive connect_timeout", function()
+      local resumed, err = open_error({ host = "127.0.0.1", connect_timeout = 0 })
+      assert.is_false(resumed)
+      assert.matches("connect_timeout", tostring(err))
+    end)
+
+    it("rejects a non-string sslmode", function()
+      local resumed, err = open_error({ host = "127.0.0.1", sslmode = 42 })
+      assert.is_false(resumed)
+      assert.matches("sslmode", tostring(err))
+    end)
+
+    it("rejects an sslmode libpq does not accept", function()
+      local resumed, err = open_error({ host = "127.0.0.1", sslmode = "sometimes" })
+      assert.is_false(resumed)
+      assert.matches("sslmode", tostring(err))
+    end)
+  end)
 end)

@@ -350,9 +350,72 @@ int lunet_db_open(lua_State* L) {
   if (lua_isstring(L, -1)) snprintf(database, sizeof(database), "%s", lua_tostring(L, -1));
   lua_pop(L, 5);
 
-  snprintf(ctx->conninfo, sizeof(ctx->conninfo),
-           "host='%s' port='%d' user='%s' password='%s' dbname='%s'",
-           host, port, user, password, database);
+  /* connect_timeout: seconds libpq waits before the connect attempt fails.
+   * Unset leaves the libpq default untouched. */
+  int connect_timeout = -1;
+  lua_getfield(L, 1, "connect_timeout");
+  if (!lua_isnil(L, -1)) {
+    if (!lua_isnumber(L, -1)) {
+      lua_pop(L, 1);
+      lunet_free_nonnull(ctx);
+      lua_pushstring(L, "db.open: connect_timeout must be a number (seconds)");
+      return lua_error(L);
+    }
+    connect_timeout = (int)lua_tointeger(L, -1);
+    if (connect_timeout < 1) {
+      lua_pop(L, 1);
+      lunet_free_nonnull(ctx);
+      lua_pushstring(L, "db.open: connect_timeout must be a positive integer (seconds)");
+      return lua_error(L);
+    }
+  }
+  lua_pop(L, 1);
+
+  /* sslmode: passed through to libpq verbatim once whitelisted against the
+   * values libpq accepts. Unset leaves the libpq default untouched. */
+  char sslmode[32] = "";
+  lua_getfield(L, 1, "sslmode");
+  if (!lua_isnil(L, -1)) {
+    if (!lua_isstring(L, -1)) {
+      lua_pop(L, 1);
+      lunet_free_nonnull(ctx);
+      lua_pushstring(L, "db.open: sslmode must be a string");
+      return lua_error(L);
+    }
+    snprintf(sslmode, sizeof(sslmode), "%s", lua_tostring(L, -1));
+    static const char* const sslmodes[] = {
+        "disable", "allow", "prefer", "require", "verify-ca", "verify-full", NULL};
+    int known = 0;
+    for (int i = 0; sslmodes[i]; i++) {
+      if (strcmp(sslmode, sslmodes[i]) == 0) {
+        known = 1;
+        break;
+      }
+    }
+    if (!known) {
+      lua_pop(L, 1);
+      lunet_free_nonnull(ctx);
+      lua_pushfstring(L,
+                      "db.open: sslmode must be \"disable\", \"allow\", \"prefer\", "
+                      "\"require\", \"verify-ca\" or \"verify-full\" (got '%s')",
+                      sslmode);
+      return lua_error(L);
+    }
+  }
+  lua_pop(L, 1);
+
+  int off = snprintf(ctx->conninfo, sizeof(ctx->conninfo),
+                     "host='%s' port='%d' user='%s' password='%s' dbname='%s'",
+                     host, port, user, password, database);
+  if (connect_timeout > 0 && off > 0 && (size_t)off < sizeof(ctx->conninfo)) {
+    int n = snprintf(ctx->conninfo + off, sizeof(ctx->conninfo) - (size_t)off,
+                     " connect_timeout='%d'", connect_timeout);
+    if (n > 0) off += n;
+  }
+  if (sslmode[0] && off > 0 && (size_t)off < sizeof(ctx->conninfo)) {
+    snprintf(ctx->conninfo + off, sizeof(ctx->conninfo) - (size_t)off,
+             " sslmode='%s'", sslmode);
+  }
 
   /* pool_size: how many connections sit behind the returned handle
    * (round-robin pick at dispatch). Default 1 — exactly one connection,

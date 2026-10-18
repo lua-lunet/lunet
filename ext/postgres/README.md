@@ -11,11 +11,37 @@ deliberately no `db.escape`.
 
 | Function | Notes |
 |---|---|
-| `open(config)` | `host`, `port`, `user`, `password`, `database`, optional `pool_size` (default 1) |
+| `open(config)` | `host`, `port`, `user`, `password`, `database`, optional `connect_timeout`, `sslmode`, `pool_size` (default 1) |
 | `close(conn)` | |
 | `query(conn, sql, ...)` | returns array of row tables |
 | `exec(conn, sql, ...)` | returns `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | same behaviour as the above |
+
+### Open settings
+
+`open` accepts a params table with the settings below. Everything except
+`host` and friends is optional at runtime; wrong types and unknown values
+raise a loud error at open time rather than being silently ignored.
+
+| Param | Type | Semantics |
+|---|---|---|
+| `host` | string | default `"localhost"` |
+| `port` | integer | default `5432` |
+| `user` / `password` / `database` | string | defaults `""` |
+| `connect_timeout` | integer | seconds libpq waits before the connect attempt fails; unset leaves the libpq default untouched |
+| `sslmode` | string | one of `"disable"`, `"allow"`, `"prefer"`, `"require"`, `"verify-ca"`, `"verify-full"`; unset leaves the libpq default untouched |
+| `pool_size` | integer | default `1`; see below |
+
+Passthrough semantics: `connect_timeout` and `sslmode` are applied before the
+handle returns — they go into the libpq conninfo string the driver assembles
+and are in force for every connection in the pool, including the first one you
+touch. The driver never invents a value the vendor already defaults: omit the
+field and libpq behaves exactly as libpq documents.
+
+There is no post-open pragma surface on this handle — no `SET` escape hatch,
+no per-session knob. Open-time settings are the entire contract. (The
+sqlite3-style read/write split deliberately does not apply to remote drivers:
+the server routes read/write traffic itself.)
 
 ### `pool_size`
 

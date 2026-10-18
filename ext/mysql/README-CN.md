@@ -10,11 +10,35 @@ SQL。本项目有意不提供 `db.escape`。
 
 | 函数 | 说明 |
 |---|---|
-| `open(config)` | `host`、`port`、`user`、`password`、`database`、`charset`，可选 `pool_size`（默认 1） |
+| `open(config)` | `host`、`port`、`user`、`password`、`database`、`charset`，可选 `connect_timeout`、`pool_size`（默认 1） |
 | `close(conn)` | |
 | `query(conn, sql, ...)` | 返回行表数组 |
 | `exec(conn, sql, ...)` | 返回 `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | 与上述行为一致 |
+
+### 打开参数（Open settings）
+
+`open` 接受一个参数表，包含下表所列设置。除 `host` 等连接目标外，其余字段在
+运行时均可省略；类型错误会在打开时大声报错，绝不会被静默忽略。
+
+| 参数 | 类型 | 语义 |
+|---|---|---|
+| `host` | string | 默认 `"localhost"` |
+| `port` | integer | 默认 `3306` |
+| `user` | string | 默认 `"root"` |
+| `password` / `database` | string | 默认 `""` |
+| `charset` | string | 默认 `"utf8mb4"`，通过 `MYSQL_SET_CHARSET_NAME` 生效 |
+| `connect_timeout` | integer | libmysqlclient 连接尝试的等待秒数；不设置则保持库默认值 |
+| `pool_size` | integer | 默认 `1`；见下文 |
+
+透传语义：`connect_timeout` 在句柄返回**之前**就已生效——驱动在对池中每一条连接
+调用 `mysql_real_connect` 之前先设置 `MYSQL_OPT_CONNECT_TIMEOUT`，因此它对你最先
+接触的连接以及所有连接同时生效。驱动不会替供应商发明默认值：省略字段，
+libmysqlclient 的行为就与其手册所述完全一致。
+
+该句柄没有打开后的 pragma 通道——没有作为 API 暴露的 `SET` 逃生舱口，也没有会话
+级旋钮。打开时的设置就是全部约定。（sqlite3 风格的读/写拆分有意不适用于远程
+驱动：服务器自身负责读/写流量的路由。）
 
 ### `pool_size`
 

@@ -15,6 +15,13 @@ name: Build
 # This is also documented in the release quality gate in AGENTS.md.
 
 on:
+  # ONE tap per change — the triggers cover everything between them:
+  # - PR branches: `pull_request` fires on open/synchronize. Do NOT also
+  #   `gh workflow run` the branch by hand — that is how double builds
+  #   happened (both ran the same head SHA).
+  # - main and v* tags: `push` fires.
+  # - workflow_dispatch exists for manual builds of an arbitrary ref
+  #   (inputs.ref) — e.g. re-running packaging for a branch with no PR.
   push:
     branches: [ main, xmake ]
     tags:
@@ -35,9 +42,12 @@ on:
 permissions:
   contents: write
 
-# Cancel previous runs when a new commit is pushed to the same PR/branch.
+# Cancel previous runs for the same branch WHATEVER event tapped it: the
+# group normalizes to the branch name for pull_request, push and dispatch
+# alike, so a manual dispatch on a branch that has a PR cancels the PR run
+# instead of doubling it.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:

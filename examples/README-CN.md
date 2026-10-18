@@ -13,7 +13,7 @@ SQL 驱动、加密数据报、MCP 服务器、嵌入 C 宿主程序，以及一
 | 2 | realworld-lua | RealWorld "Conduit" 应用 | [lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua) |
 | 3 | lunet-mcp-sse | 以 Docker 镜像交付的生产级 SSE 传输 MCP 服务器 | [lua-lunet/lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) |
 | 4 | lunet-backproxy | 面向 DMZ 拓扑的纯出站反向代理 | [lua-lunet/lunet-backproxy](https://github.com/lua-lunet/lunet-backproxy) |
-| 5 | examples/mcp_openalex_sse | 本仓库内完整的 MCP-over-SSE 演示 | [examples/mcp_openalex_sse](../mcp_openalex_sse/) |
+| 5 | examples/mcp_openalex_sse | 本仓库内完整的 MCP-over-SSE 演示 | [examples/mcp_openalex_sse](mcp_openalex_sse/) |
 
 ### 1. twelve-dollar-server-challenge
 
@@ -55,7 +55,7 @@ Node.js 与 Python/Django 实现；请直接看那张表，不要相信转述。
 OpenAlex 学术 API 支撑的工具，只听回环，无数据库。它是那个「克隆即跑」的
 示例 —— 克隆本仓库、构建运行时、把 OpenAlex API 密钥放进 `.env` 文件，用
 构建好的 `lunet-run` 执行 `examples/mcp_openalex_sse/main.lua` 即可；确切
-命令见它的 [README](../mcp_openalex_sse/README-CN.md)。
+命令见它的 [README](mcp_openalex_sse/README-CN.md)。
 
 ## 仓库内演示文件
 
@@ -75,5 +75,4 @@ OpenAlex 学术 API 支撑的工具，只听回环，无数据库。它是那个
 | `09_jsonic_demo.lua` | jsonic 扩展：dkjson 风格 API 之下的 Rust JSON 解码 |
 | `10_db_prepared.lua` | SQLite 预编译语句 |
 | `mcp_openalex_sse/` | 完整的 MCP-over-SSE 演示（见上文） |
-| `realworld/` | 本目录：通往 RealWorld 应用的路标 |
 | `sdk_embed/` | 将 lunet 运行时嵌入带内嵌脚本的 C 宿主程序 |

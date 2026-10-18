@@ -232,7 +232,7 @@ lldb ./build/macosx/arm64/debug/lunet-run -c /cores/core.XXXXX
 
 仓库中没有已提交的复现工具集：旧的 `.tmp/repro-payload/` 路径是 gitignore
 的暂存区，已不存在。echo/load/dmz 类复现请使用
-[examples/realworld/](../examples/realworld/README-CN.md) 中的演示应用，以及
+[examples/](../examples/README-CN.md) 中的演示应用，以及
 twelve-dollar 挑战仓库的 `bench/` 工具集。
 
 ### 已知陷阱
@@ -280,7 +280,7 @@ xmake stress
 
 ### 3. 应用级负载测试（RealWorld Conduit）
 关于全栈负载测试（HTTP -> 路由 -> 控制器 -> 数据库 -> 协程），请使用
-[examples/realworld/](../examples/realworld/README-CN.md) 中的演示应用 - 
+[examples/](../examples/README-CN.md) 中的演示应用 - 
 尤其是 [realworld-lua](https://github.com/lua-lunet/realworld-lua)。
 
 如果服务器在负载测试期间崩溃（退出码 > 0 或 SIGABRT），这是**严重故障**。

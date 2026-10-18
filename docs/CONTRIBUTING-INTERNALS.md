@@ -213,7 +213,7 @@ lldb ./build/macosx/arm64/debug/lunet-run -c /cores/core.XXXXX
 
 There is no committed repro harness: the old `.tmp/repro-payload/` path was
 gitignored scratch and no longer exists. For echo/load/dmz-style repros, use
-the demo applications in [examples/realworld/](../examples/realworld/README.md)
+the demo applications in [examples/](../examples/README.md)
 and the twelve-dollar challenge tree's `bench/` rig.
 
 ### Known Pitfalls
@@ -249,7 +249,7 @@ xmake stress
 ```
 
 ### 3. Application Load Testing (RealWorld Conduit)
-For full-stack load testing (HTTP -> Router -> Controller -> DB -> Coroutines), use the demo applications in [examples/realworld/](../examples/realworld/README.md) - in particular [realworld-lua](https://github.com/lua-lunet/realworld-lua).
+For full-stack load testing (HTTP -> Router -> Controller -> DB -> Coroutines), use the demo applications in [examples/](../examples/README.md) - in particular [realworld-lua](https://github.com/lua-lunet/realworld-lua).
 
 If the server crashes during load testing (exit code > 0 or SIGABRT), it is a **CRITICAL FAILURE**. Check logs for `[TRACE]` assertions.
 

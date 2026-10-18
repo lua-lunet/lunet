@@ -108,7 +108,7 @@ LuaJIT、libuv 和 zlib 是必需依赖；每个驱动只增加自己的客户�
 
 [lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) 是一个更完整的 MCP（Model Context Protocol）服务器，带 Tavily 网络搜索。
 
-[`examples/realworld/README-CN.md`](examples/realworld/README-CN.md) 是路标：完整的 RealWorld "Conduit" 实现位于
+[`examples/README-CN.md`](examples/README-CN.md) 是路标：完整的 RealWorld "Conduit" 实现位于
 [lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua)，演示如何
 用 Lunet 构建更典型的应用，同时保持更小的内存占用与更快的启动时间。
 

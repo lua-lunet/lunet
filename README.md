@@ -135,7 +135,7 @@ binary - `xmake build <target>` is only needed when you build from source.
 | 09 | [`examples/09_jsonic_demo.lua`](examples/09_jsonic_demo.lua) | dkjson-style JSON encode/decode via Rust FFI | `xmake build-jsonic` | `"$LUNET_BIN" examples/09_jsonic_demo.lua` |
 | 10 | [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) | **Canonical tiny MCP server**: SSE transport + OpenAlex API via `lunet.httpc`, no DB, loopback only | `xmake build lunet-httpc` + `OPEN_ALEX_API_KEY` in `.env` | `"$LUNET_BIN" examples/mcp_openalex_sse/main.lua` |
 
-See [`examples/realworld/README.md`](examples/realworld/README.md) - which
+See [`examples/README.md`](examples/README.md) - which
 signposts the complete RealWorld "Conduit" implementation at
 [lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua) for how
 to build a more typical app with Lunet with a smaller footprint and faster

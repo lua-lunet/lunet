@@ -1,24 +1,11 @@
 name: Release
 #
-# Tag-triggered release build. build.yml keeps the PR/main QA build and its
-# dispatch escape hatch; this workflow owns v* tags end to end and publishes
-# in two stages so users are not blocked on the slowest leg:
-#
-# - build-unix and build-windows run in parallel. They are the build.yml
-#   packaging legs trimmed to packaging only — the tag's commit already
-#   passed the full QA build on main, so no test/lint/QA steps run here.
-# - publish-unix creates the release as soon as the unix + macos assets are
-#   ready: three runtime archives, three SDK archives and the rendered
-#   fetch helper (seven assets), with release notes.
-# - publish-windows appends the two Windows zips to the same release once
-#   its leg finishes, via `gh release upload --clobber`: additive by name,
-#   it cannot disturb the notes or the earlier assets, and it fails loudly
-#   if the release does not exist yet.
-#
-# The asset filenames are the contract: bin/lunet_fetch_release.lua and
-# bin/generate_release_notes.lua consume them, and the release-* artifact
-# names mirror build.yml so the packaging steps stay copy-identical. Do not
-# rename either set.
+# Tag-triggered release build: build-unix and build-windows in parallel,
+# publish-unix creates the release with the unix/macos assets + notes +
+# fetch helper (seven assets), publish-windows appends the two Windows
+# zips via `gh release upload --clobber`. The asset filenames are the
+# contract: bin/lunet_fetch_release.lua and bin/generate_release_notes.lua
+# consume them.
 
 on:
   push:
@@ -34,9 +21,6 @@ on:
 permissions:
   contents: write
 
-# Same normalization as build.yml: the group resolves to the tag name for
-# tag pushes and to the ref the workflow was dispatched on otherwise, so a
-# re-run cancels the stale release run instead of doubling it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true

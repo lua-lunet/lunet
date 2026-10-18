@@ -246,7 +246,14 @@ local notes = table.concat({ "## Highlights", "", highlights, "", static_body },
 -- Do NOT use print() here: xmake's sandboxed print expands "$(shell ...)"
 -- sequences by executing them, so any notes content showing Makefile-style
 -- $(shell ...) examples aborts the whole run. io.stdout:write is raw.
-local out_path = os.getenv("LUNET_RELEASE_NOTES_OUT") or "release-notes.md"
+-- Default output is the repo-local gitignored scratch dir, never the repo
+-- root: a notes render is a build artefact and belongs in .tmp/ alongside
+-- the other throwaway outputs. LUNET_RELEASE_NOTES_OUT still wins. Runs in
+-- xmake's sandbox, where os has no execute — use xmake's own os.mkdir.
+local out_path = os.getenv("LUNET_RELEASE_NOTES_OUT") or ".tmp/release-notes.md"
+if out_path == ".tmp/release-notes.md" and not os.exists(".tmp") then
+	os.mkdir(".tmp")
+end
 io.writefile(out_path, notes)
 io.stderr:write("[release-notes] wrote " .. out_path .. "\n")
 io.stdout:write(notes, "\n")

@@ -10,12 +10,28 @@ reference: the API, the handle lifetimes, and the performance model — the
 Placeholders are `?`. Parameters are bound natively via `sqlite3_bind_*`, so
 values are never concatenated into SQL. There is deliberately no `db.escape`.
 
+> ## Read this before using the read-only connection
+>
+> Under some workloads it is possible to get peak performance by opening in
+> WAL mode and running reads on the read-only connection, which runs without
+> a background thread — and therefore **risks stalling the main loop**.
+> Whether that trade works for you depends entirely on your workload and on
+> the SQLite version you link against; there are many caveats. **Read and
+> understand the [SQLite documentation](https://sqlite.org/wal.html) before
+> relying on it.** Set whatever settings you want — what will work depends
+> on your workload.
+>
+> **If in doubt, do not use the read-only connection. Send everything down
+> the read-write connection.** If it stalls, blocks or misbehaves, that is
+> on not reading this warning — the driver does exactly what is documented
+> here and nothing else. There is no magic.
+
 ## Surface
 
 | Function | Notes |
 |---|---|
-| `open(config)` | `{ path = "app.db" }` or `{ path = ":memory:" }`; **caches** the `(rw, ro)` pair keyed on the path string |
-| `open_raw(config)` | same as `open`, but always opens a fresh pair; the cache is bypassed |
+| `open(config)` | `{ path = "app.db" }`, optionally `create = "WAL"|"NORMAL"` and the passthrough settings (`busy_timeout` ms, `foreign_keys` bool, `synchronous` "OFF"\|"NORMAL"\|"FULL"); **caches** the `(rw, ro)` pair keyed on the path string — `:memory:` is never cached |
+| `open_raw(config)` | same config as `open`, but always opens a fresh pair; the cache is bypassed |
 | `destroy(path)` | close both cached handles for a path and clear the cache entry; no-op if none |
 | `close(conn)` | close a single handle (the `open_raw` lifetime) |
 | `query(conn, sql, ...)` | returns array of row tables |
@@ -30,6 +46,51 @@ on `ro`. The Lua loader owns the policy — the path-keyed cache, `open_raw`,
 mis-handle the C stack and the C core cannot grow cache policy. All calls
 must run inside a coroutine spawned via `lunet.spawn`.
 
+## The open contract
+
+```lua
+local db = require("lunet.sqlite3")
+
+-- 1. Existing, provisioned database file. The driver opens it read-write
+--    and never touches its journal mode. A missing file is a loud error —
+--    provisioning (creating the file, setting WAL) is a deployment act:
+--      sqlite3 app.db "PRAGMA journal_mode=WAL;"
+local rw, ro, err = db.open({ path = "app.db" })
+
+-- 2. Let the driver create the file — the mode is declared at creation:
+local rw, ro, err = db.open({ path = "app.db", create = "WAL" })
+--    create = "WAL"    -> creates the file and sets journal_mode=WAL (the
+--                         pragma's return value is checked; a filesystem
+--                         that cannot host WAL fails the open loudly).
+--    create = "NORMAL" -> creates the file, journal mode stays at the
+--                         SQLite default (rollback journal).
+--    There is no "un-WAL": WAL is persistent for the file, and the driver
+--    never changes the mode of an existing file on its own. On an existing
+--    file create=WAL re-issues the pragma (idempotent); create=NORMAL
+--    leaves the mode alone.
+
+-- 3. Informed-user passthroughs, applied to BOTH connections at open:
+local rw, ro, err = db.open({
+    path = "app.db", create = "WAL",
+    busy_timeout = 3000,        -- ms: the busy handler on each connection
+    foreign_keys = true,        -- PRAGMA foreign_keys (off by vendor default)
+    synchronous  = "NORMAL",    -- durability trade; never a driver default
+})
+
+-- 4. Unit tests: swap the path for :memory: and the same code shape runs.
+--    One connection is returned as BOTH handles; create= is ignored and
+--    ro does not enforce read-only there. :memory: is never cached —
+--    every open is a fresh private database.
+local rw, ro, err = db.open({ path = ":memory:" })
+```
+
+The passthroughs are per-connection and last-write-wins — after open, tune
+either handle independently:
+
+```lua
+db.exec(rw, "PRAGMA busy_timeout = 5000")  -- rw only; ro keeps the open value
+```
+
 ## Reads and writes
 
 `open` returns two connections:
@@ -38,12 +99,8 @@ must run inside a coroutine spawned via `lunet.spawn`.
 local db = require("lunet.sqlite3")
 
 lunet.spawn(function()
-  local rw, ro, err = db.open({ path = "app.db" })
+  local rw, ro, err = db.open({ path = "app.db", create = "WAL" })
   if not rw then error(err) end
-
-  -- One-time setup on the writer: WAL makes readers uncontended
-  -- against the single writer.
-  assert(db.exec(rw, "PRAGMA journal_mode=WAL"))
 
   -- Writes go to rw (worker pool, as always)...
   assert(db.exec(rw, "INSERT INTO t VALUES (?)", 1))
@@ -57,11 +114,17 @@ end)
 ```
 
 - `rw` — the read-write connection: one writer, per-connection mutex,
-  statements dispatched to the uv worker pool.
+  statements dispatched to the uv worker pool. It also reads: it is the
+  general connection, and the only one that writes.
 - `ro` — a second connection opened with `SQLITE_OPEN_READONLY`, for read
-  traffic. Queries and execs on it run inline on the loop thread. In WAL
-  mode readers never contend with the writer, so the loop-thread hop is the
-  fast path.
+  traffic. **Queries and execs on it run inline on the loop thread — there
+  is no background thread and no yield.** In WAL mode readers never contend
+  with the writer, so the loop-thread hop is the fast path; the trade is
+  that a heavy read (large scan, cold page cache) stalls every coroutine,
+  socket and timer for its duration. If you do not want the inline reader,
+  discard it by convention — `local rw, _ = db.open({ path = "app.db" })`
+  (`_` is Lua convention, not a language feature; the ro connection still
+  exists until `destroy(path)`, at the cost of one file descriptor).
 - **Failure shape:** on open failure both handles are `nil` and the error is
   the third return — `local rw, ro, err = db.open(...)`. This is a
   sqlite3-specific shape: the network drivers keep `(conn, err)`.
@@ -76,6 +139,10 @@ end)
   `SQLITE_READONLY` ("attempt to write a readonly database") — it can never
   commit silently. `sqlite3_db_readonly(ro, "main")` stays available
   underneath for tests that want the invariant as a first-class assertion.
+- **Snapshots:** a `ro` read sees the committed state at the moment the read
+  starts. Read-after-write within the same instant is stale on `ro`; route
+  consistency-critical reads through `rw` (each call is a fresh read
+  transaction, so a read issued after the write call returns is current).
 
 ## The performance model
 

@@ -230,11 +230,11 @@ xmake build lunet-postgres  # PostgreSQL
 local db = require("lunet.sqlite3")
 
 -- Open: returns TWO connections — rw (worker pool) + ro (reads run
--- inline on the loop thread). The pair is cached per path; full
--- reference: ext/sqlite3/SQLITE.md
-local rw, ro, err = db.open({ path = "myapp.db" })
+-- inline on the loop thread). The pair is cached per path; create="WAL"
+-- provisions a new file with the sticky WAL journal mode in one act.
+-- Full reference: ext/sqlite3/SQLITE.md
+local rw, ro, err = db.open({ path = "myapp.db", create = "WAL" })
 if not rw then error(err) end
-assert(db.exec(rw, "PRAGMA journal_mode=WAL"))
 
 -- Execute (INSERT/UPDATE/DELETE) - returns metadata
 local result = db.exec(rw, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
@@ -301,7 +301,7 @@ db.close(conn)
 
 | Function | Description | Returns |
 |----------|-------------|---------|
-| `db.open(config)` | Open connection(s): sqlite3 returns the cached `(rw, ro)` pair per path; postgres/mysql return one connection (optionally pooled via `pool_size`, default 1) | connection handle(s) |
+| `db.open(config)` | Open connection(s): sqlite3 returns the cached `(rw, ro)` pair per path — `create = "WAL"\|"NORMAL"` lets the driver provision a new file (without it the file must exist); postgres/mysql return one connection (optionally pooled via `pool_size`, default 1) | connection handle(s) |
 | `db.close(conn)` | Close connection | - |
 | `db.query(conn, sql, ...)` | Execute SELECT (with optional parameters) | array of row tables |
 | `db.exec(conn, sql, ...)` | Execute INSERT/UPDATE/DELETE (with optional parameters) | result table (`affected_rows`, `last_insert_id`) |

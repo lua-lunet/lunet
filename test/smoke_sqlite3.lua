@@ -15,7 +15,7 @@ local function test_sqlite3()
         __lunet_exit_code = 1
         return
     end
-    print("   OK: Database opened (rw + read-only ro)")
+    print("   OK: Database opened (one connection returned as rw and ro)")
 
     local _, rows
     -- Test 2: Create table
@@ -52,6 +52,22 @@ local function test_sqlite3()
         return
     end
     print("   OK: Query returned expected data")
+
+    -- Test 4b: the ro handle sees rw's writes — on :memory: both handles
+    -- are the same connection (unit-test swap semantics).
+    print("4b. Querying through the ro handle...")
+    rows, err = db.query(ro, "SELECT * FROM test")
+    if err then
+        print("FAIL: Could not query via ro: " .. tostring(err))
+        __lunet_exit_code = 1
+        return
+    end
+    if #rows ~= 1 or rows[1].name ~= "hello" then
+        print("FAIL: ro handle did not see rw's data")
+        __lunet_exit_code = 1
+        return
+    end
+    print("   OK: ro handle sees rw's data")
 
     -- Test 5: Parameterized query
     print("5. Parameterized query...")

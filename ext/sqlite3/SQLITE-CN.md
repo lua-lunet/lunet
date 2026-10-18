@@ -9,12 +9,24 @@ SQLite 驱动。可以直接 `require("lunet.sqlite3")` 发布压缩包中的预
 占位符为 `?`。参数通过 `sqlite3_bind_*` 原生绑定，值永远不会被拼接进 SQL。
 本项目有意不提供 `db.escape`。
 
+> ## 使用只读连接前必读
+>
+> 在某些负载下，以 WAL 模式打开并把读交给只读连接（它**没有后台线程**，
+> 因此**有可能拖住主循环**）确实能拿到峰值性能。这笔交易是否成立，完全取
+> 决于你的负载和你链接的 SQLite 版本；注意事项很多。**依赖它之前，请先读
+> 懂 [SQLite 文档](https://sqlite.org/wal.html)。** 设置想设的任何参数——
+> 什么会生效取决于你的负载。
+>
+> **有疑问就不要用只读连接，全部走读写连接。** 如果它停摆、阻塞或行为不
+> 符预期，那是没有读本警告的问题——驱动做的事与本文所写完全一致，不多不
+> 少。这里没有任何魔法。
+
 ## 表面
 
 | 函数 | 说明 |
 |---|---|
-| `open(config)` | `{ path = "app.db" }` 或 `{ path = ":memory:" }`；按路径字符串**缓存** `(rw, ro)` 对 |
-| `open_raw(config)` | 与 `open` 相同，但总是打开全新一对；完全绕过缓存 |
+| `open(config)` | `{ path = "app.db" }`，可选 `create = "WAL"\|"NORMAL"` 与透传设置（`busy_timeout` 毫秒、`foreign_keys` 布尔、`synchronous` "OFF"\|"NORMAL"\|"FULL"）；按路径字符串**缓存** `(rw, ro)` 对——`:memory:` 永不缓存 |
+| `open_raw(config)` | 与 `open` 相同的配置，但总是打开全新一对；完全绕过缓存 |
 | `destroy(path)` | 关闭某路径的两个缓存句柄并清除缓存项；无缓存项时是 no-op |
 | `close(conn)` | 关闭单个句柄（`open_raw` 的生命周期） |
 | `query(conn, sql, ...)` | 返回行表数组 |
@@ -27,6 +39,46 @@ SQLite 驱动。可以直接 `require("lunet.sqlite3")` 发布压缩包中的预
 `destroy`。谁也不插手对方的活；Lua 缓存碰不到 C 栈，C 核也长不出缓存策略。
 所有调用必须在 `lunet.spawn` 出的协程里。
 
+## open 契约
+
+```lua
+local db = require("lunet.sqlite3")
+
+-- 1. 已由部署方准备好的既有数据库文件。驱动以读写方式打开它，且绝不
+--    更改其日志模式。文件缺失是响亮的错误——准备（建文件、设 WAL）是
+--    部署侧的动作：
+--      sqlite3 app.db "PRAGMA journal_mode=WAL;"
+local rw, ro, err = db.open({ path = "app.db" })
+
+-- 2. 让驱动来建文件——模式在创建时声明：
+local rw, ro, err = db.open({ path = "app.db", create = "WAL" })
+--    create = "WAL"    -> 建文件并设 journal_mode=WAL（检查 pragma 的返回
+--                         值；文件系统承载不了 WAL 时 open 响亮失败）。
+--    create = "NORMAL" -> 建文件，日志模式保持 SQLite 默认（回滚日志）。
+--    不存在"取消 WAL"：WAL 对文件是持久的，驱动绝不会擅自更改既有文件
+--    的模式。对既有文件传 create=WAL 会重发该 pragma（幂等）；
+--    create=NORMAL 则对模式不做任何事。
+
+-- 3. 知情用户的透传设置，作用于 open 时的两个连接：
+local rw, ro, err = db.open({
+    path = "app.db", create = "WAL",
+    busy_timeout = 3000,        -- 毫秒：每个连接的 busy handler
+    foreign_keys = true,        -- PRAGMA foreign_keys（厂商默认关）
+    synchronous  = "NORMAL",    -- 持久性权衡；绝不是驱动默认值
+})
+
+-- 4. 单元测试：把路径换成 :memory:，同样的代码形状照跑。
+--    驱动返回一个连接充当两个句柄；create= 被忽略；那里的 ro 不强制
+--    只读。:memory: 永不缓存——每次 open 都是全新私有数据库。
+local rw, ro, err = db.open({ path = ":memory:" })
+```
+
+透传设置是每连接、后写者赢——open 之后可以独立调整任一句柄：
+
+```lua
+db.exec(rw, "PRAGMA busy_timeout = 5000")  -- 只改 rw；ro 保持 open 时的值
+```
+
 ## 读与写
 
 `open` 返回两个连接：
@@ -35,11 +87,8 @@ SQLite 驱动。可以直接 `require("lunet.sqlite3")` 发布压缩包中的预
 local db = require("lunet.sqlite3")
 
 lunet.spawn(function()
-  local rw, ro, err = db.open({ path = "app.db" })
+  local rw, ro, err = db.open({ path = "app.db", create = "WAL" })
   if not rw then error(err) end
-
-  -- 写者上的一次性设置：WAL 让读者与唯一的写者互不阻塞。
-  assert(db.exec(rw, "PRAGMA journal_mode=WAL"))
 
   -- 写入走 rw（照旧进入 worker 池）……
   assert(db.exec(rw, "INSERT INTO t VALUES (?)", 1))
@@ -52,10 +101,15 @@ lunet.spawn(function()
 end)
 ```
 
-- `rw` —— 读写连接：单写者、每连接互斥锁、语句派发到 uv worker 池。
-- `ro` —— 以 `SQLITE_OPEN_READONLY` 打开的第二个连接，用于读流量。其上的
-  `query`/`exec` 在循环线程内联执行。WAL 模式下读者与写者互不阻塞，因此
-  循环线程路径就是快路径。
+- `rw` —— 读写连接：单写者、每连接互斥锁、语句派发到 uv worker 池。它也
+  能读：它就是那个通用连接，而且是唯一能写的。
+- `ro` —— 以 `SQLITE_OPEN_READONLY` 打开的第二个连接，用于读流量。**其上
+  的 `query`/`exec` 在循环线程内联执行——没有后台线程，也不发生 yield。**
+  WAL 模式下读者与写者互不阻塞，因此循环线程路径就是快路径；代价是重读
+  （大扫描、冷页缓存）会让所有协程、socket 和定时器停摆其执行时长。如果
+  不想要内联读句柄，按约定丢弃它——`local rw, _ = db.open({ path =
+  "app.db" })`（`_` 只是 Lua 惯例，不是语言特性；ro 连接仍存在，直到
+  `destroy(path)`，代价只是一个文件描述符）。
 - **失败形态：** 打开失败时两个句柄均为 `nil`，错误是第三个返回值 ——
   `local rw, ro, err = db.open(...)`。这是 sqlite3 驱动特有的形态：网络驱动
   仍保持 `(conn, err)`。
@@ -68,6 +122,9 @@ end)
   阶段响亮失败并返回 `SQLITE_READONLY`（"attempt to write a readonly
   database"）——绝不可能静默提交。`sqlite3_db_readonly(ro, "main")` 仍在底层
   可用，供测试把不变量当一等断言使用。
+- **快照：** `ro` 上的读看到的是读开始那一刻的已提交状态。同一瞬间的
+  写后读在 `ro` 上是旧的；一致性关键的读走 `rw`（每次调用都是全新的读事
+  务，写调用返回之后发出的读必然是新的）。
 
 ## 性能模型
 

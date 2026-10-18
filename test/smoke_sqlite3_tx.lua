@@ -34,8 +34,10 @@ end
 
 lunet.spawn(function()
     local path = os.tmpname() .. ".db"
-    -- the cached convenience open: the smoke closes via destroy(path)
-    local conn, _, err = db.open({ path = path })
+    -- the cached convenience open: the smoke closes via destroy(path).
+    -- The tmpname file does not exist, so create it — NORMAL leaves the
+    -- journal mode alone and produces no -wal/-shm side files.
+    local conn, _, err = db.open({ path = path, create = "NORMAL" })
     if not conn then
         print("cannot open sqlite db: " .. tostring(err))
         os.exit(1)

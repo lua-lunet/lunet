@@ -10,8 +10,25 @@ local db = {}
 
 ---Convenience open: returns the cached (rw, ro) pair for this path if one
 ---exists, otherwise opens a fresh pair and caches it.
----params: { path = "app.db" } (":memory:" cannot be split — use the rw
----handle alone).
+---params:
+---  path          string  database file; ":memory:" opens a fresh private
+---                        in-memory database (never cached; ro is the same
+---                        connection and does not enforce read-only)
+---  create        string  "WAL" create the file and set journal_mode=WAL;
+---                        "NORMAL" create the file, leave the journal mode
+---                        at the SQLite default. Without create= the file
+---                        must already exist — provisioning is a deployment
+---                        act and the driver never makes a sticky change to
+---                        a file on its own.
+---  busy_timeout  integer ms busy handler on both connections
+---  foreign_keys  boolean  PRAGMA foreign_keys on both connections
+---  synchronous   string   "OFF"|"NORMAL"|"FULL" on both connections
+---The passthroughs apply to both connections before open returns;
+---afterwards they are per-connection and last-write-wins via
+---db.exec(handle, "PRAGMA ...").
+---The ro handle runs queries and execs INLINE on the loop thread — no
+---background thread, no yield; a heavy read stalls the loop for its
+---duration.
 ---@param params table Connection parameters
 ---@return lightuserdata|nil rw Read-write connection, nil on error
 ---@return lightuserdata|nil ro Read-only connection (reads run inline on the loop thread); nil on error
@@ -20,6 +37,8 @@ function db.open(params) end
 
 ---Raw open: always opens a fresh (rw, ro, err) pair, bypassing the cache.
 ---The caller owns the lifetimes and closes each handle with close().
+---Takes the same params table as open(); ":memory:" returns the same
+---connection as both handles.
 ---@param params table Connection parameters
 ---@return lightuserdata|nil rw Read-write connection, nil on error
 ---@return lightuserdata|nil ro Read-only connection; nil on error

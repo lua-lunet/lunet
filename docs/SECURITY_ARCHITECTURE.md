@@ -52,19 +52,6 @@ allow local attackers to connect.
 Unix sockets use filesystem permissions — only processes with the correct 
 UID/GID can connect.
 
-## Supported Protocols
-
-lunet is protocol-agnostic. Whatever your edge forwards, lunet handles:
-
-| Category | Protocols |
-|----------|-----------|
-| Web | HTTP/1.1, WebSocket |
-| RPC | gRPC, JSON-RPC, XML-RPC |
-| Messaging | STOMP, MQTT, AMQP, XMPP |
-| Data | Redis protocol, Memcached protocol |
-| Gaming | Source RCON, Minecraft protocol, Photon, ENet |
-| Custom | Any framed or length-prefixed binary protocol |
-
 ## Outbound TLS Clients (Optional)
 
 This document’s “terminate TLS at the edge” guidance is about **inbound exposure**.

@@ -1133,23 +1133,6 @@ task("build-debug-asan-luajit")
     end)
 task_end()
 
-task("repro-50-asan-luajit")
-    set_menu {
-        usage = "xmake repro-50-asan-luajit",
-        description = "Run the socket stress repro with LuaJIT+Lunet ASan (macOS)"
-    }
-    on_run(function ()
-        if not is_host("macosx") then
-            raise("repro-50-asan-luajit task is macOS-only")
-        end
-        os.exec("xmake build-debug-asan-luajit")
-        local snapshot = lunet_trim(os.iorun("xmake l -c 'import(\"core.project.config\"); config.load(); io.write(config.get(\"luajit_snapshot\") or \"\")'"))
-        local debver = lunet_trim(os.iorun("xmake l -c 'import(\"core.project.config\"); config.load(); io.write(config.get(\"luajit_debian_version\") or \"\")'"))
-        local prefix = lunet_trim(os.iorun("LUAJIT_SNAPSHOT=\"" .. snapshot .. "\" LUAJIT_DEBIAN_VERSION=\"" .. debver .. "\" lua bin/build_luajit_asan.lua"))
-        os.exec("DYLD_LIBRARY_PATH=\"" .. prefix .. "/lib:$DYLD_LIBRARY_PATH\" LUNET_BIN=\"$(pwd)/build/macosx/arm64/debug/lunet-run\" ITERATIONS=${ITERATIONS:-10} REQUESTS=${REQUESTS:-50} CONCURRENCY=${CONCURRENCY:-4} WORKERS=${WORKERS:-4} timeout 180 .tmp/repro-payload/scripts/repro.sh")
-    end)
-task_end()
-
 task("examples-compile")
     set_menu {
         usage = "xmake examples-compile",

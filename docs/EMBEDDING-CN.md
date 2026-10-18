@@ -3,26 +3,34 @@
 每个发布版本都会与 `lunet-run` 一同发布按平台区分的 SDK 压缩包：
 
 - `lunet-linux-amd64-sdk.tar.gz`
+- `lunet-linux-arm64-sdk.tar.gz`
 - `lunet-macos-sdk.tar.gz`
 - `lunet-windows-amd64-sdk.zip`
 
 SDK 允许原生应用链接 Lunet，并把 Lua 应用编译到自己的可执行文件中。它不打包
 LuaJIT、libuv 或 zlib；请为目标平台安装匹配的开发库和运行时库。
 
-## SDK 布局
+## 压缩包里有什么
 
-```text
-bin/generate_embed_scripts.lua
-examples/sdk_embed/main.c
-examples/sdk_embed/app/main.lua
-include/lunet.h
-include/lunet_exports.h
-lib/liblunet-static.a                 # Linux/macOS
-lib/lunet-static.lib                  # Windows
-LICENSE
-README.md                             # 英文文档
-README-CN.md                          # 本文档
-```
+三类东西：**链接**用的、**运行**来嵌入脚本的，以及作为起步点的**完整示例**。
+
+| 条目 | 类别 | 说明 |
+|-------|------|------|
+| `lib/liblunet-static.a`（Windows 为 `liblunet-static.lib`） | 链接 | 静态核心运行时：Lua 状态、事件循环、仅回环的 socket/timer/fs/signal 原语 |
+| `include/lunet.h` | 链接 | 嵌入 API —— 下文一切内容的契约；头文件内的 doc 注释即参考文档 |
+| `include/lunet_exports.h` | 链接 | 符号可见性管线；包含它即可，无需阅读 |
+| `bin/generate_embed_scripts.lua` | 运行 | 把 Lua 应用目录树编译成可嵌入的头文件 blob（三个环境变量，见下文） |
+| `examples/sdk_embed/main.c` | 示例 | 最小宿主：init、embed、run —— 以此文件为起步点 |
+| `examples/sdk_embed/app/main.lua` | 示例 | 该示例所嵌入的 Lua 应用 |
+| `README.md` / `README-CN.md` | 文档 | 本文档 |
+| `LICENSE` | 文档 | 许可证 |
+
+可选的扩展模块（`lunet.http`、`lunet.security`、各数据库驱动、`lunet.paxe`、
+`lunet.jsonic`、`lunet.lnt_shared`、`lunet.httpc`）**不在**静态核心内。它们以
+Lua 加载器的形式随配套运行时压缩包（`lunet-<os>.tar.gz`）发布在 `lunet-run`
+旁边，类型注解在 `types/` —— 见
+[docs/RELEASE-LAYOUT-CN.md](RELEASE-LAYOUT-CN.md)。需要它们的嵌入式应用，应把
+加载器与其 cdylib 一并发布在自己的可执行文件旁边。
 
 `generate_embed_scripts.lua` 通过 `xmake lua` 执行；xmake 只用于运行提供的
 Lua 生成器，不用于重新构建 Lunet。因为 xmake 执行独立文件时不会转发普通脚本
@@ -81,21 +89,31 @@ cl /nologo /std:c11 /I include /I generated `
 
 ## C API 和生命周期
 
-`include/lunet.h` 提供不透明的 `lunet_runtime_t` 和五个函数：
+`include/lunet.h` 提供不透明的 `lunet_runtime_t` 和六个函数，分三组：
 
-1. 调用一次 `lunet_runtime_init`；可选地提供可执行文件路径以及
+**生命周期** —— 按此顺序调用：
+
+1. `lunet_runtime_init` —— 仅一次；可选地提供可执行文件路径以及
    `dangerously_skip_loopback_restriction=1`。
-2. 只能调用一次 `lunet_runtime_run_file` 或
-   `lunet_runtime_run_embedded`。
-3. 将返回的 API 状态与输出的应用退出码分开处理。
-4. 调用 `lunet_runtime_request_stop` 请求主动停止（让运行时经历下面的排水点）。
-   这是唯一线程安全的调用：宿主可在其他线程调用它，同时 `run_file` /
-   `run_embedded` 在运行时线程上阻塞。
-5. 初始化成功后始终调用 `lunet_runtime_shutdown`。
+2. `lunet_runtime_run_file` 或 `lunet_runtime_run_embedded` —— 二选一，仅一次。
+3. `lunet_runtime_shutdown` —— 初始化成功后始终调用。
 
-运行时每个进程仅支持一次初始化和一次应用运行，因为 Lunet 使用一个默认 Lua
-状态和 libuv 事件循环。`run_embedded` 只接受安全的相对入口脚本路径，并会在运行
-前验证 `LUNETPK1` gzip blob。仅绑定回环地址仍是默认行为；危险的退出选项在
+**控制：**
+
+- `lunet_runtime_request_stop` —— 请求主动停止（让运行时经历下面的排水点）。
+  这是唯一线程安全的调用：宿主可在其他线程调用它，同时 `run_file` /
+  `run_embedded` 在运行时线程上阻塞。
+
+**内省：**
+
+- `lunet_runtime_get_lua_state` —— 宿主获取活跃 `lua_State*` 的出口
+  （示例用它在其入口脚本运行前设置 `arg` 等全局量）。运行时为 `NULL`
+  时返回 `NULL`。
+
+将返回的 API 状态与输出的应用退出码分开处理。运行时每个进程仅支持一次初始化
+和一次应用运行，因为 Lunet 使用一个默认 Lua 状态和 libuv 事件循环。
+`run_embedded` 只接受安全的相对入口脚本路径，并会在运行前验证 `LUNETPK1`
+gzip blob。仅绑定回环地址仍是默认行为；危险的退出选项在
 `lunet_runtime_options_t` 中显式指定。
 
 ## 主动停止、排水点与后排水钩子

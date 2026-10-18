@@ -115,6 +115,25 @@ local C = ffi.load(find_lib())
 
 local M = {}
 
+---@class lunet.paxe.config
+---@field peer integer PAXE node id this socket seals for and expects frames from (0-65535)
+---@field channel integer? Channel outgoing datagrams are sealed on (default 0); 1-99 are reserved
+
+---@class lunet.paxe.stats
+---@field rx_total integer Frames offered to open()
+---@field rx_ok integer Frames opened and authenticated
+---@field rx_plaintext integer Dropped by the plaintext gate
+---@field rx_short integer Dropped: shorter than the minimum frame
+---@field rx_bad_flags integer Dropped: flags byte failed the bit1=0/bit2=1 check
+---@field rx_len_mismatch integer Dropped: header length disagreed with the datagram
+---@field rx_no_peer integer Dropped: no key installed for the frame's fromId
+---@field rx_no_epoch integer Dropped: no key installed for the frame's key epoch
+---@field rx_auth_fail integer Dropped: AES-256-GCM authentication failed
+---@field tx_total integer Frames sealed
+---@field tx_standard integer Frames sealed in standard mode
+---@field tx_dek integer Reusable-DEK fanout frames recorded by a Rust host (the C ABI never seals DEK)
+---@field tx_oversize integer Seals refused: payload over the standard-mode maximum
+
 -- Constants, computed by the Rust codec/standard/dek layers. The deleted
 -- C hard-coded 36 and 82 in a #define and in the docs and both were
 -- wrong; these can never drift from the implementation. The DEK pair
@@ -167,6 +186,7 @@ local function check_string(v, name)
 end
 
 --- Crate version string.
+---@return string version
 function M.version()
   return ffi.string(C.lunet_paxe_version())
 end
@@ -174,6 +194,8 @@ end
 --- Initialise the module: libsodium + the AES-256-GCM hardware
 --- requirement. Idempotent. Returns true, or nil, message when this
 --- host/libsodium build lacks the hardware path (PAXE cannot operate).
+---@return true|nil ok `true` on success
+---@return string|nil error Message when this host/libsodium build has no hardware AES path
 function M.init()
   local rc = C.lunet_paxe_init()
   if rc ~= RC_OK then return check_rc(rc) end
@@ -190,6 +212,9 @@ local configured = false
 --- (0-65535). A second call without an intervening shutdown() raises:
 --- silently re-creating the keystore would erase installed keys.
 --- Returns true.
+---@param node_id integer This node's PAXE id (0-65535)
+---@return true|nil ok
+---@return string|nil error
 function M.set_local_id(node_id)
   node_id = check_uint32(node_id, "node_id")
   local rc = C.lunet_paxe_set_local_id(node_id)
@@ -203,6 +228,11 @@ end
 --- string is copied into guarded Rust memory during the call and never
 --- retained here. Returns true, or nil, message (not configured,
 --- keystore at capacity, secure-memory failure).
+---@param peer integer Peer node id (0-65535)
+---@param epoch integer Key epoch (0-31)
+---@param key string Exactly 32 bytes
+---@return true|nil ok
+---@return string|nil error Not configured, keystore at capacity, or secure-memory failure
 function M.keystore_set(peer, epoch, key)
   peer = check_uint32(peer, "peer")
   epoch = check_uint32(epoch, "epoch")
@@ -215,6 +245,10 @@ end
 --- Retire one (peer, epoch) slot, erasing its key. Returns true if a key
 --- was retired, false if the slot was empty, or nil, message when the
 --- module is not configured.
+---@param peer integer Peer node id (0-65535)
+---@param epoch integer Key epoch (0-31)
+---@return boolean|nil retired `true` if a key was retired, `false` if the slot was empty
+---@return string|nil error Set when the module is not configured
 function M.keystore_retire(peer, epoch)
   peer = check_uint32(peer, "peer")
   epoch = check_uint32(epoch, "epoch")
@@ -226,6 +260,7 @@ end
 
 --- Erase every installed key. Always succeeds (a no-op when
 --- unconfigured). Returns true.
+---@return true ok
 function M.keystore_clear()
   C.lunet_paxe_keystore_clear()
   return true
@@ -242,6 +277,11 @@ end
 --- permitted). Returns the frame string, or nil, message (not configured,
 --- no key for the peer, payload over the standard-mode maximum, crypto
 --- failure).
+---@param payload string Data to seal
+---@param to_id integer Destination node id (0-65535)
+---@param channel integer Channel (u16); 1-99 are reserved system channels
+---@return string|nil frame The sealed frame, or nil on error
+---@return string|nil error Not configured, no key for the peer, payload oversized, or crypto failure
 function M.seal(payload, to_id, channel)
   payload = check_string(payload, "payload")
   to_id = check_uint32(to_id, "to_id")
@@ -260,6 +300,11 @@ end
 --- string ("standard" or "dek"). On ANY failure — malformed, unknown
 --- key, authentication, unconfigured — returns nil plus the ONE opaque
 --- message OPEN_REJECTED: the reason is deliberately never surfaced.
+---@param frame string The received frame
+---@return string|nil payload Decrypted payload, or nil on rejection
+---@return integer|string from_id Authenticated sender node id, or the opaque error message
+---@return integer|nil channel Authenticated channel
+---@return string|nil mode `"standard"` or `"dek"`
 function M.open(frame)
   frame = check_string(frame, "frame")
   local cap = #frame
@@ -268,7 +313,8 @@ function M.open(frame)
   if rc == RC_DROP then return nil, OPEN_REJECTED end
   if rc ~= RC_OK then return check_rc(rc) end
   local mode = tonumber(mode_box[0]) == 1 and "dek" or "standard"
-  return ffi.string(out, tonumber(len_box[0])), tonumber(from_box[0]), tonumber(chan_box[0]), mode
+  return ffi.string(out, tonumber(len_box[0])), tonumber(from_box[0]) --[[@as integer]],
+    tonumber(chan_box[0]) --[[@as integer]], mode
 end
 
 --- Shut the module down: every key is zeroed and freed and the local
@@ -299,6 +345,7 @@ local STAT_FIELDS = {
 --- rx_ reject reasons. The counters NEVER reset while the process lives —
 --- measure DELTAS: snapshot before and after the window of interest;
 --- never assert an absolute value.
+---@return lunet.paxe.stats stats
 function M.stats()
   local n = tonumber(C.lunet_paxe_stats(nil, 0))
   assert(n == #STAT_FIELDS, "lunet.paxe: stats field count drift between Rust and Lua")
@@ -322,6 +369,8 @@ local POLICIES = { silent = "silent", log_once = "log_once", verbose = "verbose"
 ---   "verbose"  every drop writes a line.
 --- Returns true when the policy was set, false for anything else
 --- (unknown spelling or a non-string argument).
+---@param name string `"silent"` (default), `"log_once"`, or `"verbose"` (case-insensitive)
+---@return boolean ok `false` for an unknown spelling or a non-string argument
 function M.set_fail_policy(name)
   if type(name) ~= "string" then return false end
   local canonical = POLICIES[name:lower()]
@@ -476,6 +525,9 @@ end
 --- non-table config, an out-of-range peer/channel, or when the module
 --- is not configured (set_local_id first) — arming an unconfigured
 --- socket would silently drop every datagram. Returns true.
+---@param sock userdata UDP handle from `udp.bind()`
+---@param config lunet.paxe.config
+---@return true ok
 function M.protect(sock, config)
   if type(sock) ~= "userdata" then
     error(("bad argument 'sock' (udp handle expected, got %s)"):format(type(sock)), 2)
@@ -501,6 +553,8 @@ end
 
 --- Remove protection from a socket (idempotent). Subsequent send/recv on
 --- it pass through to raw lunet.udp behaviour. Returns true.
+---@param sock userdata UDP handle
+---@return true ok
 function M.unprotect(sock)
   protected[sock] = nil
   return true
@@ -508,6 +562,10 @@ end
 
 --- Is this socket protected? Returns false, or true plus the configured
 --- peer and channel.
+---@param sock userdata UDP handle
+---@return boolean protected
+---@return integer|nil peer Configured peer node id when protected
+---@return integer|nil channel Configured channel when protected
 function M.is_protected(sock)
   local cfg = protected[sock]
   if cfg == nil then return false end

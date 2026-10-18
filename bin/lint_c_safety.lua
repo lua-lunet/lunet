@@ -199,6 +199,6 @@ if violations_count == 0 then
 else
     print(string.format("%sFound %d violations in %d file(s).%s", RED, violations_count, files_with_violations, NC))
     print("\nPlease fix these issues to ensure zero-cost tracing works correctly.")
-    print("See AGENTS.md for the full C Code Conventions.")
+    print("See docs/CONTRIBUTING-INTERNALS.md for the full C Code Conventions.")
     os.exit(1)
 end

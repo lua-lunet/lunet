@@ -77,7 +77,7 @@ Lunet is **modular by design**. You build only what you need:
 - **Datagram encryption** (optional Rust extension, all platforms):
   - `lunet.paxe` - AES-256-GCM datagram encryption via Rust FFI, statically linking libsodium (`xmake build-paxe`; reference: [docs/PAXE.md](docs/PAXE.md))
 - **Crypto / JWT** (Lua module, no binary of its own — its crypto is libsodium reached through the FFI via `lunet.sodium` / `liblunet_paxe`):
-  - `lunet.security` - HMAC-SHA-256 sign/verify, base64url, and JWT HS256 over `lunet.sodium` + `lunet.jsonic` (reference: [docs/SECURITY.md](docs/SECURITY.md))
+  - `lunet.security` - HMAC-SHA-256 sign/verify, base64url, and JWT HS256 over `lunet.sodium` + `lunet.jsonic` (reference: [docs/CRYPTO_SECURITY.md](docs/CRYPTO_SECURITY.md))
 
 Build one database driver, not all three. No unused dependencies. No security patches for libraries you never use.
 

@@ -45,19 +45,6 @@ TCP 环回（`127.0.0.1`）会将您暴露给同一主机上的其他进程。�
 
 Unix 套接字使用文件系统权限——只有具有正确 UID/GID 的进程才能连接。
 
-## 支持的协议
-
-lunet 是协议无关的。您的边缘层转发什么，lunet 就处理什么：
-
-| 类别 | 协议 |
-|------|------|
-| Web | HTTP/1.1、WebSocket |
-| RPC | gRPC、JSON-RPC、XML-RPC |
-| 消息传递 | STOMP、MQTT、AMQP、XMPP |
-| 数据 | Redis 协议、Memcached 协议 |
-| 游戏 | Source RCON、Minecraft 协议、Photon、ENet |
-| 自定义 | 任何基于帧或长度前缀的二进制协议 |
-
 ## 出站 TLS 客户端（可选）
 
 本文档中“在边缘终止 TLS”的建议针对的是**入站暴露面**，并不禁止出站 HTTPS 客户端流量。

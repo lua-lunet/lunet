@@ -121,8 +121,9 @@ with no CI signal at all.
 
 ## Example Application
 
-The RealWorld Conduit demo app lives in a separate repository:
-[https://github.com/lua-lunet/lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app)
+The RealWorld Conduit demo app lives at
+[https://github.com/lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua),
+with the demo-fleet overview in [examples/realworld/](examples/realworld/README.md).
 
 For application-level testing and load testing, clone and use that repo.
 

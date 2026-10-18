@@ -20,8 +20,11 @@
 
 **规则**：`trace.h` 和 `*_impl.c` 文件之外的代码禁止直接调用 `_lunet_*` 函数。
 
-**例外（公开 SDK API）**：`include/lunet.h` 中声明的符号
+**例外（原始协程核心）**：`src/co.c`（声明于 `include/co.h`）是原始协程实现的家 —— `_lunet_ensure_coroutine` 位于此处，仅被 `trace.h` 封装消费。
+
+**例外（公开 SDK API）**：`include/lunet.h` 中声明的所有 `LUNET_API` 符号
 （`lunet_runtime_init`、`lunet_runtime_run_file`、`lunet_runtime_run_embedded`、
+`lunet_runtime_request_stop`、`lunet_runtime_get_lua_state`、
 `lunet_runtime_shutdown`）是发布 SDK 中提供给下游使用者的嵌入 API。
 它们不是对 `_lunet_*` 内部实现的追踪包装器，因此不受包装器约定约束。
 
@@ -32,7 +35,7 @@
 | 内部函数（禁止使用）                | 安全包装器（请使用）                  |
 |------------------------------------|--------------------------------------|
 | `_lunet_ensure_coroutine()`        | `lunet_ensure_coroutine()`           |
-| `lua_pushthread()` + `luaL_ref()`  | `lunet_coref_create(L, ref_var)`     |
+| `lua_pushthread()` + `luaL_ref()`  | `lunet_coref_create(L, ref_var)`（以及 `trace.h` 声明的合规 raw/valref 变体 `lunet_coref_create_raw` / `lunet_valref_*`） |
 | `luaL_unref()`（用于 coref）        | `lunet_coref_release(L, ref)`        |
 
 这些安全包装器：
@@ -90,7 +93,7 @@ static void my_callback(uv_req_t *req) {
 ```bash
 xmake lint     # 检查命名约定（不能有 _lunet_* 泄漏）
 xmake stress   # 调试构建 + 并发压力测试（必须通过）
-xmake release  # 完整发布构建（先运行测试和压力测试）
+xmake release  # 完整发布构建（先运行 lint、测试、压力测试与 easy-memory 预检）
 ```
 
 ## 调试笔记：Lua-C 栈问题
@@ -227,14 +230,10 @@ lldb ./build/macosx/arm64/debug/lunet-run -c /cores/core.XXXXX
 
 ### 复现工具集
 
-socket 压力测试位于 `.tmp/repro-payload/`：
-```bash
-LUNET_BIN="$(pwd)/build/macosx/arm64/debug/lunet-run" \
-  ITERATIONS=5 REQUESTS=20 CONCURRENCY=2 WORKERS=2 \
-  timeout 30 .tmp/repro-payload/scripts/repro.sh
-```
-
-日志输出到 `.tmp/repro-payload/.tmp-repro-logs/{dmz,echo,load}.log`。
+仓库中没有已提交的复现工具集：旧的 `.tmp/repro-payload/` 路径是 gitignore
+的暂存区，已不存在。echo/load/dmz 类复现请使用
+[examples/realworld/](../examples/realworld/README-CN.md) 中的演示应用，以及
+twelve-dollar 挑战仓库的 `bench/` 工具集。
 
 ### 已知陷阱
 
@@ -243,9 +242,9 @@ LUNET_BIN="$(pwd)/build/macosx/arm64/debug/lunet-run" \
   持有状态（通常通过常见的回退形式由 `default_luaL()` 赋值，或从另一个
   `owner_L` 继承而来），而 `waiter_L` 是操作作用域等待者的调用状态，仅在该
   操作的生命周期内通过其 coref 有效。`xmake lint` 的规则 4/5 会拒绝旧式的
-  `->L = L` / `->co = L` 模式以及直接的 `owner_L = L` / `owner_L = co` 赋值；
+  `->L = L` / `->co = L` / `->co = co` / `->L = co` 模式以及直接的 `owner_L = L` / `owner_L = co` 赋值；
   更广泛的生命周期划分应视为代码评审惯例，而非已完全证明的不变量。
-- **libuv 句柄相邻性**：使 libuv 句柄内存远离 `lua_State*` 等关键元数据。
+- **libuv 句柄相邻性**：使 libuv 句柄内存远离 `lua_State*` 等关键元数据。`src/socket.c` 中的 `socket_ctx_t` 是合规布局；若干较老的结构体早于该规则。
   如果任何写操作越过句柄边界（ABI 不匹配、越界或收尾阶段的边界情况），
   不应损坏控制指针。建议将句柄放在结构体末尾，并/或在追踪构建中添加尾部
   金丝雀值。
@@ -258,6 +257,9 @@ LUNET_BIN="$(pwd)/build/macosx/arm64/debug/lunet-run" \
 ## 严格测试协议
 
 所有智能体在验证更改或发布时必须遵守此协议。
+模式覆盖是分开的，两部分都重要：**release** 模式是 busted 套件运行的配置
+（CI 的 build 任务）；**debug/trace** 模式由 `xmake stress` 与 easy-memory
+预检证明。只通过一种模式的变更不算已验证。
 
 ### 1. 启用追踪构建（`LUNET_TRACE=ON`）
 应用程序必须在启用零成本追踪的情况下构建和测试。这将启用：
@@ -277,12 +279,28 @@ xmake stress
 ```
 
 ### 3. 应用级负载测试（RealWorld Conduit）
-关于全栈负载测试（HTTP -> 路由 -> 控制器 -> 数据库 -> 协程），请使用独立的
-演示应用仓库：
-[https://github.com/lua-lunet/lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app)
+关于全栈负载测试（HTTP -> 路由 -> 控制器 -> 数据库 -> 协程），请使用
+[examples/realworld/](../examples/realworld/README-CN.md) 中的演示应用 ——
+尤其是 [realworld-lua](https://github.com/lua-lunet/realworld-lua)。
 
 如果服务器在负载测试期间崩溃（退出码 > 0 或 SIGABRT），这是**严重故障**。
 请检查日志中的 `[TRACE]` 断言。
+
+## API 表面的类型注解（严格）
+
+每个**外部 API 表面** —— 随发布压缩包发布（安装进 `lunet/` 的 `ext/*/*.lua`
+文件）的每个 `lunet.*` 模块与加载器 —— 必须携带完整的 LuaCATS 注解：每个公开
+函数都要有 `---` 摘要、每个参数的 `---@param`、每个返回值的 `---@return`。
+`types/lunet` 影子文件及其 `d.tl` 对应文件与源码保持同步。
+
+类型门让这一切成为硬约束：`xmake check-types` 用 lua-language-server 检查
+`types/`、`ext/` 与 `examples/` —— 演示对着注解做检查：误用表面的演示是门失败，
+撒谎的返回注解也是门失败。每次发布列车都要对门做变异验证：改动任一被注解文件
+里的一个返回类型，门必须失败。
+
+**内部豁免**：非外部表面的 Lua —— 面向 C 的胶水、spec/测试辅助、`bin/` 下的
+脚本 —— 在满足以下条件时可豁免完整注解：(a) 测试套件覆盖它，(b) 命名已说明其
+行为。在检查器或评审者需要处补注解即可。
 
 ## UDP 模块追踪
 
@@ -333,6 +351,6 @@ UDP 模块（`src/udp.c`）除了通用的协程追踪外，还有自己的领�
 [UDP_TRACE] RX #1 <- 127.0.0.1:54321 (64 bytes)
 [UDP_TRACE] RECV_RESUME <- 127.0.0.1:54321 (64 bytes)
 [UDP_TRACE] TX #1 -> 127.0.0.1:20002 (72 bytes)
-[UDP_TRACE] CLOSE (tx=1 rx=1)
+[UDP_TRACE] CLOSE (local: tx=1 rx=1) (global: tx=1 rx=1)
 ```
 </content>

@@ -6,15 +6,23 @@
 - [`lunet.http_context`](#lunethttpcontext--每请求上下文) — 每请求全新的上下文对象
 - [`lunet.http_router`](#lunethttprouter--路由与中间件) — 带 `:参数` 与中间件的方法+路径分发
 
-没有 C 核心，也没有新依赖：这些模块是普通的 Lua 文件，在发布压缩包中与
-`sqlite3.lua` 并排随包发布（见 [docs/RELEASE-LAYOUT-CN.md](RELEASE-LAYOUT-CN.md)）。
-从源码构建时，`xmake build-release` 会把它们复制到 `lunet-run` 旁边，运行时的
+这些模块是普通的 Lua 文件，没有 C 核心，也没有新依赖：它们随发布压缩包发布
+（压缩包内容见 [docs/RELEASE-LAYOUT-CN.md](RELEASE-LAYOUT-CN.md)）。从源码构建
+时，`xmake build-release` 会把它们复制到 `lunet-run` 旁边，运行时的
 `lunet/?.lua` 路径条目即可解析到。套接字 I/O（listen、accept、read、write、
 close）由调用方负责；JSON 辅助函数仅在被调用时才惰性地依赖 `lunet.jsonic`。
 
 可运行的端到端示例见 [`examples/08_http.lua`](../examples/08_http.lua)。
 
 ## 帧格式子集
+
+先说部署安全：[docs/SECURITY_ARCHITECTURE-CN.md](SECURITY_ARCHITECTURE-CN.md)
+中的 qmail 式模型 —— 一台久经考验的 nginx（或同类）在网络接口上终结 TLS，
+通过回环接口与你本地的 lunet 进程对话；若你更想用文件系统权限而非 IP 规则，
+也可以用 Unix 域套接字。本模块的示例只绑定回环；它不是 TLS 终结器，也永远
+不应是。
+
+本模块实现的帧格式是 HTTP/1.1 中一个刻意很小的子集：
 
 解析器刻意只支持一个小而明确的 HTTP/1.1 子集：
 

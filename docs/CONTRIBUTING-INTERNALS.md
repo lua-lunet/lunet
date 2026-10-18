@@ -23,7 +23,9 @@ This section defines naming conventions and safety rules for C code. These are e
 
 **Rule**: Code outside of `trace.h` and `*_impl.c` files MUST NOT call `_lunet_*` functions directly.
 
-**Exception (public SDK API)**: Symbols declared in `include/lunet.h` (`lunet_runtime_init`, `lunet_runtime_run_file`, `lunet_runtime_run_embedded`, `lunet_runtime_shutdown`) are the embedding API shipped to downstream consumers in the release SDK. They are not trace wrappers over `_lunet_*` internals and are exempt from the wrapper convention.
+**Exception (raw coroutine core)**: `src/co.c` (declared in `include/co.h`) is the raw coroutine implementation home — `_lunet_ensure_coroutine` lives there and is consumed only by the `trace.h` wrappers.
+
+**Exception (public SDK API)**: All `LUNET_API` symbols declared in `include/lunet.h` (`lunet_runtime_init`, `lunet_runtime_run_file`, `lunet_runtime_run_embedded`, `lunet_runtime_request_stop`, `lunet_runtime_get_lua_state`, `lunet_runtime_shutdown`) are the embedding API shipped to downstream consumers in the release SDK. They are not trace wrappers over `_lunet_*` internals and are exempt from the wrapper convention.
 
 ### Safe Wrappers
 
@@ -32,7 +34,7 @@ Always use the safe wrappers defined in `include/trace.h`:
 | Internal (DO NOT USE)              | Safe Wrapper (USE THIS)              |
 |------------------------------------|--------------------------------------|
 | `_lunet_ensure_coroutine()`        | `lunet_ensure_coroutine()`           |
-| `lua_pushthread()` + `luaL_ref()`  | `lunet_coref_create(L, ref_var)`     |
+| `lua_pushthread()` + `luaL_ref()`  | `lunet_coref_create(L, ref_var)` (and the sanctioned raw/valref variants `lunet_coref_create_raw` / `lunet_valref_*` declared in `trace.h`) |
 | `luaL_unref()` for corefs          | `lunet_coref_release(L, ref)`        |
 
 The safe wrappers:
@@ -90,7 +92,7 @@ Before merging any C code changes:
 ```bash
 xmake lint     # Check naming conventions (no _lunet_* leaks)
 xmake stress   # Debug build + concurrent stress test (must pass)
-xmake release  # Full release build (runs test + stress first)
+xmake release  # Full release build (runs lint, tests, stress and the easy-memory preflight first)
 ```
 
 ## Debugging Notes: Lua-C Stack Issues
@@ -209,25 +211,25 @@ lldb ./build/macosx/arm64/debug/lunet-run -c /cores/core.XXXXX
 
 ### Repro Harness
 
-The socket stress test lives in `.tmp/repro-payload/`:
-```bash
-LUNET_BIN="$(pwd)/build/macosx/arm64/debug/lunet-run" \
-  ITERATIONS=5 REQUESTS=20 CONCURRENCY=2 WORKERS=2 \
-  timeout 30 .tmp/repro-payload/scripts/repro.sh
-```
-
-Logs go to `.tmp/repro-payload/.tmp-repro-logs/{dmz,echo,load}.log`.
+There is no committed repro harness: the old `.tmp/repro-payload/` path was
+gitignored scratch and no longer exists. For echo/load/dmz-style repros, use
+the demo applications in [examples/realworld/](../examples/realworld/README.md)
+and the twelve-dollar challenge tree's `bench/` rig.
 
 ### Known Pitfalls
 
-- **Owning vs waiter `lua_State*` (lint-checked for the known footguns)**: Async handle contexts name their `lua_State*` by lifetime and role: `owner_L` is the owning state for long-lived libuv handles (typically assigned from `default_luaL()` with the usual fallback form, or inherited from another `owner_L`), while `waiter_L` is the calling state for an operation-scoped waiter, valid only for the operation's lifetime via its coref. `xmake lint` rules 4/5 reject the legacy `->L = L` / `->co = L` patterns and direct `owner_L = L` / `owner_L = co` assignments; treat the broader lifetime split as a code-review convention, not a fully-proved invariant.
-- **libuv handle adjacency**: Keep libuv handle memory away from critical metadata like `lua_State*`. If anything writes past the handle boundary (ABI mismatch, out-of-bounds, or teardown edge cases), it should not corrupt control pointers. Prefer placing the handle at the end of the struct and/or add a tail canary in trace builds.
+- **Owning vs waiter `lua_State*` (lint-checked for the known footguns)**: Async handle contexts name their `lua_State*` by lifetime and role: `owner_L` is the owning state for long-lived libuv handles (typically assigned from `default_luaL()` with the usual fallback form, or inherited from another `owner_L`), while `waiter_L` is the calling state for an operation-scoped waiter, valid only for the operation's lifetime via its coref. `xmake lint` rules 4/5 reject the legacy `->L = L` / `->co = L` / `->co = co` / `->L = co` patterns and direct `owner_L = L` / `owner_L = co` assignments; treat the broader lifetime split as a code-review convention, not a fully-proved invariant.
+- **libuv handle adjacency**: Keep libuv handle memory away from critical metadata like `lua_State*`. If anything writes past the handle boundary (ABI mismatch, out-of-bounds, or teardown edge cases), it should not corrupt control pointers. Prefer placing the handle at the end of the struct and/or add a tail canary in trace builds. `socket_ctx_t` in `src/socket.c` is the compliant layout; several older structs predate the rule.
 - **Coroutine GC**: Spawned coroutines must be anchored in the Lua registry (via `lunet_co_anchor()`) or they can be garbage collected between async operations.
 - **Release vs debug divergence**: Some bugs only appear in release builds (e.g., duplicate `trace_summary` definitions caused by `static inline` in headers conflicting with definitions in `.c` files). Always test both `xmake f -m release` and `xmake f -m debug`.
 
 ## Strict Testing Protocol
 
 All agents MUST adhere to this protocol when validating changes or releases.
+Mode coverage is split, and both halves matter: the **release** mode is what
+the busted suite runs against (CI's build job); the **debug/trace** mode is
+what `xmake stress` and the easy-memory preflight prove. A change that only
+passes one mode is not validated.
 
 ### 1. Build with Tracing (`LUNET_TRACE=ON`)
 The application MUST be built and tested with zero-cost tracing enabled. This activates:
@@ -247,10 +249,30 @@ xmake stress
 ```
 
 ### 3. Application Load Testing (RealWorld Conduit)
-For full-stack load testing (HTTP -> Router -> Controller -> DB -> Coroutines), use the separate demo app repository:
-[https://github.com/lua-lunet/lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app)
+For full-stack load testing (HTTP -> Router -> Controller -> DB -> Coroutines), use the demo applications in [examples/realworld/](../examples/realworld/README.md) — in particular [realworld-lua](https://github.com/lua-lunet/realworld-lua).
 
 If the server crashes during load testing (exit code > 0 or SIGABRT), it is a **CRITICAL FAILURE**. Check logs for `[TRACE]` assertions.
+
+## Type Annotations on API Surfaces (STRICT)
+
+Every **external API surface** — each `lunet.*` module and loader that ships
+in the release archives (`ext/*/*.lua` files installed into `lunet/`) — MUST
+carry complete LuaCATS annotations: a `---` summary plus a `---@param` for
+every argument and a `---@return` for every return value on every public
+function. The `types/lunet` shadow files and their `d.tl` counterparts stay
+in step with the sources.
+
+The type gate makes this material: `xmake check-types` checks `types/`,
+`ext/` AND `examples/` with lua-language-server, so the demos are checked
+against the annotations — a demo that misuses a surface is a gate failure,
+and an annotation that lies about a return type is a gate failure. The gate
+is mutation-verified each release train: changing one return type in a hinted
+file must fail the gate.
+
+**Internal exemption**: Lua that is not an external surface — C-facing glue,
+spec/test helpers, scripts under `bin/` — is exempt from full annotation
+when (a) the test suite covers it and (b) the names say what things do. Add
+annotations where the checker or a reviewer needs them.
 
 ## UDP Module Tracing
 
@@ -299,6 +321,6 @@ When adding new UDP operations:
 [UDP_TRACE] RX #1 <- 127.0.0.1:54321 (64 bytes)
 [UDP_TRACE] RECV_RESUME <- 127.0.0.1:54321 (64 bytes)
 [UDP_TRACE] TX #1 -> 127.0.0.1:20002 (72 bytes)
-[UDP_TRACE] CLOSE (tx=1 rx=1)
+[UDP_TRACE] CLOSE (local: tx=1 rx=1) (global: tx=1 rx=1)
 ```
 </content>

@@ -73,6 +73,10 @@ end
 ---The caller owns the lifetimes and closes each handle with close().
 ---Takes the same params table as open(); :memory: returns the same
 ---connection as both handles.
+---@param params table Connection parameters
+---@return lightuserdata|nil rw Read-write connection, nil on error
+---@return lightuserdata|nil ro Read-only connection; nil on error
+---@return string|nil err Error message if failed
 function sqlite3.open_raw(params)
   return core.open(params)
 end

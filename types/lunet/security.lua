@@ -6,7 +6,7 @@
 ---Lua on lunet.sodium.sha256 per RFC 2104, and claims JSON goes
 ---through lunet.jsonic.
 ---Requires lunet.sodium at load time; lunet.jsonic is jwt-only and
----loaded on first use. See `docs/SECURITY.md`.
+---loaded on first use. See `docs/CRYPTO_SECURITY.md`.
 ---
 ---Error convention (same shape as lunet.sodium): malformed arguments
 ---raise (bugs in the calling script); token CONTENT is untrusted input

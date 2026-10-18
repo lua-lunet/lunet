@@ -225,11 +225,17 @@ end
 
 -- ── Dict methods ──────────────────────────────────────────────────────────────
 
+---@class LntSharedDict
+---@field private _h any dictionary handle (finalizer-armed cdata), nil once closed
+---@field private _name string logical dictionary name
 local Dict = {}
 Dict.__index = Dict
 
 --- Get the value for `key`.
 --- Returns `value` on success, or `nil, err` if not found.
+---@param key string
+---@return string|number|boolean|nil value
+---@return string|nil error "not found" or other error
 function Dict:get(key)
   assert(type(key) == "string", "key must be a string")
   local l = lib()
@@ -252,6 +258,11 @@ end
 --- Set `key` to `value` (overwrites any existing entry).
 --- `ttl` is optional seconds until expiry; omit or pass `0` for no expiry.
 --- Returns `true` on success, or `nil, err` on failure.
+---@param key string
+---@param value string|number|boolean
+---@param ttl number? Seconds until expiry; omit or pass `0` for no expiry (fractional OK)
+---@return true|nil ok
+---@return string|nil error Error message if failed
 function Dict:set(key, value, ttl)
   assert(type(key) == "string", "key must be a string")
   local bytes, blen, vtype = encode_value(value)
@@ -270,6 +281,11 @@ end
 --- Add `key` only if it does not already exist.
 --- Returns `true` on success, `nil, "already exists"` if the key exists,
 --- or `nil, err` on other failure.
+---@param key string
+---@param value string|number|boolean
+---@param ttl number? Seconds until expiry; omit or pass `0` for no expiry
+---@return true|nil ok
+---@return "already exists"|string|nil error "already exists" if key present, or other error
 function Dict:add(key, value, ttl)
   assert(type(key) == "string", "key must be a string")
   local bytes, blen, vtype = encode_value(value)
@@ -288,6 +304,11 @@ end
 --- Replace `key` only if it already exists.
 --- Returns `true` on success, `nil, "not found"` if the key is absent,
 --- or `nil, err` on other failure.
+---@param key string
+---@param value string|number|boolean
+---@param ttl number? Seconds until expiry; omit or pass `0` for no expiry
+---@return true|nil ok
+---@return "not found"|string|nil error "not found" if key absent, or other error
 function Dict:replace(key, value, ttl)
   assert(type(key) == "string", "key must be a string")
   local bytes, blen, vtype = encode_value(value)
@@ -304,6 +325,9 @@ function Dict:replace(key, value, ttl)
 end
 
 --- Delete `key`.  Returns `true` on success, `nil, "not found"` if absent.
+---@param key string
+---@return true|nil ok
+---@return "not found"|string|nil error "not found" if absent, or other error
 function Dict:delete(key)
   assert(type(key) == "string", "key must be a string")
   local rc = lib().ngx_shared_delete(self._h, key, #key)
@@ -319,6 +343,12 @@ end
 --- `ttl` applies only to newly created keys; pass `nil` to leave existing
 --- key TTL unchanged.
 --- Returns the new value on success, or `nil, err` on failure.
+---@param key string
+---@param delta number? Default 1
+---@param init number? Initial value if key absent
+---@param ttl number? TTL for newly created keys; `nil` preserves existing TTL
+---@return number|nil new_value The new value on success
+---@return string|nil error Error message if failed
 function Dict:incr(key, delta, init, ttl)
   assert(type(key) == "string", "key must be a string")
   delta = delta or 1
@@ -341,6 +371,10 @@ end
 --- Update the TTL of `key` to `ttl_secs` seconds.
 --- Pass `0` or a negative value to remove the expiry.
 --- Returns `true` on success, `nil, err` on failure.
+---@param key string
+---@param ttl_secs number New TTL in seconds; `<= 0` removes expiry
+---@return true|nil ok
+---@return string|nil error "not found" if key absent, or other error
 function Dict:expire(key, ttl_secs)
   assert(type(key) == "string", "key must be a string")
   local rc = lib().ngx_shared_expire(self._h, key, #key, ttl_secs or 0)
@@ -354,6 +388,9 @@ end
 --- Returns `ttl_seconds` (a number >= 0) on success.
 --- Returns `-1` if the key exists but has no expiry.
 --- Returns `nil, "not found"` if the key does not exist.
+---@param key string
+---@return number|nil ttl_seconds Remaining TTL (>= 0), or -1 if key has no expiry
+---@return "not found"|string|nil error "not found" if key absent
 function Dict:ttl(key)
   assert(type(key) == "string", "key must be a string")
   local rc = lib().ngx_shared_ttl(self._h, key, #key, _out_ttl_p)
@@ -371,25 +408,30 @@ end
 --- Scan the dictionary and evict expired entries.
 --- `max` limits the number of entries evicted (0 or nil = unlimited).
 --- Returns the number of entries evicted.
+---@param max integer? Limits the number of entries evicted (0 or nil = unlimited)
+---@return integer count Number of entries evicted
 function Dict:flush_expired(max)
-  return tonumber(lib().ngx_shared_flush_expired(self._h, max or 0))
+  return tonumber(lib().ngx_shared_flush_expired(self._h, max or 0)) --[[@as integer]]
 end
 
 --- Returns the total capacity of the region in bytes.
+---@return integer bytes
 function Dict:capacity()
-  return tonumber(lib().ngx_shared_capacity(self._h))
+  return tonumber(lib().ngx_shared_capacity(self._h)) --[[@as integer]]
 end
 
 --- Returns the approximate number of free bytes in the data area.
 --- Note: tombstoned entries do not reclaim space until flush_all.
+---@return integer bytes
 function Dict:free_space()
-  return tonumber(lib().ngx_shared_free_space(self._h))
+  return tonumber(lib().ngx_shared_free_space(self._h)) --[[@as integer]]
 end
 
 --- Explicitly close the dictionary handle.
 --- Safe to call multiple times; also runs automatically at GC time via
 --- ffi.gc (LuaJIT ignores __gc on plain tables, so the finalizer is
 --- attached to the cdata handle itself).
+---@return true
 function Dict:close()
   if self._h ~= nil then
     ffi.gc(self._h, nil)               -- disarm the finalizer
@@ -415,6 +457,9 @@ local M = {}
 ---
 --- Returns a Dict object.  Multiple calls with the same name return handles
 --- to the same underlying region.
+---@param name string Logical name for the dictionary (non-empty)
+---@param size_bytes number? Minimum size in bytes (default 1048576, minimum 65536)
+---@return LntSharedDict dict
 function M.open(name, size_bytes)
   assert(type(name) == "string" and #name > 0, "name must be a non-empty string")
   size_bytes = math.max(size_bytes or (1024 * 1024), 65536)
@@ -432,6 +477,8 @@ function M.open(name, size_bytes)
   return d
 end
 
+---Alias for `open`: open (or reuse) a named shared dictionary.
+---@type fun(name: string, size_bytes: number?): LntSharedDict
 M.store = M.open
 
 return M

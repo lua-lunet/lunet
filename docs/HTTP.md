@@ -6,17 +6,26 @@ A pure-Lua HTTP/1.1 trio for building small servers on `lunet.socket`:
 - [`lunet.http_context`](#lunethttpcontext--per-request-context) — one fresh per-request context object
 - [`lunet.http_router`](#lunethttprouter--routes-and-middleware) — method+path dispatch with `:params` and middleware
 
-There is no C core and no new dependency: the modules are ordinary Lua files
-shipped beside `sqlite3.lua` in the release archives (see
-[docs/RELEASE-LAYOUT.md](RELEASE-LAYOUT.md)). From a source tree,
-`xmake build-release` copies them next to `lunet-run`, where the runtime's
-`lunet/?.lua` path entry resolves them. The socket I/O (listen, accept, read,
-write, close) stays with the caller; the JSON helpers require `lunet.jsonic`
-lazily, only when called.
+The modules are plain Lua files, no C core and no new dependency: they ship
+in the release archives (see [docs/RELEASE-LAYOUT.md](RELEASE-LAYOUT.md) for
+the archive map), and `xmake build-release` copies them next to `lunet-run`
+from a source tree, where the runtime's `lunet/?.lua` path entry resolves
+them. The socket I/O (listen, accept, read, write, close) stays with the
+caller; the JSON helpers require `lunet.jsonic` lazily, only when called.
 
 A runnable end-to-end demo lives at [`examples/08_http.lua`](../examples/08_http.lua).
 
 ## The framing subset
+
+Deployment security first: the qmail-style model in
+[docs/SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md) — a battle-hardened
+nginx (or similar) terminates the network interface and talks to your lunet
+process over the loopback interface, or over a Unix domain socket if you
+prefer filesystem permissions to IP rules. This module's server example binds
+loopback only; it is not a TLS terminator and never should be.
+
+The framing this module implements is a deliberately small subset of
+HTTP/1.1:
 
 The parser deliberately supports a small, explicit HTTP/1.1 subset:
 

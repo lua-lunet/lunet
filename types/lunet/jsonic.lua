@@ -8,7 +8,7 @@ local jsonic = {}
 ---@param position integer? Start position in `str` (default 1)
 ---@param nullval any? Value to use for JSON null (default jsonic.null)
 ---@return any value The decoded Lua value
----@return integer next_position Position after the decoded value
+---@return integer next_position Position after the decoded value on success; the start position on failure
 ---@return string|nil error Error message on parse failure, or nil on success
 ---@usage
 ---```lua

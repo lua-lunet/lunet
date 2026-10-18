@@ -75,7 +75,7 @@ Lunet 采用**模块化设计**。只构建你需要的：
 - **数据报加密**（可选 Rust 扩展，全平台）：
   - `lunet.paxe` - 通过 Rust FFI 的 AES-256-GCM 数据报加密，静态链接 libsodium（`xmake build-paxe`；参考：[docs/PAXE-CN.md](docs/PAXE-CN.md)）
 - **加密 / JWT**（Lua 模块，本身无二进制 —— 其加密是经 FFI 由 `lunet.sodium` / `liblunet_paxe` 调用 libsodium 实现）：
-  - `lunet.security` - 基于 `lunet.sodium` + `lunet.jsonic` 的 HMAC-SHA-256 签名/验证、base64url 与 JWT HS256（参考：[docs/SECURITY-CN.md](docs/SECURITY-CN.md)）
+  - `lunet.security` - 基于 `lunet.sodium` + `lunet.jsonic` 的 HMAC-SHA-256 签名/验证、base64url 与 JWT HS256（参考：[docs/CRYPTO_SECURITY-CN.md](docs/CRYPTO_SECURITY-CN.md)）
 
 只构建一个数据库驱动，而不是全部。没有未使用的依赖。不需要为从未使用的库打安全补丁。
 

@@ -21,8 +21,9 @@ mkdir -p "${WORKDIR}"
 cd "${WORKDIR}"
 
 if [[ ! -f "${TARBALL}.downloaded" ]]; then
+    # The runner's resolver blips more than it should; retry the download.
     echo "  Downloading ${URL}"
-    curl --max-time 120 -fsSL -o "${TARBALL}" "${URL}"
+    curl --retry 5 --retry-delay 2 --retry-all-errors --max-time 120 -fsSL -o "${TARBALL}" "${URL}"
     echo "${SHA256}  ${TARBALL}" | sha256sum -c -
     touch "${TARBALL}.downloaded"
 else

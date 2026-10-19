@@ -321,6 +321,30 @@ inside a statement call has open questions (how a parked coroutine yields
 and resumes, whether queueing should be per statement or a whole-handle
 write chain); see the branch PR for those questions.
 
+## A db helper (draft design, not shipped)
+
+Every consumer of this driver's documented shape ends up writing the same
+application-level boilerplate: route queries between the `(rw, ro)` pair,
+hold a prepare-at-open statement inventory, serialize write traffic. An
+opt-in helper module beside the driver could carry those conventions as
+code:
+
+- **Explicit handle routing.** The caller states the handle: a
+  `query_ro(...)` call goes down the read-only connection, everything
+  else down `rw`. No sniffing SQL text to guess the route: a string match
+  on `SELECT` is a foot gun (a `WITH` or an unusual prefix routes
+  silently wrong).
+- **Prepare-at-open inventory.** The application's statements declared in
+  one place, prepared once, rebound per call (see the pattern above).
+- **The write chain.** Concurrency on the write handle serialized in one
+  place; whether that is per statement or a whole-handle write chain is
+  the queueing question of the draft design above, not something the
+  helper settles silently.
+
+This is a design candidate under discussion, not a shipped module. Its
+shape follows where same-statement queueing lands; the open questions
+live in the branch PR.
+
 ## How the pinning was verified
 
 SQLite needs no server, so this one *is* a committed test:

@@ -62,11 +62,15 @@ local seeds = {
 
 local MUTATOR_NAMES = { "truncate", "insert", "replace", "duplicate_line", "splice" }
 
+local bit = require("bit")
+
+-- xorshift32 on an unsigned 32-bit state; the bit library keeps this LuaJIT
+-- and the final mod re-normalizes the signed bit-library result.
 local function rng_next(state)
     local s = state.a
-    s = s ~ (s << 13)
-    s = s ~ (s >> 17)
-    s = s ~ (s << 5)
+    s = bit.bxor(s, bit.lshift(s, 13))
+    s = bit.bxor(s, bit.rshift(s, 17))
+    s = bit.bxor(s, bit.lshift(s, 5))
     s = s % 4294967296
     if s == 0 then s = 1 end
     state.a = s

@@ -8,7 +8,7 @@ local jsonic = {}
 ---@param position integer? Start position in `str` (default 1)
 ---@param nullval any? Value to use for JSON null (default jsonic.null)
 ---@return any value The decoded Lua value
----@return integer next_position Position after the decoded value
+---@return integer next_position Position after the decoded value on success; the start position on failure
 ---@return string|nil error Error message on parse failure, or nil on success
 ---@usage
 ---```lua
@@ -29,6 +29,31 @@ function jsonic.decode(str, position, nullval) end
 ---print(s)  --> '{"a":1,"b":"x"}'
 ---```
 function jsonic.encode(value, opts) end
+
+---Render a value as a quoted JSON string (fixed-shape helper).
+---Strings are quoted with the same escaper `encode` uses; any other value
+---falls back to `encode`.
+---@param value any The value to render
+---@return string json
+---@usage
+---```lua
+---local json = require("lunet.jsonic")
+---local s = json.jstr('say "hi"')
+---print(s)  --> '"say \"hi\""'
+---```
+function jsonic.jstr(value) end
+
+---Render a value as a JSON number (fixed-shape helper).
+---Intended for integers; the output is byte-identical to `encode`.
+---@param value any The value to render
+---@return string json
+---@usage
+---```lua
+---local json = require("lunet.jsonic")
+---local s = json.jint(42)
+---print(s)  --> '42'
+---```
+function jsonic.jint(value) end
 
 ---Sentinel value representing JSON null (from dkjson).
 ---@type any

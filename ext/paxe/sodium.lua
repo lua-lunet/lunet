@@ -1,24 +1,24 @@
 -- lunet.sodium: a MINIMAL libsodium primitive surface, loaded from the
 -- SAME cdylib as lunet.paxe through the LuaJIT FFI (the jsonic / paxe
 -- loader model). Exactly three primitives: SHA-256, HMAC-SHA-256 (the
--- JWT HS256 primitive) and randombytes — see docs/SODIUM.md.
+-- JWT HS256 primitive) and randombytes  -  see docs/SODIUM.md.
 --
 -- WHY THIS EXISTS: liblunet_paxe already statically links libsodium, so
 -- every binary-archive consumer carries the bytes for these primitives
 -- inside a dylib it already ships. They were previously unreachable (the
 -- static sodium symbols are not exported), which forced users to load a
--- SECOND libsodium (homebrew, distro) — two sodiums in one process, with
+-- SECOND libsodium (homebrew, distro)  -  two sodiums in one process, with
 -- dlsym(RTLD_DEFAULT) ambiguity. This module binds through the dylib
 -- HANDLE returned by ffi.load below, never through ffi.C / RTLD_DEFAULT,
 -- so a user-owned libsodium in the same process can never capture the
 -- lookup.
 --
 -- ABI PROMISE (deliberately narrow): the three lunet_sodium_* symbols
--- below. No wholesale export of the libsodium namespace — the vendored
+-- below. No wholesale export of the libsodium namespace  -  the vendored
 -- sodium version is not a public ABI promise, and a full export would be
 -- a symbol-collision hazard with user-loaded sodiums. No streaming or
 -- incremental variants; no keyring or guarded key memory (that remains
--- PAXE's job — lunet.paxe.keystore_set).
+-- PAXE's job  -  lunet.paxe.keystore_set).
 --
 -- ERROR CONVENTION (same shape as lunet.paxe): malformed arguments RAISE
 -- a Lua error (they are bugs in the calling script); operational
@@ -29,7 +29,7 @@
 --
 -- SECURITY BOUNDARY (docs/SODIUM.md states it too): stateless hashing
 -- crosses no secrets; the HMAC key is ordinary Lua string data and DOES
--- cross the FFI unguarded — a documented boundary, the same posture as
+-- cross the FFI unguarded  -  a documented boundary, the same posture as
 -- the paxe keystore notes in docs/PAXE.md.
 
 local ffi = require("ffi")
@@ -58,7 +58,7 @@ local BYTES = 32
 
 -- Find the paxe cdylib exactly like ext/paxe/paxe.lua does: environment
 -- override first, then the loader's own directory and its cargo output
--- tree. The returned handle is what every symbol below binds through —
+-- tree. The returned handle is what every symbol below binds through  - 
 -- never ffi.C, never a bare name.
 local function find_lib()
   local env = os.getenv("LUNET_SODIUM_LIB") or os.getenv("LUNET_PAXE_LIB")
@@ -118,14 +118,14 @@ local M = {}
 
 --- Digest size in bytes of both `sha256` and `hmac_sha256` outputs (32).
 --- Read from this loader's allocation, which the Rust side writes with
---- the linked library's digest — the constant can never drift.
+--- the linked library's digest  -  the constant can never drift.
 M.BYTES = BYTES
 
 --- One-shot SHA-256. Returns the raw 32-byte digest as a string.
 --- Malformed arguments raise; an operational failure (libsodium init)
 --- returns nil, message.
 ---@param data string Data to hash
----@return string digest 32 raw bytes
+---@return string|nil digest 32 raw bytes, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
 ---@usage
 ---```lua
@@ -141,15 +141,15 @@ function M.sha256(data)
   return ffi.string(out, BYTES)
 end
 
---- One-shot HMAC-SHA-256 — the JWT HS256 primitive. `key` must be
+--- One-shot HMAC-SHA-256  -  the JWT HS256 primitive. `key` must be
 --- exactly 32 bytes (libsodium's fixed HMAC-SHA-256 key size; a wrong
 --- length raises). Returns the raw 32-byte tag as a string.
 ---
---- SECURITY: the key crosses the FFI as ordinary Lua string data —
+--- SECURITY: the key crosses the FFI as ordinary Lua string data  - 
 --- unguarded, unlike PAXE keystore material. See docs/SODIUM.md.
 ---@param data string Data to authenticate
 ---@param key string Exactly 32 bytes
----@return string tag 32 raw bytes
+---@return string|nil tag 32 raw bytes, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
 ---@usage
 ---```lua
@@ -170,7 +170,7 @@ end
 --- mix two RNGs in one process). `n` is a non-negative integer; 0
 --- returns the empty string. Returns the raw bytes as a string.
 ---@param n integer Number of bytes to draw
----@return string bytes n raw bytes
+---@return string|nil bytes n raw bytes, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
 ---@usage
 ---```lua
@@ -223,14 +223,14 @@ end
 
 --- Encode `data` with the linked library's own base64 under `variant`
 --- (one of the BASE64_VARIANT_* constants above; an unknown variant
---- raises — a bug in the calling script). URLSAFE_NO_PADDING is the JWT
+--- raises  -  a bug in the calling script). URLSAFE_NO_PADDING is the JWT
 --- profile. Returns the encoded text.
 ---
---- SECURITY: base64 crosses no secrets — a plain, stateless transform;
+--- SECURITY: base64 crosses no secrets  -  a plain, stateless transform;
 --- bytes that are secret remain secret while encoded.
 ---@param data string Bytes to encode
 ---@param variant integer One of the BASE64_VARIANT_* constants
----@return string b64 Encoded text
+---@return string|nil b64 Encoded text, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
 ---@usage
 ---```lua
@@ -249,14 +249,14 @@ function M.base64_encode(data, variant)
 end
 
 --- Decode base64 back to bytes with the linked library's own transform
---- under the same `variant` selection. Decode failures — malformed input
+--- under the same `variant` selection. Decode failures  -  malformed input
 --- for the variant, unknown variant, or trailing garbage after the
---- payload — raise with the library's own diagnostic (a bug in the
+--- payload  -  raise with the library's own diagnostic (a bug in the
 --- calling script). Returns the decoded bytes; the result is binary, so
---- length — not a NUL — says where it ends.
+--- length  -  not a NUL  -  says where it ends.
 ---@param data string Encoded text
 ---@param variant integer One of the BASE64_VARIANT_* constants
----@return string bytes Decoded bytes
+---@return string|nil bytes Decoded bytes, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
 ---@usage
 ---```lua

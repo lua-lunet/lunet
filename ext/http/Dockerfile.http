@@ -1,0 +1,42 @@
+# The Http11Probe rig: builds the probe from uNetworkingAB/Http11Probe (.NET),
+# grabs the published linux-arm64 lunet runtime, overlays the CURRENT ext/http
+# Lua modules from this tree, and runs the happy-path target (probe_target.lua)
+# under the probe. The framing subset rejects some probe categories by design
+# (chunked/TE -> 501, HTTP/1.0 -> 400); those differences are the subset
+# speaking, not bugs. Build and run from the repository root:
+#   docker build -f ext/http/Dockerfile.http -t lunet-http-probe .
+#   docker run --rm lunet-http-probe
+#
+# syntax=docker/dockerfile:1
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS probe
+ARG HTTP11PROBE_REF=main
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git clone --depth 1 --branch ${HTTP11PROBE_REF} https://github.com/uNetworkingAB/Http11Probe .
+RUN dotnet publish src/Http11Probe.Cli -c Release -o /probe
+
+FROM --platform=linux/arm64 debian:bookworm-slim
+ARG LUNET_TAG=v0.13.0
+# the probe compares ASCII http bytes; invariant globalization beats installing ICU
+ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl libluajit-5.1-2 libuv1 zlib1g netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+# the probe is a .NET 10 app: the runtime stage carries the runtime, not the SDK
+RUN apt-get update && apt-get install -y --no-install-recommends bash \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+    && bash /tmp/dotnet-install.sh --channel 10.0 --runtime dotnet --install-dir /usr/share/dotnet \
+    && rm /tmp/dotnet-install.sh \
+    && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet
+WORKDIR /opt/lunet
+RUN curl -fsSL "https://github.com/lua-lunet/lunet/releases/download/${LUNET_TAG}/lunet-linux-arm64.tar.gz" -o lunet.tar.gz \
+    && tar xzf lunet.tar.gz && rm lunet.tar.gz
+COPY ext/http/http.lua ext/http/http_context.lua /opt/lunet/lunet/
+COPY ext/http/router.lua /opt/lunet/lunet/http_router.lua
+COPY ext/http/probe_target.lua /opt/lunet/probe_target.lua
+COPY --from=probe /probe /opt/probe
+COPY ext/http/probe_entrypoint.sh /usr/local/bin/probe_entrypoint.sh
+RUN chmod +x /usr/local/bin/probe_entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/probe_entrypoint.sh"]

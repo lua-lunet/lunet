@@ -43,14 +43,14 @@ Must be called from a yieldable coroutine spawned by `lunet.spawn`.
 - `url` (string, required)
 - `method` (string, optional, default `"GET"`)
 - `headers` (table, optional)
-  - map form: `{["Header"]="value"}`
-  - array form: `{{"Header","value"}, ...}`
+ - map form: `{["Header"]="value"}`
+ - array form: `{{"Header","value"}, ...}`
 - `body` (string, optional)
 - `timeout_ms` (integer, optional, default `30000`)
 - `max_body_bytes` (integer, optional, default `10485760` = 10 MiB)
 - `insecure` (boolean, optional)
-  - if omitted: inherits from `LUNET_HTTPC_INSECURE` environment variable (truthy enables insecure)
-  - if provided: explicit override
+ - if omitted: inherits from `LUNET_HTTPC_INSECURE` environment variable (truthy enables insecure)
+ - if provided: explicit override
 
 #### `resp`
 On success:

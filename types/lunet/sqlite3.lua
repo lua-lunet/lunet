@@ -17,7 +17,7 @@ local db = {}
 ---  create        string  "WAL" create the file and set journal_mode=WAL;
 ---                        "NORMAL" create the file, leave the journal mode
 ---                        at the SQLite default. Without create= the file
----                        must already exist — provisioning is a deployment
+---                        must already exist  -  provisioning is a deployment
 ---                        act and the driver never makes a sticky change to
 ---                        a file on its own.
 ---  busy_timeout  integer ms busy handler on both connections
@@ -26,7 +26,7 @@ local db = {}
 ---The passthroughs apply to both connections before open returns;
 ---afterwards they are per-connection and last-write-wins via
 ---db.exec(handle, "PRAGMA ...").
----The ro handle runs queries and execs INLINE on the loop thread — no
+---The ro handle runs queries and execs INLINE on the loop thread  -  no
 ---background thread, no yield; a heavy read stalls the loop for its
 ---duration.
 ---@param params table Connection parameters

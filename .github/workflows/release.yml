@@ -1,0 +1,548 @@
+name: Release
+#
+# Tag-triggered release build: build-unix and build-windows in parallel,
+# publish-unix creates the release with the unix/macos assets + notes +
+# fetch helper (seven assets), publish-windows appends the two Windows
+# zips via `gh release upload --clobber`. The asset filenames are the
+# contract: bin/lunet_fetch_release.lua and bin/generate_release_notes.lua
+# consume them.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or tag to build'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build-unix:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+            platform: linux
+          - os: blacksmith-4vcpu-ubuntu-2404-arm
+            arch: arm64
+            platform: linux
+          - os: macos-latest
+            arch: arm64
+            platform: macos
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
+
+    - name: Install xmake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: "3.0.8"
+
+    - name: Install Dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: bash contributing/deps/debian.sh --ci
+
+    - name: Install Dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        bash contributing/deps/macos.sh
+        echo "PKG_CONFIG_PATH=$(brew --prefix zlib)/lib/pkgconfig:$(brew --prefix curl)/lib/pkgconfig:$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mysql-client)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+
+    - name: Configure (Unix)
+      run: xmake f -m release -y
+
+    - name: Build (Unix)
+      run: |
+        xmake build
+        xmake build lunet-static
+        xmake build sdk-api-test
+        xmake build lunet-sqlite3
+        xmake build lunet-httpc
+        xmake build lunet-postgres
+        xmake build lunet-mysql
+
+    # Rust ext modules (lnt_shared, jsonic): POSIX-only by design — lnt_shared
+    # needs mmap/clock_gettime, and the jsonic Lua loader has no .dll suffix
+    # handling yet — so they are built on the unix legs only.
+    - name: Setup Rust toolchain (Unix)
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache cargo artifacts (Unix)
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ runner.os }}-rust-ext
+
+    - name: Build Rust ext modules (Unix)
+      run: |
+        set -euo pipefail
+        cargo build --release --manifest-path ext/lnt_shared/Cargo.toml
+        cargo build --release --manifest-path ext/jsonic/Cargo.toml
+
+    # On Linux, contributing/deps/sodium-src.sh installs a source-built
+    # libsodium (1.0.22) to /tmp/libsodium so the PAXE cdylib gets
+    # AES-256-GCM on ARM64 (libsodium <1.0.20 lacks ARM Crypto Extensions
+    # support, and 1.0.21 does not compile on aarch64 with GCC). macOS gets
+    # Homebrew 1.0.22; Windows gets vcpkg's. The env var is the priority-1
+    # path in paxe-core's build.rs, which is where the static-libsodium
+    # staging lives; ext/paxe has no build script of its own and inherits
+    # the core's link directives.
+    - name: Set PAXE libsodium path (Linux)
+      if: runner.os == 'Linux'
+      run: echo "PAXE_SODIUM_LIB_DIR=/tmp/libsodium/lib" >> "$GITHUB_ENV"
+
+    # PAXE (ext/paxe): the C ABI cdylib. The protocol core is vendored
+    # byte-exact from the upstream release tag at ext/paxe/paxe-core
+    # (see ext/paxe/paxe-core.version), so the Rust build needs no network
+    # and no credentials at all. ext/paxe/rust-toolchain.toml pins the
+    # toolchain and rustup auto-installs the pinned version on first use;
+    # cargo must run with ext/paxe as the working directory, because rustup
+    # resolves rust-toolchain.toml from the cwd, not from --manifest-path.
+    - name: Build PAXE Rust crate
+      working-directory: ext/paxe
+      run: cargo build --release
+
+    # Windows cdylib naming differs from Unix (.dll, no "lib" prefix), so
+    # confirm the artefact under the expected per-platform name rather than
+    # assuming it.
+    - name: Verify PAXE cdylib artefact
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ runner.os }}" in
+          Windows) ART=ext/paxe/target/release/lunet_paxe.dll ;;
+          macOS)   ART=ext/paxe/target/release/liblunet_paxe.dylib ;;
+          *)       ART=ext/paxe/target/release/liblunet_paxe.so ;;
+        esac
+        if [ ! -f "$ART" ]; then echo "missing artefact: $ART" >&2; exit 1; fi
+        echo "PAXE cdylib OK: $ART"
+
+    - name: Package release archive (Linux)
+      if: matrix.platform == 'linux'
+      run: |
+        set -euo pipefail
+        DIST_DIR="$(mktemp -d)"
+        mkdir -p "$DIST_DIR/lunet"
+        cp "$(find build -type f -name 'lunet-run' | head -n 1)" "$DIST_DIR/lunet-run"
+        cp "$(find build -type f -name 'lunet.so' | head -n 1)" "$DIST_DIR/lunet.so"
+        while IFS= read -r mod; do
+          cp "$mod" "$DIST_DIR/lunet/"
+        done < <(find build -type f -path '*/lunet/*.so')
+        # Rust ext modules: each Lua loader resolves its compiled
+        # library relative to its own directory, so co-locate loaders and
+        # cdylibs under lunet/.
+        cp ext/lnt_shared/lnt_shared.lua "$DIST_DIR/lunet/"
+        cp ext/lnt_shared/target/release/liblnt_shared.so "$DIST_DIR/lunet/"
+        cp ext/jsonic/jsonic.lua ext/jsonic/dkjson-encode-v2.10.lua "$DIST_DIR/lunet/"
+        cp ext/jsonic/target/release/liblunet_jsonic.so "$DIST_DIR/lunet/"
+        # PAXE: Lua FFI loader plus its Rust cdylib. libsodium is linked
+        # statically into the cdylib, so the archive stays self-contained.
+        cp ext/paxe/paxe.lua "$DIST_DIR/lunet/"
+        cp ext/paxe/target/release/liblunet_paxe.so "$DIST_DIR/lunet/"
+        # lunet.sodium: the primitives loader binds the SAME cdylib through
+        # its dylib handle (lunet_sodium_* shims) — no extra artifact.
+        cp ext/paxe/sodium.lua "$DIST_DIR/lunet/"
+        # sqlite3 Lua loader: the public lunet.sqlite3 surface + the
+        # path-keyed handle cache (the binary registers as lunet.sqlite3core).
+        cp ext/sqlite3/sqlite3.lua "$DIST_DIR/lunet/"
+        # Pure-Lua HTTP extension modules: lunet.http (framing + responses
+        # + opt-in CORS), lunet.http_context (per-request context) and
+        # lunet.http_router (routes + middleware).
+        cp ext/http/http.lua ext/http/http_context.lua "$DIST_DIR/lunet/"
+        cp ext/http/router.lua "$DIST_DIR/lunet/http_router.lua"
+        # lunet.security: pure-Lua crypto + JWT HS256 over lunet.sodium
+        # and lunet.jsonic (no binary of its own).
+        cp ext/security/security.lua "$DIST_DIR/lunet/"
+        # DB transaction wrappers: one per driver, deliberately not shared.
+        cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
+           ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
+        # Documentation: copy every docs/*.md (and its -CN.md counterpart)
+        # into the archive by default, excluding internal-only and
+        # maintainer-only docs that are not meant for end users.
+        DOC_EXCLUDES=" CONTRIBUTING-INTERNALS.md CONTRIBUTING-INTERNALS-CN.md BADGES.md BADGES-CN.md EASY_MEMORY_REPORT.md EASY_MEMORY_REPORT-CN.md WORKFLOW.md WORKFLOW-CN.md XMAKE_INTEGRATION.md XMAKE_INTEGRATION-CN.md "
+        for doc in docs/*.md; do
+          base="$(basename "$doc")"
+          case "$DOC_EXCLUDES" in
+            *" $base "*) continue ;;
+          esac
+          cp "$doc" "$DIST_DIR/"
+        done
+        # LuaCATS type annotations
+        cp -R types "$DIST_DIR/"
+        tar -C "$DIST_DIR" -czf "lunet-linux-${{ matrix.arch }}.tar.gz" .
+
+    - name: Package release archive (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        set -euo pipefail
+        DIST_DIR="$(mktemp -d)"
+        mkdir -p "$DIST_DIR/lunet"
+        cp "$(find build -type f -name 'lunet-run' | head -n 1)" "$DIST_DIR/lunet-run"
+        cp "$(find build -type f -name 'lunet.so' | head -n 1)" "$DIST_DIR/lunet.so"
+        while IFS= read -r mod; do
+          cp "$mod" "$DIST_DIR/lunet/"
+        done < <(find build -type f -path '*/lunet/*.so')
+        # Rust ext modules: each Lua loader resolves its compiled
+        # library relative to its own directory, so co-locate loaders and
+        # cdylibs under lunet/.
+        cp ext/lnt_shared/lnt_shared.lua "$DIST_DIR/lunet/"
+        cp ext/lnt_shared/target/release/liblnt_shared.dylib "$DIST_DIR/lunet/"
+        cp ext/jsonic/jsonic.lua ext/jsonic/dkjson-encode-v2.10.lua "$DIST_DIR/lunet/"
+        cp ext/jsonic/target/release/liblunet_jsonic.dylib "$DIST_DIR/lunet/"
+        # PAXE: Lua FFI loader plus its Rust cdylib. libsodium is linked
+        # statically into the cdylib, so the archive stays self-contained.
+        cp ext/paxe/paxe.lua "$DIST_DIR/lunet/"
+        cp ext/paxe/target/release/liblunet_paxe.dylib "$DIST_DIR/lunet/"
+        # lunet.sodium: the primitives loader binds the SAME cdylib through
+        # its dylib handle (lunet_sodium_* shims) — no extra artifact.
+        cp ext/paxe/sodium.lua "$DIST_DIR/lunet/"
+        # sqlite3 Lua loader: the public lunet.sqlite3 surface + the
+        # path-keyed handle cache (the binary registers as lunet.sqlite3core).
+        cp ext/sqlite3/sqlite3.lua "$DIST_DIR/lunet/"
+        # Pure-Lua HTTP extension modules: lunet.http (framing + responses
+        # + opt-in CORS), lunet.http_context (per-request context) and
+        # lunet.http_router (routes + middleware).
+        cp ext/http/http.lua ext/http/http_context.lua "$DIST_DIR/lunet/"
+        cp ext/http/router.lua "$DIST_DIR/lunet/http_router.lua"
+        # lunet.security: pure-Lua crypto + JWT HS256 over lunet.sodium
+        # and lunet.jsonic (no binary of its own).
+        cp ext/security/security.lua "$DIST_DIR/lunet/"
+        # DB transaction wrappers: one per driver, deliberately not shared.
+        cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
+           ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
+        # Documentation: copy every docs/*.md (and its -CN.md counterpart)
+        # into the archive by default, excluding internal-only and
+        # maintainer-only docs that are not meant for end users.
+        DOC_EXCLUDES=" CONTRIBUTING-INTERNALS.md CONTRIBUTING-INTERNALS-CN.md BADGES.md BADGES-CN.md EASY_MEMORY_REPORT.md EASY_MEMORY_REPORT-CN.md WORKFLOW.md WORKFLOW-CN.md XMAKE_INTEGRATION.md XMAKE_INTEGRATION-CN.md "
+        for doc in docs/*.md; do
+          base="$(basename "$doc")"
+          case "$DOC_EXCLUDES" in
+            *" $base "*) continue ;;
+          esac
+          cp "$doc" "$DIST_DIR/"
+        done
+        # LuaCATS type annotations
+        cp -R types "$DIST_DIR/"
+        tar -C "$DIST_DIR" -czf lunet-macos.tar.gz .
+
+    - name: Package release SDK (Linux)
+      if: matrix.platform == 'linux'
+      run: |
+        set -euo pipefail
+        SDK_DIR="$(mktemp -d)"
+        mkdir -p "$SDK_DIR/bin" "$SDK_DIR/examples/sdk_embed/app" "$SDK_DIR/include" "$SDK_DIR/lib"
+        cp "$(find build -type f -name 'liblunet-static.a' | head -n 1)" "$SDK_DIR/lib/liblunet-static.a"
+        cp include/lunet.h include/lunet_exports.h "$SDK_DIR/include/"
+        cp bin/generate_embed_scripts.lua "$SDK_DIR/bin/"
+        cp examples/sdk_embed/main.c "$SDK_DIR/examples/sdk_embed/"
+        cp examples/sdk_embed/app/main.lua "$SDK_DIR/examples/sdk_embed/app/"
+        cp docs/EMBEDDING.md "$SDK_DIR/README.md"
+        cp docs/EMBEDDING-CN.md "$SDK_DIR/README-CN.md"
+        cp LICENSE "$SDK_DIR/"
+        tar -C "$SDK_DIR" -czf "lunet-linux-${{ matrix.arch }}-sdk.tar.gz" .
+
+    - name: Package release SDK (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        set -euo pipefail
+        SDK_DIR="$(mktemp -d)"
+        mkdir -p "$SDK_DIR/bin" "$SDK_DIR/examples/sdk_embed/app" "$SDK_DIR/include" "$SDK_DIR/lib"
+        cp "$(find build -type f -name 'liblunet-static.a' | head -n 1)" "$SDK_DIR/lib/liblunet-static.a"
+        cp include/lunet.h include/lunet_exports.h "$SDK_DIR/include/"
+        cp bin/generate_embed_scripts.lua "$SDK_DIR/bin/"
+        cp examples/sdk_embed/main.c "$SDK_DIR/examples/sdk_embed/"
+        cp examples/sdk_embed/app/main.lua "$SDK_DIR/examples/sdk_embed/app/"
+        cp docs/EMBEDDING.md "$SDK_DIR/README.md"
+        cp docs/EMBEDDING-CN.md "$SDK_DIR/README-CN.md"
+        cp LICENSE "$SDK_DIR/"
+        tar -C "$SDK_DIR" -czf lunet-macos-sdk.tar.gz .
+
+    - name: Upload release archive (Linux)
+      if: matrix.platform == 'linux'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-linux-${{ matrix.arch }}
+        path: lunet-linux-${{ matrix.arch }}.tar.gz
+
+    - name: Upload release archive (macOS)
+      if: runner.os == 'macOS'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-macos
+        path: lunet-macos.tar.gz
+
+    - name: Upload release SDK (Linux)
+      if: matrix.platform == 'linux'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-sdk-linux-${{ matrix.arch }}
+        path: lunet-linux-${{ matrix.arch }}-sdk.tar.gz
+
+    - name: Upload release SDK (macOS)
+      if: runner.os == 'macOS'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-sdk-macos
+        path: lunet-macos-sdk.tar.gz
+
+  build-windows:
+    name: blacksmith-4vcpu-windows-2025
+    runs-on: blacksmith-4vcpu-windows-2025
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
+
+    - name: Cache vcpkg
+      uses: actions/cache@v4
+      with:
+        path: |
+          vcpkg/installed
+          vcpkg/packages
+        key: ${{ runner.os }}-vcpkg-${{ hashFiles('xmake.lua') }}-${{ hashFiles('vcpkg.json', 'ports/*/vcpkg.json') }}
+        restore-keys: |
+          ${{ runner.os }}-vcpkg-
+
+    - name: Install xmake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: "3.0.8"
+
+    - name: Setup vcpkg (Windows)
+      uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgGitCommitId: '66c0373dc7fca549e5803087b9487edfe3aca0a1'
+      env:
+        VCPKG_BINARY_SOURCES: 'clear;nuget,readwrite'
+
+    - name: Install Dependencies (Windows)
+      shell: pwsh
+      run: pwsh contributing/deps/windows.ps1
+
+    - name: Configure (Windows)
+      shell: pwsh
+      run: |
+        # Persist vcpkg/MSVC environment for later Windows steps; $env: alone
+        # only lasts for the current step, and the SDK verification invokes
+        # `cl` directly rather than through xmake.
+        "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> $env:GITHUB_ENV
+        "VCPKG_DEFAULT_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+        "CL=/MP" >> $env:GITHUB_ENV
+        "CI=true" >> $env:GITHUB_ENV
+        xmake f -m release -y
+
+    - name: Build (Windows)
+      shell: pwsh
+      run: |
+        xmake build
+        xmake build lunet-static
+        xmake build sdk-api-test
+        xmake build lunet-sqlite3
+        xmake build lunet-httpc
+        xmake build lunet-postgres
+        xmake build lunet-mysql
+
+    # PAXE (ext/paxe): the C ABI cdylib, built on every platform. The
+    # protocol core is vendored byte-exact from the upstream release tag at
+    # ext/paxe/paxe-core (see ext/paxe/paxe-core.version), so the Rust build
+    # needs no network and no credentials at all. There is no dedicated
+    # toolchain setup step on Windows: ext/paxe/rust-toolchain.toml pins the
+    # toolchain and rustup auto-installs the pinned version on first use.
+    - name: Build PAXE Rust crate
+      working-directory: ext/paxe
+      run: cargo build --release
+
+    # Windows cdylib naming differs from Unix (.dll, no "lib" prefix), so
+    # confirm the artefact under the expected per-platform name rather than
+    # assuming it.
+    - name: Verify PAXE cdylib artefact
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ runner.os }}" in
+          Windows) ART=ext/paxe/target/release/lunet_paxe.dll ;;
+          macOS)   ART=ext/paxe/target/release/liblunet_paxe.dylib ;;
+          *)       ART=ext/paxe/target/release/liblunet_paxe.so ;;
+        esac
+        if [ ! -f "$ART" ]; then echo "missing artefact: $ART" >&2; exit 1; fi
+        echo "PAXE cdylib OK: $ART"
+
+    - name: Package release archive (Windows)
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $dist = Join-Path $env:RUNNER_TEMP ("lunet-dist-" + $env:GITHUB_RUN_ID + "-" + $env:GITHUB_RUN_ATTEMPT)
+        New-Item -ItemType Directory -Path (Join-Path $dist "lunet") -Force | Out-Null
+        Copy-Item (Get-ChildItem -Path build -Recurse -Filter lunet-run.exe | Select-Object -First 1).FullName (Join-Path $dist "lunet-run.exe")
+        Copy-Item (Get-ChildItem -Path build -Recurse -Filter lunet.dll | Select-Object -First 1).FullName (Join-Path $dist "lunet.dll")
+        Get-ChildItem -Path build -Recurse -Filter *.dll | Where-Object { $_.FullName -match '\\lunet\\' } | ForEach-Object {
+          Copy-Item $_.FullName (Join-Path $dist "lunet")
+        }
+        # PAXE: Lua FFI loader plus its Rust cdylib. libsodium is linked
+        # statically into the cdylib, so the archive stays self-contained.
+        Copy-Item ext\paxe\paxe.lua (Join-Path $dist "lunet")
+        Copy-Item ext\paxe\target\release\lunet_paxe.dll (Join-Path $dist "lunet")
+        # lunet.sodium: the primitives loader binds the SAME cdylib through
+        # its dylib handle (lunet_sodium_* shims) — no extra artifact.
+        Copy-Item ext\paxe\sodium.lua (Join-Path $dist "lunet")
+        # sqlite3 Lua loader: the public lunet.sqlite3 surface + the
+        # path-keyed handle cache (the binary registers as lunet.sqlite3core).
+        Copy-Item ext\sqlite3\sqlite3.lua (Join-Path $dist "lunet")
+        # Pure-Lua HTTP extension modules: lunet.http (framing + responses
+        # + opt-in CORS), lunet.http_context (per-request context) and
+        # lunet.http_router (routes + middleware).
+        Copy-Item ext\http\http.lua, ext\http\http_context.lua (Join-Path $dist "lunet")
+        Copy-Item ext\http\router.lua (Join-Path $dist "lunet\http_router.lua")
+        # lunet.security: pure-Lua crypto + JWT HS256 over lunet.sodium
+        # and lunet.jsonic (no binary of its own).
+        Copy-Item ext\security\security.lua (Join-Path $dist "lunet")
+        # DB transaction wrappers: one per driver, deliberately not shared.
+        Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
+        # Documentation: copy every docs\*.md (and its -CN.md counterpart)
+        # into the archive by default, excluding internal-only and
+        # maintainer-only docs that are not meant for end users.
+        $DocExcludes = @("CONTRIBUTING-INTERNALS.md", "CONTRIBUTING-INTERNALS-CN.md", "BADGES.md", "BADGES-CN.md", "EASY_MEMORY_REPORT.md", "EASY_MEMORY_REPORT-CN.md", "WORKFLOW.md", "WORKFLOW-CN.md", "XMAKE_INTEGRATION.md", "XMAKE_INTEGRATION-CN.md")
+        Get-ChildItem -Path docs -Filter *.md | Where-Object { $DocExcludes -notcontains $_.Name } | ForEach-Object {
+          Copy-Item $_.FullName $dist
+        }
+        # LuaCATS type annotations
+        Copy-Item -Recurse types (Join-Path $dist "types")
+        Compress-Archive -Path (Join-Path $dist "*") -DestinationPath lunet-windows-amd64.zip -Force
+
+    - name: Package release SDK (Windows)
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $sdk = Join-Path $env:RUNNER_TEMP ("lunet-sdk-" + $env:GITHUB_RUN_ID + "-" + $env:GITHUB_RUN_ATTEMPT)
+        New-Item -ItemType Directory -Path (Join-Path $sdk "bin"), (Join-Path $sdk "examples\sdk_embed\app"), (Join-Path $sdk "include"), (Join-Path $sdk "lib") -Force | Out-Null
+        Copy-Item (Get-ChildItem -Path build -Recurse -Filter lunet-static.lib | Select-Object -First 1).FullName (Join-Path $sdk "lib\lunet-static.lib")
+        Copy-Item include\lunet.h, include\lunet_exports.h (Join-Path $sdk "include")
+        Copy-Item bin\generate_embed_scripts.lua (Join-Path $sdk "bin")
+        Copy-Item examples\sdk_embed\main.c (Join-Path $sdk "examples\sdk_embed")
+        Copy-Item examples\sdk_embed\app\main.lua (Join-Path $sdk "examples\sdk_embed\app")
+        Copy-Item docs\EMBEDDING.md (Join-Path $sdk "README.md")
+        Copy-Item docs\EMBEDDING-CN.md (Join-Path $sdk "README-CN.md")
+        Copy-Item LICENSE $sdk
+        Compress-Archive -Path (Join-Path $sdk "*") -DestinationPath lunet-windows-amd64-sdk.zip -Force
+
+    - name: Upload release archive (Windows)
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-windows
+        path: lunet-windows-amd64.zip
+
+    - name: Upload release SDK (Windows)
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-sdk-windows
+        path: lunet-windows-amd64-sdk.zip
+
+  # Stage one of the publish: the release appears with the unix + macos
+  # archives, the SDK archives and the fetch helper (seven assets) plus
+  # release notes, as soon as those legs finish — Windows does not hold
+  # them back.
+  publish-unix:
+    name: Publish release (unix + macos assets)
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))
+    needs: build-unix
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
+        fetch-depth: 0  # full tag history for per-tag release notes
+
+    - name: Setup xmake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: "3.0.8"
+
+    - name: Download unix release archives
+      uses: actions/download-artifact@v4
+      with:
+        pattern: release-*linux*
+        merge-multiple: true
+        path: release-assets
+
+    - name: Download macos release archives
+      uses: actions/download-artifact@v4
+      with:
+        pattern: release-*macos*
+        merge-multiple: true
+        path: release-assets
+
+    - name: Generate release notes
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        LUNET_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}
+      run: |
+        xmake lua bin/generate_release_notes.lua
+        cat .tmp/release-notes.md
+
+    - name: Render fetch-release helper
+      env:
+        LUNET_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}
+      run: |
+        sed "s/@RELEASE_TAG@/${LUNET_RELEASE_TAG}/g" bin/lunet_fetch_release.lua > "release-assets/lunet_fetch_release_${LUNET_RELEASE_TAG}.lua"
+        ! grep -q '@RELEASE_TAG@' "release-assets/lunet_fetch_release_${LUNET_RELEASE_TAG}.lua"
+
+    - name: Create release with unix + macos assets
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}
+        name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}
+        body_path: .tmp/release-notes.md
+        files: |
+          release-assets/lunet-linux-amd64.tar.gz
+          release-assets/lunet-linux-arm64.tar.gz
+          release-assets/lunet-macos.tar.gz
+          release-assets/lunet-linux-amd64-sdk.tar.gz
+          release-assets/lunet-linux-arm64-sdk.tar.gz
+          release-assets/lunet-macos-sdk.tar.gz
+          release-assets/lunet_fetch_release_${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}.lua
+
+  # Stage two of the publish: the two Windows zips join the release created
+  # by publish-unix. `gh release upload --clobber` is additive by name — it
+  # uploads/overwrites only the listed assets and cannot disturb the notes
+  # or the earlier assets — and it fails loudly if the release does not
+  # exist yet, so a Windows leg can never publish ahead of the fetcher.
+  publish-windows:
+    name: Publish release (windows assets)
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))
+    needs: [build-windows, publish-unix]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+    - name: Download windows release archives
+      uses: actions/download-artifact@v4
+      with:
+        pattern: release-*windows*
+        merge-multiple: true
+        path: release-assets
+
+    - name: Upload windows archives to the published release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        LUNET_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}
+      run: |
+        gh release upload "$LUNET_RELEASE_TAG" \
+          release-assets/lunet-windows-amd64.zip \
+          release-assets/lunet-windows-amd64-sdk.zip \
+          --clobber

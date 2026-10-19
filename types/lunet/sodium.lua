@@ -1,16 +1,16 @@
 ---@meta
 
----lunet.sodium — a minimal libsodium primitive surface.
+---lunet.sodium  -  a minimal libsodium primitive surface.
 ---
 ---Three primitives exposed from the PAXE cdylib (which already statically
 ---links libsodium): one-shot SHA-256, one-shot HMAC-SHA-256 (the JWT HS256
 ---primitive), and `randombytes`. Loaded through the LuaJIT FFI from the
----dylib handle — never `RTLD_DEFAULT` — so a user-owned libsodium in the
+---dylib handle  -  never `RTLD_DEFAULT`  -  so a user-owned libsodium in the
 ---same process cannot capture the lookup. Requires the PAXE cdylib
 ---(`xmake build-paxe`; shipped in the binary archives).
 ---
 ---Security boundary: stateless hashing crosses no secrets; the HMAC key
----material does cross the FFI unguarded (documented boundary — guarded key
+---material does cross the FFI unguarded (documented boundary  -  guarded key
 ---memory remains `lunet.paxe`'s job). See `docs/SODIUM.md`.
 local sodium = {}
 
@@ -32,9 +32,9 @@ sodium.BYTES = nil
 ---```
 function sodium.sha256(data) end
 
----One-shot HMAC-SHA-256 — the JWT HS256 primitive. `key` must be exactly
+---One-shot HMAC-SHA-256  -  the JWT HS256 primitive. `key` must be exactly
 ---32 bytes (a wrong length raises). The key crosses the FFI as ordinary
----Lua string data — unguarded, unlike PAXE keystore material.
+---Lua string data  -  unguarded, unlike PAXE keystore material.
 ---@param data string Data to authenticate
 ---@param key string Exactly 32 bytes
 ---@return string tag 32 raw bytes

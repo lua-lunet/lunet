@@ -14,12 +14,12 @@
 Lunet 现在支持以下 EasyMem 路径：
 
 1. **在追踪构建中自动启用**
-   - `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n -y`
+ - `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n -y`
 2. **在 ASAN 构建中自动启用**
-   - `xmake f -c -m debug --lunet_trace=y --asan=y -y`
-   - Windows 在工具链支持时使用 `/fsanitize=address`。
+ - `xmake f -c -m debug --lunet_trace=y --asan=y -y`
+ - Windows 在工具链支持时使用 `/fsanitize=address`。
 3. **手动选择启用（开发档位）**
-   - `xmake f -c -m debug --lunet_trace=n --lunet_verbose_trace=n --easy_memory=y -y`
+ - `xmake f -c -m debug --lunet_trace=n --lunet_verbose_trace=n --easy_memory=y -y`
 
 ## 验证运行
 
@@ -48,44 +48,44 @@ Lunet 现在支持以下 EasyMem 路径：
 ## 分析发现
 
 1. **EasyMem 诊断已激活**
-   - 在启用诊断的配置中，`print_em()` 和 `print_fancy()` 输出在关闭时正常显示。
-   - ASCII 内存可视化（"图表"）按预期输出。
+ - 在启用诊断的配置中，`print_em()` 和 `print_fancy()` 输出在关闭时正常显示。
+ - ASCII 内存可视化（"图表"）按预期输出。
 
 2. **分配器统计对 Lunet 核心分配是准确的**
-   - 压力运行显示分配/释放计数平衡且峰值稳定较低。
+ - 压力运行显示分配/释放计数平衡且峰值稳定较低。
 
 3. **扩展分配的源码迁移已完成**
-   - 在以下文件中，直接的 `malloc/calloc/realloc/free/strdup` 调用已替换为 Lunet 分配器包装器：
-     - `ext/sqlite3/sqlite3.c`
-     - `ext/mysql/mysql.c`
-     - `ext/postgres/postgres.c`
-     - `src/paxe.c`
-   - 所有相关目标的构建验证已通过：`lunet-sqlite3`、`lunet-mysql`、`lunet-postgres`、`lunet-paxe`。
-   - 注意：模块驱动示例的顶层 `lunet-run` 内存摘要仍可能显示 `allocs=0`，因为驱动模块目前编译了各自的核心分配器状态副本；这需要后续的共享核心链接来聚合到一个全局状态。
+ - 在以下文件中，直接的 `malloc/calloc/realloc/free/strdup` 调用已替换为 Lunet 分配器包装器：
+ - `ext/sqlite3/sqlite3.c`
+ - `ext/mysql/mysql.c`
+ - `ext/postgres/postgres.c`
+ - `src/paxe.c`
+ - 所有相关目标的构建验证已通过：`lunet-sqlite3`、`lunet-mysql`、`lunet-postgres`、`lunet-paxe`。
+ - 注意：模块驱动示例的顶层 `lunet-run` 内存摘要仍可能显示 `allocs=0`，因为驱动模块目前编译了各自的核心分配器状态副本；这需要后续的共享核心链接来聚合到一个全局状态。
 
 4. **ASAN + EasyMem 双重覆盖可正常工作**
-   - ASAN 检测和 EasyMem 诊断在调试构建中同时激活。
-   - 在执行的压力路径中未观察到清洁器故障。
+ - ASAN 检测和 EasyMem 诊断在调试构建中同时激活。
+ - 在执行的压力路径中未观察到清洁器故障。
 
 ## 进一步利用 EasyMem 功能的建议
 
 为充分利用 EasyMem（特别是在数据库工作线程/互斥锁路径方面），建议接下来采取以下措施：
 
 1. **统一跨模块边界的分配器状态**
-   - 当前驱动模块嵌入了核心源码，因此分配器计数器是按模块独立的。
-   - 为实现完全统一的分析/完整性报告，需要重构为共享一个分配器状态（例如，让驱动模块链接到共享的核心分配器/运行时对象，而不是在每个模块目标中复制 `src/lunet_mem.c`）。
+ - 当前驱动模块嵌入了核心源码，因此分配器计数器是按模块独立的。
+ - 为实现完全统一的分析/完整性报告，需要重构为共享一个分配器状态（例如，让驱动模块链接到共享的核心分配器/运行时对象，而不是在每个模块目标中复制 `src/lunet_mem.c`）。
 
 2. **为数据库工作任务提供按操作的内存区**
-   - 为每个 `uv_queue_work` 数据库操作创建嵌套/临时 EasyMem 作用域。
-   - 在完成边界（`after_work` 回调）释放该作用域，在 uv 互斥锁保护的操作间保持内存中性。
+ - 为每个 `uv_queue_work` 数据库操作创建嵌套/临时 EasyMem 作用域。
+ - 在完成边界（`after_work` 回调）释放该作用域，在 uv 互斥锁保护的操作间保持内存中性。
 
 3. **驱动本地内存区策略**
-   - 将长生命周期的连接结构保留在稳定的根内存区中。
-   - 将查询/结果临时缓冲区放置在嵌套/临时内存区中，以减少碎片化并简化提前错误路径的清理。
+ - 将长生命周期的连接结构保留在稳定的根内存区中。
+ - 将查询/结果临时缓冲区放置在嵌套/临时内存区中，以减少碎片化并简化提前错误路径的清理。
 
 4. **CI 诊断产物**
-   - 从 trace+ASAN CI 运行中捕获 EasyMem 摘要/可视化作为产物。
-   - 添加回归阈值（例如，每个压力场景的峰值使用量偏移）。
+ - 从 trace+ASAN CI 运行中捕获 EasyMem 摘要/可视化作为产物。
+ - 添加回归阈值（例如，每个压力场景的峰值使用量偏移）。
 
 ## 结论
 

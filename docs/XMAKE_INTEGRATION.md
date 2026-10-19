@@ -1,6 +1,6 @@
 # Integrating Lunet into Your Project
 
-> Just want a runtime? A prebuilt release archive needs no toolchain at all —
+> Just want a runtime? A prebuilt release archive needs no toolchain at all - 
 > see "Get a runtime" in [README.md](../README.md). Build from source only
 > when you must compile on the target box or want to get into the low levels.
 
@@ -8,7 +8,7 @@ This guide helps you build and use Lunet in your own application. No prior xmake
 
 ## What is xmake?
 
-Lunet uses **xmake** as its build system. xmake is a lightweight, cross-platform build tool (similar to CMake or Make). You don't need to learn xmake in depth—just follow the commands below.
+Lunet uses **xmake** as its build system. xmake is a lightweight, cross-platform build tool (similar to CMake or Make). You don't need to learn xmake in depth - just follow the commands below.
 
 **Install xmake:**
 
@@ -39,8 +39,8 @@ xmake build
 - `-y` = accept defaults without prompting
 
 **Output files:**
-- `build/<platform>/<arch>/release/lunet.so` — the Lua module
-- `build/<platform>/<arch>/release/lunet-run` — standalone runner
+- `build/<platform>/<arch>/release/lunet.so` - the Lua module
+- `build/<platform>/<arch>/release/lunet-run` - standalone runner
 
 ### 1b. Optional native modules
 
@@ -76,7 +76,7 @@ xmake build lunet-bin
 
 When enabled, `lunet-run` extracts the embedded script tree into a private temp directory at startup and prepends that location to `package.path` and `package.cpath`. The temp directory is removed again at shutdown.
 
-Note: the entry script argument must be a safe relative path inside the embedded tree (for example `main.lua`). Absolute paths, `..` segments, and scripts outside the blob are rejected — there is no fallback to running a file from disk in an embed build.
+Note: the entry script argument must be a safe relative path inside the embedded tree (for example `main.lua`). Absolute paths, `..` segments, and scripts outside the blob are rejected - there is no fallback to running a file from disk in an embed build.
 
 For release consumers who need their own native `main()` and an embedded Lua
 application, see [EMBEDDING.md](EMBEDDING.md) instead of rebuilding Lunet as an
@@ -135,10 +135,10 @@ Lunet keeps the Lua module output as `lunet.so` and also emits a compatibility
 
 If your app uses Lunet and you run CI (e.g. GitHub Actions), test with these profiles:
 
-1. **Release** — `--lunet_trace=n --lunet_verbose_trace=n`
-2. **Debug trace** — `--lunet_trace=y --lunet_verbose_trace=n`
-3. **Verbose trace** — `--lunet_trace=y --lunet_verbose_trace=y`
-4. **ASan + EasyMem** — `--asan=y --lunet_trace=y`
+1. **Release** - `--lunet_trace=n --lunet_verbose_trace=n`
+2. **Debug trace** - `--lunet_trace=y --lunet_verbose_trace=n`
+3. **Verbose trace** - `--lunet_trace=y --lunet_verbose_trace=y`
+4. **ASan + EasyMem** - `--asan=y --lunet_trace=y`
 
 This catches most lifecycle and coroutine issues early.
 
@@ -152,15 +152,15 @@ xmake test
 
 This runs three steps in order:
 
-1. **`xmake check-types`** — validates the LuaCATS annotations in `types/` with lua-language-server. Type errors abort the run before any test executes.
-2. **`xmake build lunet-httpc`** — builds the outbound HTTP client C module so `spec/httpc_spec.lua` always runs; a platform that cannot build it fails here instead of skipping.
-3. **`busted spec/`** — the Lua suite: `spec/httpc_spec.lua` (tests against the `lunet.httpc` C module) and `spec/lint_spec.lua` (runs `luajit bin/lint_c_safety.lua`).
+1. **`xmake check-types`** - validates the LuaCATS annotations in `types/` with lua-language-server. Type errors abort the run before any test executes.
+2. **`xmake build lunet-httpc`** - builds the outbound HTTP client C module so `spec/httpc_spec.lua` always runs; a platform that cannot build it fails here instead of skipping.
+3. **`busted spec/`** - the Lua suite: `spec/httpc_spec.lua` (tests against the `lunet.httpc` C module) and `spec/lint_spec.lua` (runs `luajit bin/lint_c_safety.lua`).
 
 Output is teed to `.tmp/logs/<timestamp>/busted.txt`.
 
 ### busted runs under LuaJIT (5.1 ABI only)
 
-lunet's C modules link `libluajit-5.1`, so loading one into a PUC Lua process puts two incompatible Lua runtimes in one address space: the suite segfaults on Linux and hangs on macOS. The `busted` wrapper on `PATH` cannot be trusted to avoid that — luarocks bakes whichever interpreter it detected at install time into the wrapper (`exec /usr/bin/lua5.1 … bin/busted` on Debian/Ubuntu even when installed with `--lua-dir` pointing at LuaJIT; `lua5.5` under Homebrew).
+lunet's C modules link `libluajit-5.1`, so loading one into a PUC Lua process puts two incompatible Lua runtimes in one address space: the suite segfaults on Linux and hangs on macOS. The `busted` wrapper on `PATH` cannot be trusted to avoid that - luarocks bakes whichever interpreter it detected at install time into the wrapper (`exec /usr/bin/lua5.1 … bin/busted` on Debian/Ubuntu even when installed with `--lua-dir` pointing at LuaJIT; `lua5.5` under Homebrew).
 
 `xmake test` therefore ignores the wrapper and launches busted's Lua entry point itself:
 
@@ -178,7 +178,7 @@ Any test left in busted's `pending` state fails the whole run:
 error: busted reported N pending test(s) -- pending tests are forbidden ...
 ```
 
-For local iteration only, set `LUNET_ALLOW_PENDING=1` to bypass the guard — never set it in CI. (The guard parses the captured busted output, so it applies on the Unix path only.)
+For local iteration only, set `LUNET_ALLOW_PENDING=1` to bypass the guard - never set it in CI. (The guard parses the captured busted output, so it applies on the Unix path only.)
 
 ### Standalone type checking
 

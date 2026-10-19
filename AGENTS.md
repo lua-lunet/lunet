@@ -82,6 +82,11 @@ Before creating or announcing a release:
      `bin/lunet_fetch_release.lua` (the `@RELEASE_TAG@` placeholder becomes the
      release tag). The fetcher installs the runtime into a project-local
      `.lunet/<tag>/` with SHA-256 verification against the release metadata.
+
+   Assets arrive in two stages: `publish-unix` posts the release first with
+   the six unix/macOS archives plus the fetcher (seven assets), and the two
+   Windows zips trail behind via `publish-windows` (`gh release upload
+   --clobber` onto the same release) once the Windows leg finishes.
 3. **Review the shipped documentation:** The archives carry `docs/` (included
    by default, excluded by name via the `DOC_EXCLUDES` list in
    `.github/workflows/build.yml`), so documentation is a release asset, not
@@ -96,7 +101,7 @@ Before creating or announcing a release:
    - `## Highlights`
    - `## Binaries`
    - `## Quick Start`
-5. **Verify before sign-off:** Check the published release page and confirm notes formatting plus all assets are present.
+5. **Verify before sign-off:** Check the published release page and confirm notes formatting plus ALL NINE assets are present — assets arrive in two stages (seven first, Windows trailing), so sign off only after the `publish-windows` job completes.
 6. **If anything is missing:** Fix workflow/release and republish before telling downstream users to consume the tag.
 7. **Ignore the AppVeyor checks.** `continuous-integration/appveyor/pr` and
    `.../branch` are orphaned webhooks: the AppVeyor account was deleted before
@@ -116,8 +121,9 @@ with no CI signal at all.
 
 ## Example Application
 
-The RealWorld Conduit demo app lives in a separate repository:
-[https://github.com/lua-lunet/lunet-realworld-example-app](https://github.com/lua-lunet/lunet-realworld-example-app)
+The RealWorld Conduit demo app lives at
+[https://github.com/lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua),
+with the demo-fleet overview in [examples/](examples/README.md).
 
 For application-level testing and load testing, clone and use that repo.
 

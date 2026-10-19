@@ -15,17 +15,8 @@ name: Build
 # This is also documented in the release quality gate in AGENTS.md.
 
 on:
-  # ONE tap per change — the triggers cover everything between them:
-  # - PR branches: `pull_request` fires on open/synchronize. Do NOT also
-  #   `gh workflow run` the branch by hand — that is how double builds
-  #   happened (both ran the same head SHA).
-  # - main and v* tags: `push` fires.
-  # - workflow_dispatch exists for manual builds of an arbitrary ref
-  #   (inputs.ref) — e.g. re-running packaging for a branch with no PR.
   push:
     branches: [ main, xmake ]
-    tags:
-      - 'v*'
   pull_request:
     branches: [ main ]
   workflow_dispatch:

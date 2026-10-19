@@ -20,18 +20,17 @@ lunet/                              # 扩展模块
   httpc.so                          # HTTPS 客户端（libcurl）
   sqlite3core.so / postgres.so      # 数据库驱动动态库
   mysql.so                          #   （Windows 上为 .dll）
-  sqlite3.lua                       # sqlite3 加载器：公开表面 + 按路径的
-                                    #   句柄缓存（二进制注册为 lunet.sqlite3core）
+  sqlite3.lua                       # sqlite3 加载器（二进制注册为
+                                    #   lunet.sqlite3core）
   sqlite3_tx.lua / postgres_tx.lua  # 数据库事务封装
   mysql_tx.lua
   http.lua                          # HTTP/1.1 请求解析 + 响应构建、可选 CORS
                                     #   （lunet.http）
   http_context.lua                  # 每请求上下文对象（lunet.http_context）
   http_router.lua                   # 带 :参数与方法中间件的方法+路径路由器
-                                    #   （lunet.http_router；源文件：ext/http/router.lua）
+                                    #   （lunet.http_router）
   security.lua                      # 加密 + JWT HS256 辅助模块
-                                    #   （lunet.security；基于 lunet.sodium +
-                                    #   lunet.jsonic 的纯 Lua 实现）
+                                    #   （lunet.security）
   liblnt_shared.so                  # lnt_shared 共享字典（Linux）
   liblnt_shared.dylib               #   （macOS，Windows 不提供）
   lnt_shared.lua                    # lnt_shared Lua FFI 加载器
@@ -47,7 +46,7 @@ lunet/                              # 扩展模块
                                     #   （SHA-256 / HMAC-SHA-256 / randombytes，
                                     #   垫片位于同一个 cdylib 中）
 types/                              # LuaCATS 类型注解（---@meta，纯文档，无运行时代码）
-  lunet.lua
+  lunet.lua                         #   每个注解都有 Teal 对应文件（*.d.tl）
   lunet/
     db.lua                          # 统一数据库后端
     fs.lua                          # 文件系统操作
@@ -61,11 +60,12 @@ types/                              # LuaCATS 类型注解（---@meta，纯文�
     signal.lua                      # 操作系统信号处理
     socket.lua                      # TCP 套接字操作
     sodium.lua                      # SHA-256 / HMAC-SHA-256 / randombytes
+    sqlite3.lua                     # sqlite3 加载器（二进制：lunet.sqlite3core）
     udp.lua                         # UDP 套接字操作
 *.md                                # 随包文档（见下文"随包文档"一节）
 ```
 
-`types/` 目录包含 LuaCATS `---@meta` 注解——纯文档，无运行时代码。这些文件声明了
+`types/` 目录包含 LuaCATS `---@meta` 注解 - 纯文档，无运行时代码。这些文件声明了
 上述每个模块的参数类型、返回值、类结构和错误约定。将此目录放入编辑器的
 workspace library 即可获得代码补全和签名提示：
 
@@ -83,19 +83,19 @@ workspace library 即可获得代码补全和签名提示：
 
 当前已排除的文档（仅供内部贡献者使用，对二进制发布包的最终用户没有价值）：
 
-- `CONTRIBUTING-INTERNALS.md` / `CONTRIBUTING-INTERNALS-CN.md` —— 面向在
+- `CONTRIBUTING-INTERNALS.md` / `CONTRIBUTING-INTERNALS-CN.md` - 面向在
   运行时本身工作的贡献者的 C 代码约定与调试方法论。
-- `BADGES.md` / `BADGES-CN.md` —— 供下游项目 README 使用的徽标代码片段。
-- `EASY_MEMORY_REPORT.md` / `EASY_MEMORY_REPORT-CN.md` —— 面向运行时自身
+- `BADGES.md` / `BADGES-CN.md` - 供下游项目 README 使用的徽标代码片段。
+- `EASY_MEMORY_REPORT.md` / `EASY_MEMORY_REPORT-CN.md` - 面向运行时自身
   构建的 EasyMem 集成与内存分析报告。
-- `WORKFLOW.md` / `WORKFLOW-CN.md` —— 面向从源码构建的贡献者的开发工作流
+- `WORKFLOW.md` / `WORKFLOW-CN.md` - 面向从源码构建的贡献者的开发工作流
   与 xmake 任务参考。
-- `XMAKE_INTEGRATION.md` / `XMAKE_INTEGRATION-CN.md` —— 从源码构建并嵌入
+- `XMAKE_INTEGRATION.md` / `XMAKE_INTEGRATION-CN.md` - 从源码构建并嵌入
   Lunet 的指南；二进制压缩包无需任何构建步骤。
 
 此规则不适用于 SDK 压缩包（`*-sdk.tar.gz` / `*-sdk.zip`），后者只随包携带
 `docs/EMBEDDING.md` / `docs/EMBEDDING-CN.md`，并重命名为
-`README.md` / `README-CN.md`——SDK 布局详见
+`README.md` / `README-CN.md` - SDK 布局详见
 [`docs/EMBEDDING-CN.md`](EMBEDDING-CN.md)。
 
 ## 扩展加载机制
@@ -119,11 +119,12 @@ local json  = require("lunet.jsonic")
 | lnt_shared | `LUNET_LNT_SHARED_LIB`       |
 | jsonic     | `LUNET_JSONIC_LIB`           |
 | sodium     | `LUNET_SODIUM_LIB`（回退到 `LUNET_PAXE_LIB`） |
+| paxe       | `LUNET_PAXE_LIB`             |
 
 ## 独立使用扩展（不依赖 lunet-run）
 
 以下章节记录的扩展都导出了稳定的 C ABI，任何 LuaJIT 程序都可以通过
-`ffi.load()` 直接加载。内容包括完整的 FFI API 接口——cdef 声明、错误码和
+`ffi.load()` 直接加载。内容包括完整的 FFI API 接口 - cdef 声明、错误码和
 值类型常量。
 
 无需头文件：以下声明使用 LuaJIT FFI cdef 语法编写，可以直接粘贴到
@@ -131,7 +132,7 @@ local json  = require("lunet.jsonic")
 
 ---
 
-## lnt_shared — 共享字典
+## lnt_shared - 共享字典
 
 仅限 POSIX 平台（Linux / macOS）。基于 `mmap(MAP_SHARED|MAP_ANONYMOUS)` 的
 内存键值存储，支持 TTL 过期机制。
@@ -220,9 +221,8 @@ ffi.cdef[[
 
 ### 符号命名
 
-FFI 符号使用 `ngx_shared_*` 前缀（而非 `lnt_shared_*`）。这是从 `ngx_shared`
-重命名为 `lnt_shared`（v0.4.3）后保留的旧名，用于保持 ABI 兼容性。这些符号
-是稳定的，不会变更。
+FFI 符号使用 `ngx_shared_*` 前缀（而非 `lnt_shared_*`）。这是为保持 ABI
+兼容性而沿用的旧名；这些符号是稳定的，不会变更。
 
 ### 最小示例（独立 FFI）
 
@@ -252,7 +252,7 @@ lib.ngx_shared_close(h)
 
 ---
 
-## jsonic — 流式 JSON 编解码器
+## jsonic - 流式 JSON 编解码器
 
 仅限 POSIX 平台（Linux / macOS）。提供流式 JSON 解码器（搭配 Lua 端编码器）。
 
@@ -278,7 +278,7 @@ ffi.cdef[[
 
 `lunet_jsonic_decode` 返回的是二进制编码（非 JSON 文本）。`jsonic.lua` 中的
 Lua 加载器会将其解码为 Lua 表。需要解码后的 Lua 值的独立 FFI 用户应使用
-Lua 封装层，而不是直接调用 FFI——二进制格式属于编解码器内部实现。
+Lua 封装层，而不是直接调用 FFI - 二进制格式属于编解码器内部实现。
 
 ### 内存所有权
 
@@ -287,11 +287,11 @@ Lua 封装层，而不是直接调用 FFI——二进制格式属于编解码器
 
 ---
 
-## lunet.sodium — 加密原语（SHA-256 / HMAC-SHA-256 / randombytes）
+## lunet.sodium - 加密原语（SHA-256 / HMAC-SHA-256 / randombytes）
 
 跨平台（Linux / macOS / Windows）。从**与 PAXE 相同的 cdylib**
 （`liblunet_paxe`）导出的极简 libsodium 原语接口，该 cdylib 已经静态链接了
-libsodium —— 进程中永远不需要第二个 libsodium。仅导出三个符号（外加用于
+libsodium - 进程中永远不需要第二个 libsodium。仅导出三个符号（外加用于
 错误消息的共享符号 `lunet_paxe_last_error`）；完整的 ABI 承诺、Lua API 与
 安全说明见 [`docs/SODIUM-CN.md`](SODIUM-CN.md)。
 
@@ -342,17 +342,17 @@ assert(lib.lunet_sodium_sha256("abc", 3, out) == 0)
 
 ## 平台说明
 
-- **Linux (amd64 / arm64)**：包含所有扩展。在 Ubuntu 24.04 上构建，链接系统
-  `glibc` 和 `openssl`。
-- **macOS (arm64)**：包含所有扩展。在 macOS 15+ 上构建，目标为
-  `macosx-version-min=14.0`。
+- **Linux (amd64 / arm64)**：包含所有扩展。在 Ubuntu 24.04 runner 镜像上构建，
+  链接系统 `glibc` 和 `openssl`。
+- **macOS (arm64)**：包含所有扩展。在 `macos-latest` GitHub runner（arm64）
+  上构建。
 - **Windows (amd64)**：Rust 扩展（`lnt_shared`、`jsonic`）因底层 crate 仅限
   POSIX 平台而未包含。数据库驱动和事务封装正常提供。
 
 ### 运行时依赖
 
-发布压缩包**并非**对其依赖完全静态链接（PAXE 除外——libsodium 是静态链接的）。
-纯二进制消费者需要安装运行时软件包——不是 `-dev` 变体。
+发布压缩包**并非**对其依赖完全静态链接（PAXE 除外 - libsodium 是静态链接的）。
+纯二进制消费者需要安装运行时软件包 - 不是 `-dev` 变体。
 
 **Debian/Ubuntu (Linux)**：
 
@@ -360,7 +360,7 @@ assert(lib.lunet_sodium_sha256("abc", 3, out) == 0)
 # 核心（始终需要）
 apt-get install -y libluajit-5.1-2 libuv1 zlib1g
 
-# 按你实际 require() 的驱动安装——不需要的可跳过
+# 按你实际 require() 的驱动安装 - 不需要的可跳过
 apt-get install -y libcurl4          # lunet.httpc
 apt-get install -y libpq5            # lunet.postgres
 apt-get install -y libmariadb3       # lunet.mysql（在 Debian trixie 上提供 libmysqlclient.so）
@@ -369,7 +369,6 @@ apt-get install -y libsqlite3-0      # lunet.sqlite3
 
 PAXE 扩展（`liblunet_paxe`）将 libsodium **静态链接**；
 不需要 `libsodium23` 软件包或任何非版本化 `.so` 符号链接。
-此前使用 `ln -sf libsodium.so.23 libsodium.so` 变通方案的下游应用应将其删除。
 
 **macOS**：
 
@@ -380,7 +379,7 @@ brew install luajit libuv
 # 按你实际使用的驱动安装
 brew install libpq          # lunet.postgres
 brew install mysql-client   # lunet.mysql
-# sqlite3 使用系统库——无需额外安装
+# sqlite3 使用系统库 - 无需额外安装
 ```
 
 macOS 上不存在非版本化符号链接问题；Homebrew 已提供正确的 `*.dylib` 名称。

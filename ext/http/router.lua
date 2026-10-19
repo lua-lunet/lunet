@@ -1,5 +1,5 @@
 --[[
-lunet.http_router — method+path dispatch with :param extraction
+lunet.http_router  -  method+path dispatch with :param extraction
 
 Ported from the RealWorld demo application's app/router.lua and
 generalised. The router is a module-level singleton: route modules
@@ -15,7 +15,7 @@ Contract:
     different method reports 404.
   - Registration on require: because routes live in this singleton,
     a route module registers its routes as a side effect of requiring
-    it — the connection loop only wires the socket.
+    it  -  the connection loop only wires the socket.
   - Handlers run as pcall(handler, ctx.env_config, ctx, params) and may
       * return a table: JSON-encoded as the body; a table carrying a
         status field sets the response status, and its body field (when
@@ -27,7 +27,7 @@ Contract:
         stands as written
   - Middleware: router.use(fn) registers before-dispatch middleware,
     run in registration order before route dispatch. A middleware may
-    short-circuit by returning a table or string — finalised exactly
+    short-circuit by returning a table or string  -  finalised exactly
     like a handler result; returning nil, false or nothing continues to
     the next middleware and then dispatch. Middleware runs inside the
     same error contract as handlers: a middleware error becomes a 500.
@@ -229,6 +229,18 @@ function router.handle(ctx)
 
     local route, params = router.match(method, path)
     if not route then
+        local allowed = {}
+        for _, r in ipairs(routes) do
+            if not allowed[r.method] and match_pattern(r.pattern, path) then
+                allowed[r.method] = true
+                allowed[#allowed + 1] = r.method
+            end
+        end
+        if #allowed > 0 then
+            ctx.res_headers["Allow"] = table.concat(allowed, ", ")
+            respond_result(ctx, 405, { error = "Method not allowed", path = path })
+            return
+        end
         respond_result(ctx, 404, { error = "Not found", path = path })
         return
     end

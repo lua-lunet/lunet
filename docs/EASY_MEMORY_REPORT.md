@@ -14,12 +14,12 @@ This report replaces the older memory safety strategy write-up and documents the
 Lunet now supports these EasyMem paths:
 
 1. **Automatic in trace builds**
-   - `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n -y`
+ - `xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=n -y`
 2. **Automatic in ASAN builds**
-   - `xmake f -c -m debug --lunet_trace=y --asan=y -y`
-   - Windows uses `/fsanitize=address` when supported by the toolchain.
+ - `xmake f -c -m debug --lunet_trace=y --asan=y -y`
+ - Windows uses `/fsanitize=address` when supported by the toolchain.
 3. **Manual opt-in (development profile)**
-   - `xmake f -c -m debug --lunet_trace=n --lunet_verbose_trace=n --easy_memory=y -y`
+ - `xmake f -c -m debug --lunet_trace=n --lunet_verbose_trace=n --easy_memory=y -y`
 
 ## Validation Runs
 
@@ -48,44 +48,44 @@ Logs are archived at:
 ## Profiling Findings
 
 1. **EasyMem diagnostics are active**
-   - `print_em()` and `print_fancy()` output is present at shutdown in diagnostics-enabled profiles.
-   - ASCII memory visualization ("chart") is emitted as expected.
+ - `print_em()` and `print_fancy()` output is present at shutdown in diagnostics-enabled profiles.
+ - ASCII memory visualization ("chart") is emitted as expected.
 
 2. **Allocator accounting is accurate for Lunet core allocations**
-   - Stress runs show balanced alloc/free counts and stable low peaks.
+ - Stress runs show balanced alloc/free counts and stable low peaks.
 
 3. **Source migration completed for extension allocations**
-   - Direct `malloc/calloc/realloc/free/strdup` usage was replaced with Lunet allocator wrappers in:
-     - `ext/sqlite3/sqlite3.c`
-     - `ext/mysql/mysql.c`
-     - `ext/postgres/postgres.c`
-     - `src/paxe.c`
-   - Build validation passed for all related targets: `lunet-sqlite3`, `lunet-mysql`, `lunet-postgres`, `lunet-paxe`.
-   - Note: top-level `lunet-run` memory summary for module-driven examples can still show `allocs=0` because driver modules currently compile their own copy of core allocator state; this requires a shared-core linkage follow-up to aggregate stats in one global state.
+ - Direct `malloc/calloc/realloc/free/strdup` usage was replaced with Lunet allocator wrappers in:
+ - `ext/sqlite3/sqlite3.c`
+ - `ext/mysql/mysql.c`
+ - `ext/postgres/postgres.c`
+ - `src/paxe.c`
+ - Build validation passed for all related targets: `lunet-sqlite3`, `lunet-mysql`, `lunet-postgres`, `lunet-paxe`.
+ - Note: top-level `lunet-run` memory summary for module-driven examples can still show `allocs=0` because driver modules currently compile their own copy of core allocator state; this requires a shared-core linkage follow-up to aggregate stats in one global state.
 
 4. **ASAN + EasyMem dual coverage works**
-   - ASAN instrumentation and EasyMem diagnostics are active together in debug builds.
-   - No sanitizer failures were observed in the executed stress path.
+ - ASAN instrumentation and EasyMem diagnostics are active together in debug builds.
+ - No sanitizer failures were observed in the executed stress path.
 
 ## Recommendations to Apply More EasyMem Features
 
 To fully exploit EasyMem (especially around DB worker/mutex paths), apply these next:
 
 1. **Unify allocator state across module boundaries**
-   - Current driver modules embed core sources, so allocator counters are per-module.
-   - For fully unified profiling/integrity reporting, refactor to share one allocator state (e.g., link driver modules against a shared core allocator/runtime object instead of duplicating `src/lunet_mem.c` in each module target).
+ - Current driver modules embed core sources, so allocator counters are per-module.
+ - For fully unified profiling/integrity reporting, refactor to share one allocator state (e.g., link driver modules against a shared core allocator/runtime object instead of duplicating `src/lunet_mem.c` in each module target).
 
 2. **Per-operation arenas for DB worker tasks**
-   - For each `uv_queue_work` DB operation, create a nested/scratch EasyMem scope.
-   - Free the scope at completion boundaries (`after_work` callback), preserving memory neutrality across uv mutex-protected operations.
+ - For each `uv_queue_work` DB operation, create a nested/scratch EasyMem scope.
+ - Free the scope at completion boundaries (`after_work` callback), preserving memory neutrality across uv mutex-protected operations.
 
 3. **Driver-local arena policy**
-   - Keep long-lived connection structs in a stable root arena.
-   - Place query/result temporary buffers in nested/scratch arenas to minimize fragmentation and simplify cleanup on early-error paths.
+ - Keep long-lived connection structs in a stable root arena.
+ - Place query/result temporary buffers in nested/scratch arenas to minimize fragmentation and simplify cleanup on early-error paths.
 
 4. **CI diagnostics artifacts**
-   - Capture EasyMem summaries/visualizations from trace+ASAN CI runs as artifacts.
-   - Add regression thresholds (e.g., peak usage drift per stress scenario).
+ - Capture EasyMem summaries/visualizations from trace+ASAN CI runs as artifacts.
+ - Add regression thresholds (e.g., peak usage drift per stress scenario).
 
 ## Conclusion
 

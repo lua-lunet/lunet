@@ -1,5 +1,5 @@
 -- Behavioural suite for the lunet.sodium extension: the Lua boundary of
--- the three lunet_sodium_* shims in the PAXE cdylib — argument
+-- the three lunet_sodium_* shims in the PAXE cdylib  -  argument
 -- validation, error conventions, and known-answer vectors. The crate
 -- internals are pinned by ext/paxe's own Rust suite (which drives the
 -- same exports at the C level); what ONLY this suite can pin is what a

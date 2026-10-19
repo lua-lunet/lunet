@@ -1,5 +1,5 @@
 -- Behavioural suite for the lunet.paxe extension: the Lua boundary of
--- the Rust cdylib — argument validation, return shapes, error
+-- the Rust cdylib  -  argument validation, return shapes, error
 -- conventions, key lifecycle, opaque rejection and round trips. The
 -- crate internals and the wire format are pinned by paxe-core's own
 -- suite (known-answer vectors included); what ONLY this suite can pin
@@ -11,7 +11,7 @@
 -- unmistakably. Every "raises" assertion is therefore also a
 -- no-crash assertion.
 --
--- RESET DISCIPLINE: the module holds process-global state — the
+-- RESET DISCIPLINE: the module holds process-global state  -  the
 -- keystore, the local node identity, the failure policy, the log-once
 -- memo, and cumulative counters that NEVER reset while the process
 -- lives. busted runs the whole spec/ directory in ONE process, so
@@ -28,8 +28,8 @@
 -- assertion appears anywhere in this file.
 --
 -- OUT OF SCOPE (recorded homes): the failure-policy stderr lines
--- ([PAXE] drop: ...) require subprocess capture — busted cannot
--- intercept a C-level fprintf — and are test/smoke_paxe.lua's job. Full
+-- ([PAXE] drop: ...) require subprocess capture  -  busted cannot
+-- intercept a C-level fprintf  -  and are test/smoke_paxe.lua's job. Full
 -- protected-socket UDP send/recv end-to-end is test/run_paxe_udp_e2e.sh;
 -- only the protect/unprotect behaviour reachable without the lunet
 -- runtime loop is covered here. DEK-mode frames cannot be SEALED through
@@ -67,7 +67,7 @@ describe("PAXE Module #native", function()
   end
 
   -- init() reports nil, message on hosts without the AES-256-GCM
-  -- hardware path (an environment property — e.g. the documented
+  -- hardware path (an environment property  -  e.g. the documented
   -- Debian trixie arm64 distro-libsodium case), not a defect: a clean
   -- pending, same gate as test/smoke_paxe.lua's clean skip.
   local init_ok, init_err = paxe.init()
@@ -173,7 +173,7 @@ describe("PAXE Module #native", function()
       local frame_max = assert(paxe.seal(string.rep("x", paxe.MAX_PAYLOAD_STANDARD), NODE_B, CHAN))
       assert.are.equal(paxe.MAX_PAYLOAD_STANDARD + paxe.OVERHEAD_STANDARD, #frame_max)
       -- Both modes draw from the same datagram budget (65507), so the
-      -- two max/overhead pairs must balance — a relationship, not a
+      -- two max/overhead pairs must balance  -  a relationship, not a
       -- literal. (The DEK pair describes received fanout frames; the
       -- C ABI cannot seal them.)
       assert.are.equal(
@@ -265,7 +265,7 @@ describe("PAXE Module #native", function()
     end)
   end)
 
-  describe("operational failures (nil, message — never a raise)", function()
+  describe("operational failures (nil, message  -  never a raise)", function()
     it("seal before set_local_id returns nil, message", function()
       paxe.shutdown()
       local frame, err = paxe.seal("hello", NODE_B, CHAN)
@@ -317,7 +317,7 @@ describe("PAXE Module #native", function()
 
     -- No DEK-frame open shape is pinned here: the C ABI cannot seal a
     -- reusable-DEK frame (fanout sealing is Rust API-only), so the
-    -- open-side DEK dispatch — including mode == "dek" reporting — is
+    -- open-side DEK dispatch  -  including mode == "dek" reporting  -  is
     -- pinned by the crate's own suite against a Rust-sealed frame.
 
     it("keystore_retire returns true for a live slot and false for an absent one", function()
@@ -538,7 +538,7 @@ describe("PAXE Module #native", function()
       assert_one_reason(string.rep("\0", 8) .. string.char(0x1D) .. string.rep("\0", 28),
         "rx_short")
       -- The reusable-DEK receive geometry (authenticated envelope, no
-      -- inner Length field — a length disagreement counts as
+      -- inner Length field  -  a length disagreement counts as
       -- rx_len_mismatch, there is no separate counter) is exercised in
       -- the crate's suite: the C ABI cannot seal a DEK frame to forge
       -- here.
@@ -579,7 +579,7 @@ describe("PAXE Module #native", function()
   describe("failure policy selection", function()
     -- The policy's stderr behaviour (silent / log_once / verbose [PAXE]
     -- lines) is deliberately NOT tested here: it requires capturing a
-    -- C-level fprintf, which busted cannot intercept — its home is the
+    -- C-level fprintf, which busted cannot intercept  -  its home is the
     -- the smoke test's subprocess wiring. Only the selection API is pinned.
     it("accepts the documented spellings case-insensitively", function()
       assert.is_true(paxe.set_fail_policy("silent"))
@@ -600,8 +600,8 @@ describe("PAXE Module #native", function()
   end)
 
   describe("protect/unprotect/is_protected", function()
-    -- The full protected-socket lifecycle — protect() succeeding,
-    -- is_protected() reflecting it, sealed send and gated recv — needs
+    -- The full protected-socket lifecycle  -  protect() succeeding,
+    -- is_protected() reflecting it, sealed send and gated recv  -  needs
     -- the lunet runtime (a lunet.udp module and a bound socket handle
     -- from a running loop), which does not exist inside busted. That
     -- end-to-end coverage is test/run_paxe_udp_e2e.sh's. What IS pinned here: every

@@ -1,5 +1,5 @@
 --[[
-  lunet.mysql_tx — transaction wrapper for lunet.mysql
+  lunet.mysql_tx  -  transaction wrapper for lunet.mysql
 
   Deliberately standalone. The postgres and sqlite3 drivers ship their own
   equivalent modules (lunet.postgres_tx, lunet.sqlite3_tx). An application
@@ -62,7 +62,7 @@
 
   * err is a table: err.message (also what tostring(err) and concatenation
     give) and err.poisoned. poisoned is true when the BEGIN, COMMIT or
-    ROLLBACK itself failed — close the connection rather than reusing it.
+    ROLLBACK itself failed  -  close the connection rather than reusing it.
 
   MySQL notes
   -----------
@@ -84,7 +84,7 @@
     the next caller's writes, so it is reported as poisoned.
 
   * The storage engine has to be transactional. On a MyISAM table, BEGIN and
-    COMMIT succeed and do nothing at all — there is no error to detect, the
+    COMMIT succeed and do nothing at all  -  there is no error to detect, the
     writes simply are not atomic and ROLLBACK does not undo them. Use
     InnoDB. This wrapper cannot check for you, because MySQL reports no
     problem.
@@ -102,7 +102,7 @@
 
   * On lock wait timeout or deadlock, MySQL may have already rolled the
     transaction back on its own. The statement error unwinds to the ROLLBACK
-    here, which then succeeds as a no-op, so this is handled — but a
+    here, which then succeeds as a no-op, so this is handled  -  but a
     deadlock is a retryable condition, and retrying is the caller's decision.
 ]]
 

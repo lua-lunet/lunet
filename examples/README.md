@@ -14,7 +14,7 @@ complete RealWorld application. Less by design, not less capable.
 | 2 | realworld-lua | The RealWorld "Conduit" application | [lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua) |
 | 3 | lunet-mcp-sse | A production MCP server over SSE, shipped as a Docker image | [lua-lunet/lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) |
 | 4 | lunet-backproxy | An outbound-only reverse proxy for DMZ topologies | [lua-lunet/lunet-backproxy](https://github.com/lua-lunet/lunet-backproxy) |
-| 5 | examples/mcp_openalex_sse | A complete MCP-over-SSE demo, in this repository | [examples/mcp_openalex_sse](../mcp_openalex_sse/) |
+| 5 | examples/mcp_openalex_sse | A complete MCP-over-SSE demo, in this repository | [examples/mcp_openalex_sse](mcp_openalex_sse/) |
 
 ### 1. twelve-dollar-server-challenge
 
@@ -64,7 +64,7 @@ backed by the free OpenAlex scholarly API, loopback only, no database. It is
 the clone-and-run one — clone this repository, build the runtime, put an
 OpenAlex API key in a `.env` file, and run
 `examples/mcp_openalex_sse/main.lua` with the built `lunet-run`; its
-[README](../mcp_openalex_sse/README.md) has the exact commands.
+[README](mcp_openalex_sse/README.md) has the exact commands.
 
 ## The in-repo demo files
 
@@ -84,5 +84,4 @@ self-contained demonstration of one surface of the runtime:
 | `09_jsonic_demo.lua` | The jsonic extension: Rust-backed JSON decode behind a dkjson-style API |
 | `10_db_prepared.lua` | SQLite prepared statements |
 | `mcp_openalex_sse/` | The complete MCP-over-SSE demo (see above) |
-| `realworld/` | This folder: the signpost to the RealWorld application |
 | `sdk_embed/` | Embedding the lunet runtime in a C host program with embedded scripts |

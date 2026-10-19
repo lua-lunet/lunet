@@ -43,14 +43,14 @@ local httpc = require("lunet.httpc")
 - `url`（string，必填）
 - `method`（string，可选，默认 `"GET"`）
 - `headers`（table，可选）
-  - 映射形式：`{["Header"]="value"}`
-  - 数组形式：`{{"Header","value"}, ...}`
+ - 映射形式：`{["Header"]="value"}`
+ - 数组形式：`{{"Header","value"}, ...}`
 - `body`（string，可选）
 - `timeout_ms`（integer，可选，默认 `30000`）
 - `max_body_bytes`（integer，可选，默认 `10485760` = 10 MiB）
 - `insecure`（boolean，可选）
-  - 未提供时：继承环境变量 `LUNET_HTTPC_INSECURE`（真值将默认不校验证书）
-  - 提供时：显式覆盖
+ - 未提供时：继承环境变量 `LUNET_HTTPC_INSECURE`（真值将默认不校验证书）
+ - 提供时：显式覆盖
 
 #### `resp`
 成功时：

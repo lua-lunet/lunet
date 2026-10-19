@@ -1,35 +1,19 @@
--- Behavioural suite for the lunet.security extension: HMAC-SHA-256
--- sign/verify, base64url helpers, and JWT HS256 encode/decode — the
--- glue layer over the EXISTING lunet.sodium primitives and
--- lunet.jsonic. What ONLY this suite can pin is the glue: the key
--- derivation policy (32-byte keys pass through, any other length is
--- SHA-256-derived — never padded, never truncated), the constant-time
--- verify, the JWT profile (canonical header, exp policy), and the
--- named error strings (malformed / sig / exp) that token handling
--- dispatches on.
+-- Suite for lunet.security: HMAC-SHA-256 sign/verify, base64url, JWT
+-- HS256. Pins the glue: the RFC 7518 raw-secret key policy, the
+-- constant-time verify, the JWT profile, and the named error strings.
 --
--- Module resolution mirrors spec/sodium_spec.lua and
--- spec/jsonic_spec.lua: the module is the Lua file
--- ext/security/security.lua; package.preload routes
--- require("lunet.security") to the dev-tree file explicitly, together
--- with the two loaders it needs (lunet.sodium, lunet.jsonic). The
--- pending gates fire exactly when the dependencies are absent:
--- lunet.sodium needs liblunet_paxe at load time, so a missing cdylib
--- pends the whole suite through the failed require; lunet.jsonic's
--- native decoder is probed once, and the jwt half pends without it
--- (crypto is pure glue over sodium and runs regardless).
+-- Module resolution mirrors spec/sodium_spec.lua: package.preload
+-- routes require("lunet.security") to the dev-tree file. The pending
+-- gates fire exactly when the dependencies are absent.
 --
--- KNOWN-ANSWER VECTORS: the HMAC-SHA-256 tags were computed with an
--- independent implementation (Python's hmac module) against libsodium's
--- FIXED 32-byte HMAC key size, so a wrong FFI binding or a drifted
--- derivation fails loudly here. Two of the vectors are RFC 4231 test
--- cases 5 and 7 verbatim — their 131-byte keys exceed the HMAC block
--- size, so the standard hash-the-key path and this module's SHA-256
--- subkey derivation produce exactly the published tags.
+-- KNOWN-ANSWER VECTORS: RFC 4231 cases 1, 2, 5 and 7 verbatim (short
+-- and oversize keys), plus tags computed with Python's hmac against
+-- plain RFC 2104 HMAC-SHA-256 over the raw secret. Subkey-derived
+-- tags are pinned as negatives: they must not verify.
 --
 -- TAMPER-TEST GEOMETRY: base64url carries 6 bits per character, so the
 -- final character of an unpadded segment holds bits the decoder may
--- ignore — flipping it can be a no-op. Tampering flips the FIRST
+-- ignore  -  flipping it can be a no-op. Tampering flips the FIRST
 -- character (or raw bytes), which always changes the decoded bytes.
 
 local bit = require("bit")
@@ -48,7 +32,7 @@ describe("security module #native", function()
 
   local ok, security = pcall(require, "lunet.security")
   if not ok then
-    pending("lunet.security not loadable — lunet.sodium needs liblunet_paxe (xmake build-paxe)",
+    pending("lunet.security not loadable  -  lunet.sodium needs liblunet_paxe (xmake build-paxe)",
       function() end)
     return
   end
@@ -57,6 +41,10 @@ describe("security module #native", function()
 
   local function hex(s)
     return (s:gsub(".", function(c) return string.format("%02x", c:byte()) end))
+  end
+
+  local function unhex(s)
+    return (s:gsub("%x%x", function(cc) return string.char(tonumber(cc, 16)) end))
   end
 
   -- 32 bytes of 0x0b, the "Hi There" vector key.
@@ -106,10 +94,10 @@ describe("security module #native", function()
       end
     end)
 
-    it("reproduces the RFC 4231 long-key vectors through the derivation", function()
-      -- Keys longer than the HMAC block size are hashed on the standard
-      -- path AND by this module's subkey derivation, so the published
-      -- RFC 4231 tags for the 131-byte 0xaa key must come out exactly.
+    it("reproduces the RFC 4231 long-key vectors through the standard hash-the-key path", function()
+      -- Keys longer than the HMAC block size are hashed first  -  RFC
+      -- 2104's own reduction  -  so the published RFC 4231 tags for the
+      -- 131-byte 0xaa key must come out exactly.
       local tag5 = crypto.sign("Test Using Larger Than Block-Size Key - Hash Key First", K_AA131)
       assert.equals("60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54",
         hex(tag5), "RFC 4231 test case 5")
@@ -120,21 +108,70 @@ describe("security module #native", function()
         hex(tag7), "RFC 4231 test case 7")
     end)
 
-    it("derives deterministically from non-32-byte keys", function()
-      -- Same secret, different lengths: deterministic, and distinct from
-      -- each other and from the raw-key tags (no silent truncation).
+    it("reproduces the RFC 4231 short-key vectors over the raw secret", function()
+      -- RFC 4231 test cases 1 and 2 verbatim: keys far shorter than
+      -- the block size, signed RAW (RFC 7518 HS256)  -  the retired
+      -- derivation never produced these tags.
+      local k20 = string.rep("\11", 20)
+      local tag1 = crypto.sign("Hi There", k20)
+      assert.equals("b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7",
+        hex(tag1), "RFC 4231 test case 1")
+      assert.is_true(crypto.verify("Hi There", k20, tag1))
+      local tag2 = crypto.sign("what do ya want for nothing?", "Jefe")
+      assert.equals("5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+        hex(tag2), "RFC 4231 test case 2")
+      assert.is_true(crypto.verify("what do ya want for nothing?", "Jefe", tag2))
+      -- A key between 32 and 64 bytes takes the same zero-pad-to-block
+      -- path and stays plain HMAC-SHA-256 (independent implementation).
+      local tag48 = crypto.sign("Hi There", string.rep("\11", 48))
+      assert.equals("284c05df0b43f95169b6b67292c6c0511035ffbddc5ebeae4f6e90db86726f72",
+        hex(tag48), "48-byte key")
+    end)
+
+    it("produces the exact external-implementation signature for a short secret", function()
+      -- The message is a JWT signing input (canonical HS256 header,
+      -- fixed claims); the expected tag was computed with Python's
+      -- hmac module over the raw secret "secret"  -  the tag any
+      -- standard HS256 library produces and expects.
+      local message = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1MSJ9"
+      local tag = crypto.sign(message, "secret")
+      assert.equals("7b59d00c745aded256634d8c51723cfb00e5d10e9ca6ac34269cc92ef24e5199",
+        hex(tag), "external short-secret signature")
+      assert.is_true(crypto.verify(message, "secret", tag))
+    end)
+
+    it("rejects subkey-derived tags", function()
+      -- Regression pin: the old implementation reduced every secret to
+      -- a 32-byte SHA-256 subkey before HMAC. Its tag over the same
+      -- message and secret  -  reproduced here with an independent
+      -- implementation  -  must FAIL to verify under the raw-secret
+      -- policy, for both crypto.verify and jwt.decode.
+      local message = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1MSJ9"
+      local old_tag = unhex("2b603854b5a9b8840d7666007b8580493918757724941f784db808cb6949d2c8")
+      assert.equals(32, #old_tag, "old-tag length")
+      assert.is_false(crypto.verify(message, "secret", old_tag))
+      local old_token = message .. "." .. crypto.b64url_encode(old_tag)
+      local claims, err = jwt.decode(old_token, "secret")
+      assert.is_nil(claims)
+      assert.equals("lunet.security.jwt: sig: signature verification failed", err)
+    end)
+
+    it("pads keys to the block size like plain HMAC", function()
+      -- Raw-secret policy: the key octets go in as-is and HMAC's own
+      -- zero-padding to the block does the rest, so a key and its
+      -- zero-padded form are the SAME HMAC (equivalent keys, below and
+      -- above 32 bytes), while genuinely different secrets never
+      -- collide and the data still binds the tag.
       local secret = "correct horse battery staple"
       local t1 = crypto.sign("payload", secret)
       local t2 = crypto.sign("payload", secret)
       assert.equals(t1, t2)
       assert.equals(32, #t1)
+      assert.equals(t1, crypto.sign("payload", secret .. string.rep("\0", 32)))
+      assert.equals(crypto.sign("payload", "k"),
+        crypto.sign("payload", "k" .. string.rep("\0", 31)))
       assert.not_equals(t1, crypto.sign("payload", secret .. "!"))
       assert.not_equals(t1, crypto.sign("payload2", secret))
-      -- A short key is hashed, not zero-padded: the tag over the same
-      -- bytes differs from the zero-padded-key HMAC.
-      local short = "k"
-      local padded = short .. string.rep("\0", 31)
-      assert.not_equals(crypto.sign("payload", short), crypto.sign("payload", padded))
     end)
 
     it("verifies true only for the exact data, key and tag", function()
@@ -231,7 +268,7 @@ describe("security module #native", function()
   local native_jsonic = jok and pcall(jsonic.decode, "[1]")
 
   if not native_jsonic then
-    pending("lunet.jsonic native decoder not built (xmake build-jsonic) — jwt half pends",
+    pending("lunet.jsonic native decoder not built (xmake build-jsonic)  -  jwt half pends",
       function() end)
     return
   end
@@ -242,7 +279,7 @@ describe("security module #native", function()
     -- Segment helpers: the MAC covers the RAW base64url text
     -- (header_b64 .. "." .. payload_b64), so a valid signature for an
     -- arbitrary segment pair is computable even when the segments are
-    -- deliberately bogus — that isolates each decode-side check.
+    -- deliberately bogus  -  that isolates each decode-side check.
     local function seg(text)
       return crypto.b64url_encode(text)
     end
@@ -269,6 +306,24 @@ describe("security module #native", function()
       assert.truthy(claims.exp <= os.time() + 3600)
     end)
 
+    it("verifies a standard-library token signed with a short raw secret", function()
+      -- Fixed token bytes: the canonical HS256 header, {"sub":"u1"}
+      -- claims, secret "secret", and the signature an external
+      -- HMAC-SHA-256 (Python's hmac module) computes over the RAW
+      -- secret  -  the token any standard HS256 library emits MUST
+      -- decode here.
+      local token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1MSJ9." ..
+        "e1nQDHRa3tJWY02MUXI8-wDl0Q6cpqw0JpzJLvJOUZk"
+      local claims, err = jwt.decode(token, "secret")
+      assert.is_nil(err)
+      assert.are.equal("u1", claims.sub)
+      -- And the module's own encode over the same secret emits a token
+      -- whose signature segment is byte-identical.
+      local issued = jwt.encode({ sub = "u1" }, "secret")
+      local _, _, sig_b64 = issued:match("^([^.]+)%.([^.]+)%.([^.]+)$")
+      assert.equals("e1nQDHRa3tJWY02MUXI8-wDl0Q6cpqw0JpzJLvJOUZk", sig_b64)
+    end)
+
     it("never mutates the caller's payload table", function()
       local payload = { sub = "u1" }
       jwt.encode(payload, SECRET, { expires_in = 60 })
@@ -286,7 +341,7 @@ describe("security module #native", function()
       assert.is_nil(err)
       assert.are.equal("u1", claims.sub)
       -- Reconciled design, stated: no exp claim means the token never
-      -- expires — decode succeeds without an exp check.
+      -- expires  -  decode succeeds without an exp check.
       local immortal = jwt.encode({ sub = "u1" }, SECRET)
       claims, err = jwt.decode(immortal, SECRET)
       assert.is_nil(err)
@@ -347,7 +402,7 @@ describe("security module #native", function()
     it("rejects an alg-confused header even under a valid signature", function()
       -- A token whose header declares alg=none (or any other
       -- algorithm) is malformed for this verifier even when the
-      -- signature over it is genuinely valid — the alg check runs
+      -- signature over it is genuinely valid  -  the alg check runs
       -- after the signature check and refuses anything but HS256.
       local none_header = seg('{"alg":"none","typ":"JWT"}')
       local payload_b64 = seg('{"sub":"u1"}')

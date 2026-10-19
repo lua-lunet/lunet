@@ -47,7 +47,7 @@ end
 ---afterwards they are per-connection and last-write-wins:
 ---  db.exec(handle, "PRAGMA busy_timeout = 5000") overrides one handle only.
 ---
----The ro handle runs queries and execs INLINE on the loop thread — no
+---The ro handle runs queries and execs INLINE on the loop thread  -  no
 ---background thread, no yield. Short hot reads are what it is for; a heavy
 ---read stalls the loop for its duration.
 ---@param params table { path = "app.db", create = "WAL" }
@@ -73,6 +73,10 @@ end
 ---The caller owns the lifetimes and closes each handle with close().
 ---Takes the same params table as open(); :memory: returns the same
 ---connection as both handles.
+---@param params table Connection parameters
+---@return lightuserdata|nil rw Read-write connection, nil on error
+---@return lightuserdata|nil ro Read-only connection; nil on error
+---@return string|nil err Error message if failed
 function sqlite3.open_raw(params)
   return core.open(params)
 end

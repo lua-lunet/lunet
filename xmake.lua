@@ -865,7 +865,6 @@ task("check-types")
         local ts = os.date("%Y%m%d_%H%M%S")
         local logdir = path.join(os.projectdir(), ".tmp", "logs", ts .. "-check-types")
         os.mkdir(logdir)
-        local outfile = path.join(logdir, "check.json")
         -- LuaLS generates its built-in meta definitions (string, number, table,
         -- ...) into --metapath on first run, which defaults to a directory
         -- inside the install tree. A system-wide install is root-owned, so a
@@ -874,34 +873,58 @@ task("check-types")
         -- `Undefined type or alias`. Keep the cache project-local and writable.
         local metadir = path.join(os.projectdir(), ".tmp", "luals-meta")
         os.mkdir(metadir)
+        -- Gate every annotated surface: types/ (the shadow/definition files),
+        -- ext/ (the Lua extension modules whose annotations must tell the
+        -- truth) and examples/ (the demos that prove the annotations check).
         -- LuaLS 3.x always exits 0 for --check; the gate parses the JSON report
         -- instead. Diagnostics are filtered to the checklevel (Warning = severity
         -- 1..2), so any entry in the report is a gate failure.
-        os.execv(luals, {
-            "--check", path.join(os.projectdir(), "types"),
-            "--checklevel", "Warning",
-            "--check_format", "json",
-            "--check_out_path", outfile,
-            "--configpath", path.join(os.projectdir(), ".luarc.json"),
-            "--logpath", logdir,
-            "--metapath", metadir,
-        }, {try = true})
-        assert(os.isfile(outfile), "lua-language-server wrote no report to " .. outfile)
-        local report = json.loadfile(outfile)
+        -- dkjson-encode-v2.10.lua is excluded: vendored upstream encoder
+        -- (byte-pinned), not annotated by us.
+        local roots = {"types", "ext", "examples"}
         local problems = 0
-        for uri, diags in pairs(report) do
-            local file = uri:gsub("^file://", "")
-            for _, d in ipairs(diags) do
-                problems = problems + 1
-                local line = (d.range and d.range.start and d.range.start.line or 0) + 1
-                local sev = d.severity == 1 and "Error" or "Warning"
-                cprint("${red}%s${clear}:%d: [%s] %s ${bright}(%s)${clear}", file, line, sev, tostring(d.message), tostring(d.code))
+        for _, root in ipairs(roots) do
+            local outfile = path.join(logdir, root .. ".json")
+            os.execv(luals, {
+                "--check", path.join(os.projectdir(), root),
+                "--checklevel", "Warning",
+                "--check_format", "json",
+                "--check_out_path", outfile,
+                "--configpath", path.join(os.projectdir(), ".luarc.json"),
+                "--logpath", logdir,
+                "--metapath", metadir,
+            }, {try = true})
+            assert(os.isfile(outfile), "lua-language-server wrote no report to " .. outfile)
+            local report = json.loadfile(outfile)
+            -- LuaLS emits two shapes: {uri: diags} and [{uri, diagnostics}].
+            local entries = {}
+            if report[1] ~= nil and report[1].uri ~= nil then
+                for _, item in ipairs(report) do
+                    entries[#entries + 1] = {item.uri, item.diagnostics or {}}
+                end
+            else
+                for uri, diags in pairs(report) do
+                    entries[#entries + 1] = {uri, diags}
+                end
+            end
+            for _, entry in ipairs(entries) do
+                local file = entry[1]:gsub("^file://", "")
+                if file:find("dkjson%-encode%-v2%.10%.lua") then
+                    goto continue
+                end
+                for _, d in ipairs(entry[2]) do
+                    problems = problems + 1
+                    local line = (d.range and d.range.start and d.range.start.line or 0) + 1
+                    local sev = d.severity == 1 and "Error" or "Warning"
+                    cprint("${red}%s${clear}:%d: [%s] %s ${bright}(%s)${clear}", file, line, sev, tostring(d.message), tostring(d.code))
+                end
+                ::continue::
             end
         end
         if problems > 0 then
-            raise(("check-types: %d problem(s) in types/ — full report: %s"):format(problems, outfile))
+            raise(("check-types: %d problem(s) across types/ext/examples — full report: %s"):format(problems, logdir))
         end
-        cprint("${green}check-types: types/ clean (0 problems)${clear} — report: " .. outfile)
+        cprint("${green}check-types: types/ext/examples clean (0 problems)${clear} — reports: " .. logdir)
     end)
 task_end()
 
@@ -1107,23 +1130,6 @@ task("build-debug-asan-luajit")
         local prefix = lunet_trim(os.iorun("LUAJIT_SNAPSHOT=\"" .. snapshot .. "\" LUAJIT_DEBIAN_VERSION=\"" .. debver .. "\" lua bin/build_luajit_asan.lua"))
         os.exec("PKG_CONFIG_PATH=\"" .. prefix .. "/lib/pkgconfig:$PKG_CONFIG_PATH\" xmake f -c -m debug --lunet_trace=y --lunet_verbose_trace=y --asan=y -y")
         os.exec("PKG_CONFIG_PATH=\"" .. prefix .. "/lib/pkgconfig:$PKG_CONFIG_PATH\" xmake build lunet-bin")
-    end)
-task_end()
-
-task("repro-50-asan-luajit")
-    set_menu {
-        usage = "xmake repro-50-asan-luajit",
-        description = "Run the socket stress repro with LuaJIT+Lunet ASan (macOS)"
-    }
-    on_run(function ()
-        if not is_host("macosx") then
-            raise("repro-50-asan-luajit task is macOS-only")
-        end
-        os.exec("xmake build-debug-asan-luajit")
-        local snapshot = lunet_trim(os.iorun("xmake l -c 'import(\"core.project.config\"); config.load(); io.write(config.get(\"luajit_snapshot\") or \"\")'"))
-        local debver = lunet_trim(os.iorun("xmake l -c 'import(\"core.project.config\"); config.load(); io.write(config.get(\"luajit_debian_version\") or \"\")'"))
-        local prefix = lunet_trim(os.iorun("LUAJIT_SNAPSHOT=\"" .. snapshot .. "\" LUAJIT_DEBIAN_VERSION=\"" .. debver .. "\" lua bin/build_luajit_asan.lua"))
-        os.exec("DYLD_LIBRARY_PATH=\"" .. prefix .. "/lib:$DYLD_LIBRARY_PATH\" LUNET_BIN=\"$(pwd)/build/macosx/arm64/debug/lunet-run\" ITERATIONS=${ITERATIONS:-10} REQUESTS=${REQUESTS:-50} CONCURRENCY=${CONCURRENCY:-4} WORKERS=${WORKERS:-4} timeout 180 .tmp/repro-payload/scripts/repro.sh")
     end)
 task_end()
 

@@ -3,6 +3,7 @@
 Each release publishes a platform-specific SDK archive alongside `lunet-run`:
 
 - `lunet-linux-amd64-sdk.tar.gz`
+- `lunet-linux-arm64-sdk.tar.gz`
 - `lunet-macos-sdk.tar.gz`
 - `lunet-windows-amd64-sdk.zip`
 
@@ -10,20 +11,30 @@ The SDK lets a native application link Lunet and compile its Lua application
 into its own executable. It does not bundle LuaJIT, libuv, or zlib: install
 the matching development/runtime libraries for the target platform.
 
-## SDK layout
+## What is in the archive
 
-```text
-bin/generate_embed_scripts.lua
-examples/sdk_embed/main.c
-examples/sdk_embed/app/main.lua
-include/lunet.h
-include/lunet_exports.h
-lib/liblunet-static.a                 # Linux/macOS
-lib/lunet-static.lib                  # Windows
-LICENSE
-README.md                             # this document
-README-CN.md
-```
+Three kinds of thing: what you **link against**, what you **run** to embed
+your scripts, and a **worked example** to start from.
+
+| Thing | Kind | What it is |
+|-------|------|------------|
+| `lib/liblunet-static.a` (`liblunet-static.lib` on Windows) | link | The static core runtime: Lua state, event loop, the loopback-only socket/timer/fs/signal primitives |
+| `include/lunet.h` | link | The embedding API - the contract for everything below; the header's doc comments are the reference |
+| `include/lunet_exports.h` | link | Symbol-visibility plumbing; include it, do not read it |
+| `bin/generate_embed_scripts.lua` | run | Compiles a Lua application tree into the embeddable header blob (three environment variables, shown below) |
+| `examples/sdk_embed/main.c` | example | A minimal host: init, embed, run - copy this file as your starting point |
+| `examples/sdk_embed/app/main.lua` | example | The Lua application that example embeds |
+| `README.md` / `README-CN.md` | docs | This document |
+| `LICENSE` | docs | The licence |
+
+The optional extension modules (`lunet.http`, `lunet.security`, the database
+drivers, `lunet.paxe`, `lunet.jsonic`, `lunet.lnt_shared`, `lunet.httpc`) are
+NOT in the static core. They ship in the companion runtime archive
+(`lunet-<os>.tar.gz`) as Lua loaders beside `lunet-run`, with their type
+annotations in `types/` - see
+[docs/RELEASE-LAYOUT.md](RELEASE-LAYOUT.md) for that archive's map. An
+embedded application that wants them ships the loaders and their cdylibs
+beside its own executable.
 
 `generate_embed_scripts.lua` is executed with `xmake lua`; xmake is used only
 to run the supplied Lua generator, not to rebuild Lunet. Set its three input
@@ -84,25 +95,36 @@ extracted script tree and nothing else installed.
 
 ## C API and lifecycle
 
-`include/lunet.h` exposes an opaque `lunet_runtime_t` and five functions:
+`include/lunet.h` exposes an opaque `lunet_runtime_t` and six functions,
+in three groups:
 
-1. Call `lunet_runtime_init` once, optionally supplying the executable path
+**Lifecycle** - call in this order:
+
+1. `lunet_runtime_init` - once, optionally supplying the executable path
    and `dangerously_skip_loopback_restriction=1`.
-2. Call exactly one of `lunet_runtime_run_file` or
-   `lunet_runtime_run_embedded`.
-3. Inspect the returned API status separately from the output application exit
-   code.
-4. Call `lunet_runtime_request_stop` to request a deliberate stop (passes the
-   runtime through the drain point below). This one call is thread-safe: a
-   host may call it from another thread while `run_file` / `run_embedded`
-   blocks on the runtime thread.
-5. Always call `lunet_runtime_shutdown` after successful initialization.
+2. Exactly one of `lunet_runtime_run_file` or `lunet_runtime_run_embedded`.
+3. `lunet_runtime_shutdown` - always, after successful initialization.
 
-The runtime supports one initialization and one application run per process,
-because Lunet uses one default Lua state and libuv loop. `run_embedded` accepts
-only safe relative entry-script paths and validates the `LUNETPK1` gzip blob
-before running it. Loopback-only network binding remains the default; the
-dangerous opt-out is explicit in `lunet_runtime_options_t`.
+**Control:**
+
+- `lunet_runtime_request_stop` - requests a deliberate stop (the runtime
+  passes through the drain point below). This one call is thread-safe: a
+  host may call it from another thread while `run_file` / `run_embedded`
+  blocks on the runtime thread.
+
+**Introspection:**
+
+- `lunet_runtime_get_lua_state` - the host's escape hatch to the live
+  `lua_State*` (the embed example uses it to set up globals like `arg`
+  before the entry script runs). Returns `NULL` for a `NULL` runtime.
+
+Inspect the returned API status separately from the output application exit
+code. The runtime supports one initialization and one application run per
+process, because Lunet uses one default Lua state and libuv loop.
+`run_embedded` accepts only safe relative entry-script paths and validates
+the `LUNETPK1` gzip blob before running it. Loopback-only network binding
+remains the default; the dangerous opt-out is explicit in
+`lunet_runtime_options_t`.
 
 ## Deliberate stop, drain point, and the post-drain hook
 

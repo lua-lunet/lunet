@@ -24,12 +24,12 @@ global record http
     url_decode: function(str: string): string
     parse_request: function(raw: string): HttpRequest, string, integer
     read_request: function(read_chunk: function(): string, string): HttpRequest, string, integer
-    response: function(status: integer, headers: {string: string}, body: string, cors: CorsConfig): string
-    json_response: function(status: integer, data: any, cors: CorsConfig): string
-    error_response: function(status: integer, data: any, cors: CorsConfig): string
+    response: function(status: integer, headers: {string: string}, body: string, cors: CorsConfig, persistent: boolean): string
+    json_response: function(status: integer, data: any, cors: CorsConfig, persistent: boolean): string
+    error_response: function(status: integer, data: any, cors: CorsConfig, persistent: boolean): string
     cors_headers: function(cors: CorsConfig): {string: string}
     is_preflight: function(request: HttpRequest): boolean
-    preflight_response: function(cors: CorsConfig): string
+    preflight_response: function(cors: CorsConfig, persistent: boolean): string
 end
 
 global record HttpContext

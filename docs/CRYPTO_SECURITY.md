@@ -1,34 +1,35 @@
 # Security: HMAC + JWT Extension Module
 
-`lunet.security` is an opt-in, pure-Lua extension that gives lunet
-applications the authenticated-token layer every web app needs: HMAC-SHA-256
-sign/verify, base64url helpers, and JWT HS256 (`encode` / `decode`).
+`lunet.security` is an opt-in Lua wrapper that gives lunet applications the
+authenticated-token layer every web app needs: HMAC-SHA-256 sign/verify,
+base64url helpers, and JWT HS256 (`encode` / `decode`).
 
-It is glue, not a crypto library: every byte-level operation goes through the
-EXISTING `lunet.sodium` primitives and claims JSON goes through the EXISTING
-`lunet.jsonic`. The module owns no hashing, padding, or parsing of its own.
+The virtue is whose crypto it is: every cryptographic byte-level operation is
+libsodium's, reached through the FFI (`liblunet_paxe`, via `lunet.sodium`) - 
+the wrapper implements no crypto itself. The one composition it does in Lua is
+HMAC-SHA-256 built on `lunet.sodium.sha256` per RFC 2104 (a key-padding step - 
+see "Key handling" below), and claims JSON goes through `lunet.jsonic`.
 
 ## Overview
 
-- `security.crypto` — HMAC-SHA-256 `sign` / `verify` (constant-time compare)
+- `security.crypto` - HMAC-SHA-256 `sign` / `verify` (constant-time compare)
   and unpadded base64url `b64url_encode` / `b64url_decode`, all over
   `lunet.sodium`.
-- `security.jwt` — HS256 `encode` / `decode` over `security.crypto` +
+- `security.jwt` - HS256 `encode` / `decode` over `security.crypto` +
   `lunet.jsonic`: canonical `{alg="HS256", typ="JWT"}` header, type-checked
   header and claims, constant-time signature verification, `exp` enforced.
 
 ## Requirements and loading
 
-The dependency contract is the same one the database drivers have — the
-extension declares what it needs, the operator installs it:
+The extension declares what it needs, the operator installs it:
 
 | Dependency | When | Why |
 |------------|------|-----|
-| libsodium (via `liblunet_paxe`) | Always — `lunet.sodium` is required at load time | HMAC-SHA-256 and base64 primitives; PAXE already links libsodium statically, so a binary-archive consumer carries the bytes already |
-| `lunet.jsonic` | JWT only — loaded on first use | Claims JSON encode/decode; the loader ships in the archive beside this module (its native decoder is POSIX-only for now) |
+| libsodium (via `liblunet_paxe`) | Always - `lunet.sodium` is required at load time | HMAC-SHA-256 and base64 primitives |
+| `lunet.jsonic` | JWT only - loaded on first use | Claims JSON encode/decode; the loader ships in the archive beside this module (its native decoder is POSIX-only for now) |
 
 In a release archive the loaders sit side by side in `lunet/` and resolve
-through the runtime's `lunet/?.lua` path entry — see
+through the runtime's `lunet/?.lua` path entry - see
 [docs/RELEASE-LAYOUT.md](RELEASE-LAYOUT.md). From the repository, or in any
 LuaJIT program, load the files directly:
 
@@ -45,24 +46,26 @@ only breaks `jwt.*`, on first use, with an error naming the dependency.
 
 ### `security.crypto.sign(data, key) -> tag`
 
-HMAC-SHA-256 over `lunet.sodium.hmac_sha256`. Returns the raw 32-byte tag.
+HMAC-SHA-256 over the RAW secret octets, composed per RFC 2104 on
+`lunet.sodium.sha256`. Returns the raw 32-byte tag - bit-identical to plain
+HMAC-SHA-256 for every key length.
 
-`key` may be any non-empty string — see "Key handling" below. Malformed
+`key` may be any non-empty string - see "Key handling" below. Malformed
 arguments raise; an operational failure (libsodium could not be initialised)
 returns `nil, message`.
 
 ### `security.crypto.verify(data, key, sig) -> ok`
 
 Constant-time verification: computes the expected tag and compares it against
-`sig` byte-by-byte through an accumulated XOR difference — the work done does
+`sig` byte-by-byte through an accumulated XOR difference - the work done does
 not depend on where the strings diverge. A `sig` of any other length than 32
 bytes is simply `false`. Returns `true` or `false`; an operational failure is
 re-raised rather than silently reported as a bad signature.
 
 ### `security.crypto.b64url_encode(data) -> b64`
 
-Encode as unpadded base64url — the JWT profile: the URL-safe alphabet (`-`,
-`_`) and no `=` padding — using `lunet.sodium`'s URLSAFE variant. Malformed
+Encode as unpadded base64url - the JWT profile: the URL-safe alphabet (`-`,
+`_`) and no `=` padding - using `lunet.sodium`'s URLSAFE variant. Malformed
 arguments raise with the underlying library's diagnostic, like `lunet.sodium`
 itself.
 
@@ -70,7 +73,7 @@ itself.
 
 Decode unpadded base64url back to bytes through the same variant. Malformed
 input raises with the underlying library's diagnostic (the
-`lunet.sodium.base64_decode` convention) — `jwt.decode` converts that into
+`lunet.sodium.base64_decode` convention) - `jwt.decode` converts that into
 its named `malformed` error because token bytes are untrusted input, while
 direct callers keep the raise.
 
@@ -82,7 +85,7 @@ Encode a compact JWT. The header is fixed at `{alg="HS256", typ="JWT"}`
 `payload` via `lunet.jsonic`.
 
 `opts.expires_in` (positive integer seconds) injects `exp = now +
-expires_in` on a **copy** of the payload — the caller's table is never
+expires_in` on a **copy** of the payload - the caller's table is never
 mutated, and an `exp` set this way wins over one already in the payload.
 Without `expires_in` the payload passes through unchanged, `exp` claim or
 not.
@@ -98,38 +101,40 @@ error string that names the failure kind:
 | Kind | Error string | Meaning |
 |------|--------------|---------|
 | `malformed` | `lunet.security.jwt: malformed: ...` | Not three dot-separated base64url segments; a segment that does not decode; header or claims that are not a JSON object; a header whose `alg` is not `HS256`; an `exp` claim that is not a number |
-| `sig` | `lunet.security.jwt: sig: signature verification failed` | The signature over `header.payload` does not match — compared in constant time |
+| `sig` | `lunet.security.jwt: sig: signature verification failed` | The signature over `header.payload` does not match - compared in constant time |
 | `exp` | `lunet.security.jwt: exp: token expired` | The token carries an `exp` claim strictly before the current time |
 
 The signature is verified **before** any JSON is parsed, so no byte of the
 token body influences anything but the bytes the MAC covers. The `alg` check
-runs after the signature check and refuses anything but `HS256` — an
+runs after the signature check and refuses anything but `HS256` - an
 alg-confusion token (for example a `{"alg":"none"}` header) is rejected as
 `malformed` even when the signature over it is genuinely valid.
 
 ## Key handling
 
-libsodium's `crypto_auth_hmacsha256` fixes the HMAC-SHA-256 key at exactly 32
-bytes, and `lunet.sodium` deliberately refuses any other length rather than
-silently pad or truncate. This module reconciles the fixed key size with
-arbitrary application secrets:
+HS256 is RFC 7518: the HMAC-SHA-256 key is the **raw secret octets** - exactly
+the bytes a standard JWT library signs with and verifies against. This module
+produces and accepts precisely those tags, for a secret of any length.
 
-- a **32-byte key is used exactly as given** — the known-answer vectors apply
-  unchanged;
-- **any other non-empty key is first reduced to 32 bytes with SHA-256** — a
-  deterministic subkey derivation. Keys longer than the HMAC block size (64
-  bytes) derive exactly the tag plain HMAC-SHA-256 would produce (RFC 2104
-  hashes such keys too); shorter keys are hashed instead of zero-padded,
-  which never silently discards secret material the way truncation would.
+libsodium's `crypto_auth_hmacsha256` fixes the HMAC key at exactly 32 bytes, and
+`lunet.sodium` deliberately refuses any other length rather than silently pad or
+truncate - so the module composes HMAC-SHA-256 in Lua on `lunet.sodium.sha256`
+(still libsodium's hash, through the FFI), following RFC 2104:
 
-Sign and verify derive identically, so the policy is invisible to callers as
-long as the same secret goes in on both sides.
+- a **key longer than the 64-byte block is hashed first** - the standard's own
+  reduction, so long keys produce exactly the tags plain HMAC-SHA-256 produces;
+- **every other key is used as-is**, zero-padded to the block exactly as HMAC
+  itself pads - which is why a short secret (`"Jefe"`, `"secret"`, twenty `0x0b`
+  bytes) verifies the tags a standard library issues.
+
+The result is bit-identical to plain HMAC-SHA-256 for EVERY key length - no
+subkey derivation, no re-hashing of short secrets. Sign and verify share one
+key-handling helper, so the policy is invisible to callers as long as the same
+secret goes in on both sides.
 
 ## exp policy
 
-Stated, because it is the reconciled design:
-
-- A token **without** an `exp` claim never expires — `decode` succeeds.
+- A token **without** an `exp` claim never expires - `decode` succeeds.
 - An `exp` claim must be a number; anything else is `malformed`.
 - A token is expired once `exp` is **strictly before** the current time.
 - Issue expiries with `opts.expires_in`, or set `payload.exp` yourself.
@@ -158,26 +163,32 @@ end
 
 ## Packaging
 
-`lunet/security.lua` ships in every release archive beside `sqlite3.lua` —
-pure Lua, no binary of its own. `lunet/sodium.lua`, `lunet/paxe.lua` and
+`lunet/security.lua` ships in every release archive beside `sqlite3.lua` - 
+a Lua module with no binary of its own; its crypto is libsodium's, linked
+via `liblunet_paxe`. `lunet/sodium.lua`, `lunet/paxe.lua` and
 `lunet/jsonic.lua` (the dependencies) ship alongside it; see
 [docs/RELEASE-LAYOUT.md](RELEASE-LAYOUT.md).
 
 ## Tests
 
 `spec/security_spec.lua` covers: independent-implementation HMAC known-answer
-vectors (including RFC 4231 test cases 5 and 7 verbatim through the long-key
-derivation), per-byte tamper rejection, base64url RFC 4648 vectors and binary
-round-trips, JWT encode/decode round-trips, the `exp` policy, the
-alg-confusion defence, and every named error string. The suite pends cleanly
-when `liblunet_paxe` (or jsonic's native decoder) has not been built.
+vectors over the raw secret (RFC 4231 test cases 1 and 2 verbatim through the
+raw path, cases 5 and 7 through the standard hash-the-key path, and an
+externally computed short-secret signature for a fixed JWT signing input), the
+negative pin that subkey-derived tags do not verify, per-byte tamper rejection, base64url RFC 4648 vectors and binary round-trips, JWT
+encode/decode round-trips (including a standard-library token with a short raw
+secret), the `exp` policy, the alg-confusion defence, and every named error
+string. The suite pends cleanly when `liblunet_paxe` (or jsonic's native
+decoder) has not been built.
 
 ## References
 
-- RFC 2104 — HMAC: Keyed-Hashing for Message Authentication
-- RFC 4231 — Test Cases for HMAC-SHA-256
-- RFC 4648 — The Base16, Base32, and Base64 Data Encodings (the URL-safe
+- RFC 2104 - HMAC: Keyed-Hashing for Message Authentication
+- RFC 4231 - Test Cases for HMAC-SHA-256
+- RFC 4648 - The Base16, Base32, and Base64 Data Encodings (the URL-safe
   profile)
-- RFC 7515/7519 — JSON Web Signature / JSON Web Token
-- [docs/SODIUM.md](SODIUM.md) — the underlying primitives and their security
+- RFC 7518 - JSON Web Algorithms (HS256: HMAC with SHA-256 over the raw secret
+  octets)
+- RFC 7515/7519 - JSON Web Signature / JSON Web Token
+- [docs/SODIUM.md](SODIUM.md) - the underlying primitives and their security
   boundary (the HMAC key crosses the FFI as ordinary Lua string data)

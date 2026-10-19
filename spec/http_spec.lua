@@ -117,11 +117,12 @@ describe("http extension modules", function()
       assert.are.equal(400, status)
     end)
 
-    it("rejects Transfer-Encoding (no chunked support)", function()
-      local request, err = http.parse_request(
+    it("rejects Transfer-Encoding with 501", function()
+      local request, err, status = http.parse_request(
         "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n")
       assert.is_nil(request)
       assert.are.equal("Transfer-Encoding is not supported", err)
+      assert.are.equal(501, status)
     end)
 
     it("rejects duplicate headers", function()
@@ -131,11 +132,36 @@ describe("http extension modules", function()
       assert.are.equal("Duplicate HTTP header", err)
     end)
 
-    it("rejects non-HTTP/1.1 versions with 505", function()
+    it("rejects HTTP/1.0 with 400 (same major version, unsupported here)", function()
       local request, err, status = http.parse_request("GET / HTTP/1.0\r\nHost: h\r\n\r\n")
       assert.is_nil(request)
       assert.are.equal("Only HTTP/1.1 is supported", err)
+      assert.are.equal(400, status)
+    end)
+
+    it("rejects a non-1.x version with 505", function()
+      local request, err, status = http.parse_request("GET / HTTP/2.0\r\nHost: h\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal("HTTP version not supported", err)
       assert.are.equal(505, status)
+    end)
+
+    it("rejects a request line over MAX_REQUEST_LINE_BYTES with 414", function()
+      local request, err, status = http.parse_request(
+        "GET /" .. string.rep("a", http.MAX_REQUEST_LINE_BYTES) .. " HTTP/1.1\r\nHost: h\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal("Request line too long", err)
+      assert.are.equal(414, status)
+    end)
+
+    it("answers a wrong method on an existing path with 405 and Allow", function()
+      router.reset()
+      router.route("GET", "/only-get", function() return { ok = true } end)
+      local ctx = http_context.new({ method = "DELETE", path = "/only-get", headers = {} })
+      ctx.env_config = {}
+      router.handle(ctx)
+      assert.are.equal(405, ctx.status)
+      assert.are.equal("GET", ctx.res_headers["Allow"])
     end)
 
     it("rejects a non-numeric Content-Length", function()
@@ -161,6 +187,25 @@ describe("http extension modules", function()
       assert.is_nil(request)
       assert.are.equal("Request headers too large", err)
       assert.are.equal(431, status)
+    end)
+
+    it("rejects Host header userinfo with 400", function()
+      local request, _, status = http.parse_request(
+        "GET / HTTP/1.1\r\nHost: user@example.com\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal(400, status)
+    end)
+
+    it("rejects Host header path with 400", function()
+      local request, _, status = http.parse_request(
+        "GET / HTTP/1.1\r\nHost: example.com/x\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal(400, status)
+    end)
+
+    it("adds a Date header to responses (RFC 9110)", function()
+      local raw = http.response(200, nil, "x", nil, false)
+      assert.matches("\r\ndate: %a%a%a, %d%d %a%a%a %d%d%d%d %d%d:%d%d:%d%d GMT\r\n", raw)
     end)
 
     it("rejects a non-string argument", function()
@@ -198,8 +243,6 @@ describe("http extension modules", function()
     end)
 
     it("stops at the end of the declared body without reading further chunks", function()
-      -- One request per connection: a pipelined request after the body
-      -- is never read, the caller closes instead.
       local consumed = false
       local chunks = { "POST /kv/hits HTTP/1.1\r\nHost: h\r\n" ..
                        "Content-Length: 2\r\n\r\nhi", "!extra" }
@@ -252,12 +295,12 @@ describe("http extension modules", function()
       assert.are.truthy(resp:find("\r\n\r\nhello$", 1, false))
     end)
 
-    it("always closes the connection, even on a keep-alive request", function()
-      -- The framing subset has no persistent connections: the caller's
-      -- connection header is dropped and "close" is declared.
-      local resp = http.response(200, { Connection = "keep-alive" }, "")
-      assert.are.truthy(resp:find("connection: close", 1, false))
-      assert.is_nil(resp:find("keep%-alive", 1, false))
+    it("drops a caller-supplied Connection header in both modes", function()
+      local persistent_resp = http.response(200, { Connection = "close" }, "")
+      assert.is_nil(persistent_resp:find("connection:", 1, false))
+      local closing = http.response(200, { Connection = "keep-alive" }, "", nil, false)
+      assert.are.truthy(closing:find("connection: close", 1, false))
+      assert.is_nil(closing:find("keep%-alive", 1, false))
     end)
 
     it("drops a caller-supplied Content-Length (framing is owned here)", function()
@@ -362,6 +405,139 @@ describe("http extension modules", function()
       assert.are.truthy(resp:find("access%-control%-allow%-origin: https://app%.example", 1, false))
       assert.are.truthy(resp:find("access%-control%-max%-age: 600", 1, false))
       assert.are.truthy(resp:find("Content%-Length: 0\r\n\r\n$", 1, false))
+    end)
+
+    it("preflight_response honours persistent=false", function()
+      local closing = http.preflight_response(cors, false)
+      assert.are.truthy(closing:find("connection: close", 1, false))
+      assert.are.truthy(closing:find("access%-control%-allow%-origin", 1, false))
+      local persistent = http.preflight_response(cors)
+      assert.is_nil(persistent:find("connection:", 1, false))
+    end)
+  end)
+
+  describe("http keep-alive framing (persistent connections)", function()
+    it("is persistent by default: no Connection header, per HTTP/1.1", function()
+      local resp = http.response(200, {}, "hello")
+      assert.is_nil(resp:find("connection:", 1, false))
+      assert.are.truthy(resp:find("Content%-Length: 5\r\n", 1, false))
+    end)
+
+    it("declares Connection: close when persistent is false", function()
+      local resp = http.response(200, {}, "hello", nil, false)
+      assert.are.truthy(resp:find("connection: close\r\n", 1, false))
+    end)
+
+    it("treats persistent=true like the default", function()
+      local resp = http.response(200, {}, "", true)
+      assert.is_nil(resp:find("connection:", 1, false))
+    end)
+
+    it("passes persistent through json_response and error_response", function()
+      local jclose = http.json_response(200, { ok = true }, nil, false)
+      assert.are.truthy(jclose:find("connection: close", 1, false))
+      local jpersistent = http.json_response(200, { ok = true })
+      assert.is_nil(jpersistent:find("connection:", 1, false))
+      local eclose = http.error_response(404, { "gone" }, nil, false)
+      assert.are.truthy(eclose:find("connection: close", 1, false))
+      local epersistent = http.error_response(404, { "gone" })
+      assert.is_nil(epersistent:find("connection:", 1, false))
+    end)
+
+    it("still rejects pipelined bytes past the body with a hard 400", function()
+      local r, err, status = http.read_request(function()
+        return "GET /kv/one HTTP/1.1\r\nHost: h\r\n\r\n" ..
+               "GET /kv/two HTTP/1.1\r\nHost: h\r\n\r\n"
+      end)
+      assert.is_nil(r)
+      assert.are.equal("Unexpected data after request body", err)
+      assert.are.equal(400, status)
+    end)
+
+    -- The documented per-connection serve pattern (docs/HTTP.md,
+    -- examples/08_http.lua): sequential requests on one connection until
+    -- the client's EOF, a framing error, or a request-declared close.
+    local function serve_connection(read_chunk, write_response)
+      router.reset()
+      router.route("GET", "/kv/:name", function(_, _, params)
+        return { name = params.name }
+      end)
+      while true do
+        local request, read_err, read_status = http.read_request(read_chunk)
+        if not request and not read_status then
+          return "eof"  -- idle/EOF close owns the exit
+        end
+        if not request then
+          write_response(http.error_response(read_status or 400, { read_err }, nil, false))
+          return "error"
+        end
+        local persistent = (request.headers["connection"] or ""):lower() ~= "close"
+        local ctx = http_context.new(request)
+        ctx.env_config = {}
+        router.handle(ctx)
+        write_response(http.response(ctx.status, ctx.res_headers,
+                                     ctx.response_body(), nil, persistent))
+        if not persistent then
+          return "request-close"
+        end
+      end
+    end
+
+    it("serves sequential requests on one connection and honours a request-declared close", function()
+      local wire = {
+        "GET /kv/one HTTP/1.1\r\nHost: h\r\n\r\n",
+        "GET /kv/two HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n",
+      }
+      local responses = {}
+      local outcome = serve_connection(function()
+        local chunk = wire[1]
+        wire[1] = wire[2]
+        wire[2] = nil
+        return chunk
+      end, function(response) responses[#responses + 1] = response end)
+
+      assert.are.equal("request-close", outcome)
+      assert.are.equal(2, #responses)
+      -- First response: persistent  -  no Connection header, loop stayed open.
+      assert.are.truthy(responses[1]:find('{"name":"one"}', 1, true))
+      assert.is_nil(responses[1]:find("connection:", 1, false))
+      -- Second response: the request declared close, so the response does
+      -- too, and the loop ended.
+      assert.are.truthy(responses[2]:find('{"name":"two"}', 1, true))
+      assert.are.truthy(responses[2]:find("connection: close", 1, false))
+    end)
+
+    it("keeps the connection open across requests until the client's EOF", function()
+      local wire = { "GET /kv/one HTTP/1.1\r\nHost: h\r\n\r\n" }
+      local responses = {}
+      local outcome = serve_connection(function()
+        local chunk = wire[1]
+        wire[1] = nil
+        return chunk  -- nil afterwards: clean EOF, no error
+      end, function(response) responses[#responses + 1] = response end)
+
+      assert.are.equal("eof", outcome)
+      assert.are.equal(1, #responses)
+      assert.is_nil(responses[1]:find("connection:", 1, false))
+    end)
+
+    it("answers a framing error with Connection: close and stops serving the stream", function()
+      -- An incomplete body (EOF mid-body) desynchronises the stream: the
+      -- 400 declares close and the loop never reads again.
+      local responses = {}
+      local reads = 0
+      local outcome = serve_connection(function()
+        reads = reads + 1
+        if reads == 1 then
+          return "POST /kv/one HTTP/1.1\r\nHost: h\r\nContent-Length: 5\r\n\r\nhi"
+        end
+        return nil
+      end, function(response) responses[#responses + 1] = response end)
+
+      assert.are.equal("error", outcome)
+      assert.are.equal(1, #responses)
+      assert.are.truthy(responses[1]:find("^HTTP/1.1 400 Bad Request", 1, false))
+      assert.are.truthy(responses[1]:find("connection: close", 1, false))
     end)
   end)
 
@@ -498,10 +674,12 @@ describe("http extension modules", function()
       assert.are.truthy(body:find('"path":"/nope"', 1, true))
     end)
 
-    it("answers a method mismatch with 404 (same as an unknown path)", function()
+    it("answers a method mismatch with 405 and an Allow header", function()
       router.route("GET", "/kv/:name", function() return {} end)
+      router.route("POST", "/kv/:name", function() return {} end)
       local ctx = drive("DELETE", "/kv/hits", {})
-      assert.are.equal(404, ctx.status)
+      assert.are.equal(405, ctx.status)
+      assert.are.equal("GET, POST", ctx.res_headers["Allow"])
     end)
 
     it("turns a handler error into the 500 JSON contract", function()

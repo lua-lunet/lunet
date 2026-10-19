@@ -104,6 +104,19 @@ end
 local dkjson = assert(loadfile((debug.getinfo(1, "S").source:match("^@(.+)/[^/]+$") or ".") .. "/dkjson-encode-v2.10.lua"))()
 local M = dkjson
 
+---Decode a JSON string.
+---@param str string The JSON string to decode
+---@param position integer? Start position in `str` (default 1)
+---@param nullval any? Value to use for JSON null (default jsonic.null)
+---@return any value The decoded Lua value
+---@return integer next_position Position after the decoded value on success; the start position on failure
+---@return string|nil error Error message on parse failure, or nil on success
+---@usage
+---```lua
+---local json = require("lunet.jsonic")
+---local v, pos, err = json.decode('{"a":1,"s":"ok"}')
+---print(v.a, v.s)  --> 1  "ok"
+---```
 function M.decode(str, position, nullval)
   assert(type(str) == "string", "lunet.jsonic.decode: expected a string")
   position = position or 1
@@ -125,6 +138,38 @@ function M.decode(str, position, nullval)
   lib().lunet_jsonic_free_bytes(out[0], out_len[0])
   if not ok then error(result, 0) end
   return result, position + #input
+end
+
+---Render a value as a quoted JSON string (fixed-shape helper).
+---Strings are quoted with the same escaper `encode` uses; any other value
+---falls back to `encode`.
+---@param value any The value to render
+---@return string json
+---@usage
+---```lua
+---local json = require("lunet.jsonic")
+---local s = json.jstr('say "hi"')
+---print(s)  --> '"say \"hi\""'
+---```
+function M.jstr(value)
+  if type(value) ~= "string" then
+    return M.encode(value)
+  end
+  return M.quotestring(value)
+end
+
+---Render a value as a JSON number (fixed-shape helper).
+---Intended for integers; the output is byte-identical to `encode`.
+---@param value any The value to render
+---@return string json
+---@usage
+---```lua
+---local json = require("lunet.jsonic")
+---local s = json.jint(42)
+---print(s)  --> '42'
+---```
+function M.jint(value)
+  return M.encode(value)
 end
 
 return M

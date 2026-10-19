@@ -1,6 +1,6 @@
 # 将 Lunet 集成到您的项目中
 
-> 只想要一个运行时？预构建发布包完全不需要工具链 —— 参见
+> 只想要一个运行时？预构建发布包完全不需要工具链 - 参见
 > [README-CN.md](../README-CN.md) 中的「获取运行时」。只有当目标环境不允许
 > 预构建二进制，或你想深入底层细节时，才需要从源码构建。
 
@@ -8,7 +8,7 @@
 
 ## 什么是 xmake？
 
-Lunet 使用 **xmake** 作为构建系统。xmake 是一个轻量级的跨平台构建工具（类似 CMake 或 Make）。您不需要深入学习 xmake——只需按照以下命令操作即可。
+Lunet 使用 **xmake** 作为构建系统。xmake 是一个轻量级的跨平台构建工具（类似 CMake 或 Make）。您不需要深入学习 xmake - 只需按照以下命令操作即可。
 
 **安装 xmake：**
 
@@ -39,8 +39,8 @@ xmake build
 - `-y` = 接受默认值，不提示
 
 **输出文件：**
-- `build/<platform>/<arch>/release/lunet.so` — Lua 模块
-- `build/<platform>/<arch>/release/lunet-run` — 独立运行器
+- `build/<platform>/<arch>/release/lunet.so` - Lua 模块
+- `build/<platform>/<arch>/release/lunet-run` - 独立运行器
 
 ### 1b. 可选原生模块
 
@@ -76,7 +76,7 @@ xmake build lunet-bin
 
 启用后，`lunet-run` 会在启动时将嵌入的脚本目录树提取到私有临时目录，并将该位置添加到 `package.path` 和 `package.cpath` 的前面。临时目录会在退出时删除。
 
-注意：入口脚本参数必须是嵌入目录树内的安全相对路径（例如 `main.lua`）。绝对路径、包含 `..` 的路径以及 blob 之外的脚本都会被拒绝 —— 嵌入构建不再回退到从磁盘运行文件。
+注意：入口脚本参数必须是嵌入目录树内的安全相对路径（例如 `main.lua`）。绝对路径、包含 `..` 的路径以及 blob 之外的脚本都会被拒绝 - 嵌入构建不再回退到从磁盘运行文件。
 
 对于需要自定义原生 `main()` 并嵌入 Lua 应用的发布版使用者，请阅读
 [EMBEDDING-CN.md](EMBEDDING-CN.md)，而不是将 Lunet 作为 xmake 子项目重新构建。
@@ -134,10 +134,10 @@ Lunet 会继续输出用于 Lua `require` 的 `lunet.so`，并额外生成兼容
 
 如果您的应用使用 Lunet 并运行 CI（如 GitHub Actions），请使用以下配置测试：
 
-1. **发布版** — `--lunet_trace=n --lunet_verbose_trace=n`
-2. **调试追踪** — `--lunet_trace=y --lunet_verbose_trace=n`
-3. **详细追踪** — `--lunet_trace=y --lunet_verbose_trace=y`
-4. **ASan + EasyMem** — `--asan=y --lunet_trace=y`
+1. **发布版** - `--lunet_trace=n --lunet_verbose_trace=n`
+2. **调试追踪** - `--lunet_trace=y --lunet_verbose_trace=n`
+3. **详细追踪** - `--lunet_trace=y --lunet_verbose_trace=y`
+4. **ASan + EasyMem** - `--asan=y --lunet_trace=y`
 
 这可以尽早捕获大多数生命周期和协程问题。
 
@@ -151,15 +151,15 @@ xmake test
 
 该命令按顺序执行三个步骤：
 
-1. **`xmake check-types`** — 使用 lua-language-server 校验 `types/` 中的 LuaCATS 注解。类型错误会在任何测试执行前中止运行。
-2. **`xmake build lunet-httpc`** — 构建出站 HTTP 客户端 C 模块，确保 `spec/httpc_spec.lua` 始终运行；无法构建该模块的平台会在此失败，而不是跳过。
-3. **`busted spec/`** — Lua 测试套件：`spec/httpc_spec.lua`（针对 `lunet.httpc` C 模块的测试）和 `spec/lint_spec.lua`（运行 `luajit bin/lint_c_safety.lua`）。
+1. **`xmake check-types`** - 使用 lua-language-server 校验 `types/` 中的 LuaCATS 注解。类型错误会在任何测试执行前中止运行。
+2. **`xmake build lunet-httpc`** - 构建出站 HTTP 客户端 C 模块，确保 `spec/httpc_spec.lua` 始终运行；无法构建该模块的平台会在此失败，而不是跳过。
+3. **`busted spec/`** - Lua 测试套件：`spec/httpc_spec.lua`（针对 `lunet.httpc` C 模块的测试）和 `spec/lint_spec.lua`（运行 `luajit bin/lint_c_safety.lua`）。
 
 输出会被 tee 到 `.tmp/logs/<时间戳>/busted.txt`。
 
 ### busted 运行在 LuaJIT 下（仅限 5.1 ABI）
 
-lunet 的 C 模块链接 `libluajit-5.1`，因此把它们加载进 PUC Lua 进程会让两个互不兼容的 Lua 运行时共处同一地址空间：在 Linux 上会段错误，在 macOS 上会挂起。`PATH` 中的 `busted` 包装脚本无法避免这一点 —— luarocks 会把安装时探测到的解释器写死进包装脚本（在 Debian/Ubuntu 上即使用 `--lua-dir` 指向 LuaJIT，生成的仍是 `exec /usr/bin/lua5.1 … bin/busted`；Homebrew 上则是 `lua5.5`）。
+lunet 的 C 模块链接 `libluajit-5.1`，因此把它们加载进 PUC Lua 进程会让两个互不兼容的 Lua 运行时共处同一地址空间：在 Linux 上会段错误，在 macOS 上会挂起。`PATH` 中的 `busted` 包装脚本无法避免这一点 - luarocks 会把安装时探测到的解释器写死进包装脚本（在 Debian/Ubuntu 上即使用 `--lua-dir` 指向 LuaJIT，生成的仍是 `exec /usr/bin/lua5.1 … bin/busted`；Homebrew 上则是 `lua5.5`）。
 
 因此 `xmake test` 忽略该包装脚本，自行启动 busted 的 Lua 入口：
 
@@ -177,7 +177,7 @@ luajit bin/busted_runner.lua spec/
 error: busted reported N pending test(s) -- pending tests are forbidden ...
 ```
 
-仅限本地迭代时，可设置 `LUNET_ALLOW_PENDING=1` 绕过该防护 —— 切勿在 CI 中设置。（该防护通过解析捕获的 busted 输出工作，因此仅适用于 Unix 路径。）
+仅限本地迭代时，可设置 `LUNET_ALLOW_PENDING=1` 绕过该防护 - 切勿在 CI 中设置。（该防护通过解析捕获的 busted 输出工作，因此仅适用于 Unix 路径。）
 
 ### 独立运行类型检查
 

@@ -20,9 +20,8 @@ lunet/                              # extension modules
   httpc.so                          # HTTPS client (libcurl)
   sqlite3core.so / postgres.so      # DB driver shared libraries
   mysql.so                          #   (.dll on Windows)
-  sqlite3.lua                       # sqlite3 loader: public surface + the
-                                    #   path-keyed handle cache (the binary
-                                    #   registers as lunet.sqlite3core)
+  sqlite3.lua                       # sqlite3 loader (the binary registers
+                                    #   as lunet.sqlite3core)
   sqlite3_tx.lua / postgres_tx.lua  # DB transaction wrappers
   mysql_tx.lua
   http.lua                          # HTTP/1.1 request framing + responses,
@@ -30,16 +29,14 @@ lunet/                              # extension modules
   http_context.lua                  # per-request context object
                                     #   (lunet.http_context)
   http_router.lua                   # method+path router with :params and
-                                    #   middleware (lunet.http_router;
-                                    #   source: ext/http/router.lua)
+                                    #   middleware (lunet.http_router)
   security.lua                      # crypto + JWT HS256 helpers
-                                    #   (lunet.security; pure Lua over
-                                    #   lunet.sodium + lunet.jsonic)
+                                    #   (lunet.security)
   liblnt_shared.so                  # lnt_shared shared dictionary (Linux)
-  liblnt_shared.dylib               #   (macOS — not shipped on Windows)
+  liblnt_shared.dylib               #   (macOS - not shipped on Windows)
   lnt_shared.lua                    # lnt_shared Lua FFI loader
   liblunet_jsonic.so                # jsonic streaming JSON decoder (Linux)
-  liblunet_jsonic.dylib             #   (macOS — not shipped on Windows)
+  liblunet_jsonic.dylib             #   (macOS - not shipped on Windows)
   jsonic.lua                        # jsonic Lua FFI loader + encoder
   dkjson-encode-v2.10.lua           # ordered-JSON encoder (used by jsonic)
   liblunet_paxe.so                  # PAXE datagram encryption (Linux)
@@ -50,7 +47,7 @@ lunet/                              # extension modules
                                     #   (SHA-256 / HMAC-SHA-256 / randombytes,
                                     #   shims in the same cdylib)
 types/                              # LuaCATS type annotations (---@meta, documentation only)
-  lunet.lua
+  lunet.lua                         #   each has a Teal counterpart (*.d.tl)
   lunet/
     db.lua                          # unified DB backend
     fs.lua                          # filesystem operations
@@ -64,11 +61,12 @@ types/                              # LuaCATS type annotations (---@meta, docume
     signal.lua                      # OS signal handling
     socket.lua                      # TCP socket operations
     sodium.lua                      # SHA-256 / HMAC-SHA-256 / randombytes
+    sqlite3.lua                     # sqlite3 loader (binary: lunet.sqlite3core)
     udp.lua                         # UDP socket operations
 *.md                                # bundled docs (see "Bundled documentation" below)
 ```
 
-The `types/` directory contains LuaCATS `---@meta` annotations — pure
+The `types/` directory contains LuaCATS `---@meta` annotations - pure
 documentation with no runtime surface. These files declare parameter types,
 return values, class shapes, and error conventions for every module listed
 above. Place the directory in your editor's workspace library for completion
@@ -91,22 +89,22 @@ under `docs/` precisely so it rides this rule.
 Currently excluded (internal-only, not useful to end users of the binary
 release):
 
-- `CONTRIBUTING-INTERNALS.md` / `CONTRIBUTING-INTERNALS-CN.md` — C code
+- `CONTRIBUTING-INTERNALS.md` / `CONTRIBUTING-INTERNALS-CN.md` - C code
   conventions and debugging methodology for contributors working on the
   runtime itself.
-- `BADGES.md` / `BADGES-CN.md` — README badge snippets for downstream
+- `BADGES.md` / `BADGES-CN.md` - README badge snippets for downstream
   projects.
-- `EASY_MEMORY_REPORT.md` / `EASY_MEMORY_REPORT-CN.md` — EasyMem
+- `EASY_MEMORY_REPORT.md` / `EASY_MEMORY_REPORT-CN.md` - EasyMem
   integration and memory-profiling report for the runtime's own builds.
-- `WORKFLOW.md` / `WORKFLOW-CN.md` — developer workflow and xmake task
+- `WORKFLOW.md` / `WORKFLOW-CN.md` - developer workflow and xmake task
   reference for contributors building from source.
-- `XMAKE_INTEGRATION.md` / `XMAKE_INTEGRATION-CN.md` — guide to building
+- `XMAKE_INTEGRATION.md` / `XMAKE_INTEGRATION-CN.md` - guide to building
   and embedding Lunet from source; the binary archive needs no build
   steps.
 
 This does not apply to the SDK archives (`*-sdk.tar.gz` / `*-sdk.zip`), which
 ship only `docs/EMBEDDING.md` / `docs/EMBEDDING-CN.md`, renamed to
-`README.md` / `README-CN.md` — see [`docs/EMBEDDING.md`](EMBEDDING.md) for
+`README.md` / `README-CN.md` - see [`docs/EMBEDDING.md`](EMBEDDING.md) for
 the SDK layout.
 
 ## How extensions are loaded
@@ -132,12 +130,13 @@ that the corresponding loader checks:
 | lnt_shared | `LUNET_LNT_SHARED_LIB`       |
 | jsonic     | `LUNET_JSONIC_LIB`           |
 | sodium     | `LUNET_SODIUM_LIB` (falls back to `LUNET_PAXE_LIB`) |
+| paxe       | `LUNET_PAXE_LIB`             |
 
 ## Using extensions standalone (without lunet-run)
 
 The extensions documented below export a stable C ABI and can be loaded
 directly by any LuaJIT program via `ffi.load()`. The sections below document
-the complete FFI API surface — cdef declarations, error codes, and value type
+the complete FFI API surface - cdef declarations, error codes, and value type
 constants.
 
 No header files are needed: the declarations below are written in LuaJIT FFI
@@ -145,7 +144,7 @@ cdef syntax and can be pasted directly into a `ffi.cdef[[...]]` block.
 
 ---
 
-## lnt_shared — shared dictionary
+## lnt_shared - shared dictionary
 
 POSIX-only (Linux / macOS). Provides an in-memory key-value store backed by
 `mmap(MAP_SHARED|MAP_ANONYMOUS)` with TTL-based expiry.
@@ -236,9 +235,8 @@ ffi.cdef[[
 ### Symbol naming
 
 FFI symbols use the `ngx_shared_*` prefix (rather than `lnt_shared_*`). This
-is a legacy name retained for ABI compatibility after the rename from
-`ngx_shared` to `lnt_shared` in v0.4.3. The symbols are stable and will not
-change.
+is a legacy name retained for ABI compatibility; the symbols are stable and
+will not change.
 
 ### Minimal example (standalone FFI)
 
@@ -268,7 +266,7 @@ lib.ngx_shared_close(h)
 
 ---
 
-## jsonic — streaming JSON codec
+## jsonic - streaming JSON codec
 
 POSIX-only (Linux / macOS). Provides a streaming JSON decoder (with an
 Lua-side encoder).
@@ -296,7 +294,7 @@ ffi.cdef[[
 `lunet_jsonic_decode` returns a binary encoding (not JSON text). The Lua
 loader in `jsonic.lua` decodes this into Lua tables. Standalone FFI users
 who want decoded Lua values should use the Lua wrapper rather than calling
-the FFI directly — the binary format is internal to the codec pair.
+the FFI directly - the binary format is internal to the codec pair.
 
 ### Memory ownership
 
@@ -305,11 +303,11 @@ the caller must free it with `lunet_jsonic_free_bytes`.
 
 ---
 
-## lunet.sodium — crypto primitives (SHA-256 / HMAC-SHA-256 / randombytes)
+## lunet.sodium - crypto primitives (SHA-256 / HMAC-SHA-256 / randombytes)
 
 Cross-platform (Linux / macOS / Windows). A minimal libsodium primitive
 surface exposed from the **same cdylib as PAXE** (`liblunet_paxe`), which
-already statically links libsodium — so no second libsodium is ever needed
+already statically links libsodium - so no second libsodium is ever needed
 in the process. Exactly three symbols are exported (plus the shared
 `lunet_paxe_last_error` used for error messages); the full ABI promise,
 Lua API and security notes are in [`docs/SODIUM.md`](SODIUM.md).
@@ -364,9 +362,10 @@ and `conn:rollback()` methods to the native driver connections.
 ## Platform notes
 
 - **Linux (amd64 / arm64)**: All extensions are included. The archive is
-  built on Ubuntu 24.04 and links against system `glibc` and `openssl`.
+  built on the Ubuntu 24.04 runner images and links against system `glibc`
+  and `openssl`.
 - **macOS (arm64)**: All extensions are included. The archive is built on
-  macOS 15+ and targets `macosx-version-min=14.0`.
+  the `macos-latest` GitHub runner (arm64).
 - **Windows (amd64)**: Rust extensions (`lnt_shared`, `jsonic`) are not
   included because the underlying crates are POSIX-only. Database drivers
   and transaction wrappers are shipped.
@@ -375,7 +374,7 @@ and `conn:rollback()` methods to the native driver connections.
 
 The release archives are **not** statically linked against their
 dependencies (except libsodium, which PAXE links statically). A
-binary-only consumer needs the runtime packages installed — not the
+binary-only consumer needs the runtime packages installed - not the
 `-dev` variants.
 
 **Debian/Ubuntu (Linux)**:
@@ -384,7 +383,7 @@ binary-only consumer needs the runtime packages installed — not the
 # Core (always needed)
 apt-get install -y libluajit-5.1-2 libuv1 zlib1g
 
-# Per driver you actually use — skip the ones you don't require()
+# Per driver you actually use - skip the ones you don't require()
 apt-get install -y libcurl4          # lunet.httpc
 apt-get install -y libpq5            # lunet.postgres
 apt-get install -y libmariadb3       # lunet.mysql (provides libmysqlclient.so on Debian trixie)
@@ -393,8 +392,6 @@ apt-get install -y libsqlite3-0      # lunet.sqlite3
 
 The PAXE extension (`liblunet_paxe`) links libsodium **statically**;
 no `libsodium23` package or unversioned `.so` symlink is needed.
-Downstream apps that previously carried the
-`ln -sf libsodium.so.23 libsodium.so` workaround should remove it.
 
 **macOS**:
 
@@ -405,7 +402,7 @@ brew install luajit libuv
 # Per driver you actually use
 brew install libpq          # lunet.postgres
 brew install mysql-client   # lunet.mysql
-# sqlite3 uses the system lib — no extra package needed
+# sqlite3 uses the system lib - no extra package needed
 ```
 
 No unversioned-symlink gotcha on macOS; Homebrew already provides the

@@ -17,7 +17,7 @@ tasks, and integrate your own test suites.
 ## Recommended `xmake.lua` structure
 
 Keep your `xmake.lua` focused on *your* app. Do not replicate Lunet's
-build targets — consume the release archive or subproject and layer your
+build targets - consume the release archive or subproject and layer your
 own tasks on top.
 
 ```lua
@@ -41,7 +41,7 @@ xmake tasks are the idiomatic way to define CI, release, and smoke-test
 entry points. Unlike Make targets, they run in-process and can compose
 other xmake operations.
 
-### `xmake app-ci` — your CI gate
+### `xmake app-ci` - your CI gate
 
 ```lua
 task("app-ci")
@@ -59,7 +59,7 @@ task("app-ci")
 task_end()
 ```
 
-### `xmake app-smoke` — quick health check
+### `xmake app-smoke` - quick health check
 
 ```lua
 task("app-smoke")
@@ -71,7 +71,7 @@ task("app-smoke")
 task_end()
 ```
 
-### `xmake app-release` — pre-release gate
+### `xmake app-release` - pre-release gate
 
 ```lua
 task("app-release")
@@ -145,7 +145,7 @@ is the canonical downstream consumer. Its `xmake.lua` and
 
 - **Don't copy lunet's `xmake.lua` tasks** (`xmake lint`, `xmake test`,
   etc.) into your own project. Those test lunet itself. Define your own.
-- **Don't fork lunet's build targets** — use `includes("lunet")` or
+- **Don't fork lunet's build targets** - use `includes("lunet")` or
   consume the release archive.
-- **Don't assume lunet's `test/` directory exists** in your project —
+- **Don't assume lunet's `test/` directory exists** in your project - 
   busted specs are for lunet development, not downstream apps.

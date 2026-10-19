@@ -5,7 +5,7 @@
 Three words describe what Lunet is for and how it behaves: a guardian, a
 character, and a way of doing less.
 
-## Talos — the guardian posture
+## Talos - the guardian posture
 
 Talos circled Crete three times a day and kept hostile ships off the island.
 Lunet takes the same view of your machine: **the network is kept at the
@@ -16,7 +16,7 @@ border, and the border is loopback**.
 - Opening the border is an explicit, audible act:
   `--dangerously-skip-loopback-restriction`. The flag is deliberately long.
   You are meant to say it out loud.
-- When you do expose a service, put a battle-hardened sidecar in front —
+- When you do expose a service, put a battle-hardened sidecar in front - 
   nginx, OpenResty, Caddy, Envoy; the choice belongs to the administrator,
   not to Lunet. This is the qmail lesson: the process that speaks to the
   network should be small, dull, and heavily defended, and it should not be
@@ -27,31 +27,31 @@ border, and the border is loopback**.
   absorbs DDoS, binding all interfaces can be safe. Lunet does not forbid
   it. Lunet forbids *accidentally* doing it.
 
-## Ethos — the character
+## Ethos - the character
 
-- **Stability first.** Lunet's dependencies — LuaJIT, libuv, zlib — are
+- **Stability first.** Lunet's dependencies - LuaJIT, libuv, zlib - are
   mature libraries with long-term distribution support. There is no npm or
   pip churn, and no weekly security patch treadmill for libraries you never
   asked for.
 - **Releases are the product.** Building from source with xmake is a fine
   way to *develop* Lunet, but asking every user to assemble a toolchain per
   OS is how a project gets zero users. Worse: a maintainer on one OS cannot
-  promise a source build works on another — small drifts in each platform's
+  promise a source build works on another - small drifts in each platform's
   libraries make "works on my machine" the default failure mode. So CI
   builds the binaries for Linux, macOS, and Windows, and what CI ships is
   what we stand behind.
 - **Lua at the core.** Other runtimes fight ecosystem wars and port their
   internals between languages. Lua has spent three decades being small,
   stable, and embeddable. Lunet adopts the *affordances* of larger
-  ecosystems — an nginx-style shared dictionary (`lnt_shared`), fast JSON
-  (`jsonic`), typed-Lua bindings (teal, planned) — without importing their
+  ecosystems - an nginx-style shared dictionary (`lnt_shared`), fast JSON
+  (`jsonic`), typed-Lua bindings (teal, planned) - without importing their
   churn. The great stagnation is over; the answer is not a bigger runtime,
   it is a smaller one with better manners.
 - **Honest surface.** The public C API (`include/lunet.h`) documents its
   contract in the header: one runtime per process, one run, not thread-safe.
   What Lunet cannot do, it says.
 
-## 無為 (wu wei) — doing less
+## 無為 (wu wei) - doing less
 
 Wu wei is effortless action: achieve by not forcing. Lunet's version is
 subtraction as a feature.
@@ -78,7 +78,7 @@ The same engine serves three audiences; pick the row that is you.
 
 ## Origin: tiny localhost MCP servers
 
-Lunet began as a way to write **tiny local MCP servers** — Model Context
+Lunet began as a way to write **tiny local MCP servers** - Model Context
 Protocol tools that run next to an LLM client on loopback, idle in a few
 megabytes, and start instantly. That remains the front-page use case and
 the design centre: loopback by default (Talos), server-sent events as a
@@ -123,7 +123,7 @@ We can try to move all the logic into OpenResty in front of Lunet, but
 that would mean Lunet is not "batteries included". I would still advise
 putting nginx in front of any process exposed to the internet, simply
 because process separation is the best form of memory safety against all
-types of bugs. Lunet deserves its own complete feature set — it deserves
+types of bugs. Lunet deserves its own complete feature set - it deserves
 its own `ngx.shared` model (shipped as `lnt.shared` in `lnt_shared`),
 written in Rust.
 

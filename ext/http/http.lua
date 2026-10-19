@@ -1,21 +1,27 @@
 --[[
-lunet.http  -  HTTP/1.1 request parsing and response building (pure Lua)
+lunet.http  -  HTTP/1.x request parsing and response building (pure Lua)
 
 Ported from the RealWorld demo application's lib/http.lua, stripped of
 application-specific shapes. Framing, limits and response building are
-unchanged; opt-in CORS helpers were added.
+otherwise unchanged; opt-in CORS helpers were added.
 
 Framing subset (deliberately small and explicit):
   - origin-form requests, CRLF header lines; one connection serves
     requests sequentially until the connection closes
   - at most one value per header field, optional decimal Content-Length
-  - chunked and every other Transfer-Encoding are rejected
+  - Transfer-Encoding: chunked is accepted and the body is de-chunked;
+    every other transfer coding is rejected with 501
+  - HTTP/1.0 requests with a Host header are accepted and served with
+    "Connection: close"; a missing Host is a 400 on every version
   - connections are persistent by default (HTTP/1.1); pass
-    persistent=false to the response builders for "Connection: close"  - 
-    a request declaring close gets one, and the caller stops serving
-  - pipelining is excluded: bytes running past the end of a request body
-    are a hard 400. The caller closes the socket after writing a close
-    response or on a framing error.
+    persistent=false to the response builders for "Connection: close".
+    A request declaring close gets one, HTTP/1.0 gets one, and the
+    caller stops serving the connection after writing it
+  - requests buffered on the wire are served sequentially: wrap the
+    chunk reader with http.new_connection and call next_request() once
+    per request; bytes left over by one request are the next one's
+    input. The one-shot read_request keeps the older strict contract
+    (bytes past the declared body are a 400)
 
 Limits guard the parser: MAX_HEADER_BYTES (16 KiB) and MAX_BODY_BYTES
 (1 MiB). Oversize headers fail with 431, oversize bodies with 413.
@@ -37,10 +43,13 @@ local http = {}
 ---@class lunet.http.Request
 ---@field method string HTTP method (upper case)
 ---@field path string request path without the query string
----@field version string always "HTTP/1.1"
+---@field version string "HTTP/1.1" or "HTTP/1.0"
 ---@field headers table<string, string> header fields, lower-case names
----@field body string request body ("" when absent)
+---@field body string request body ("" when absent); a chunked body is decoded
 ---@field raw string the raw request bytes as received
+---@field chunked boolean true when the body arrived as Transfer-Encoding: chunked
+---@field persistent_connection boolean true for HTTP/1.1, false for HTTP/1.0;
+---       combine with the Connection header for the serve/close decision
 ---@field query_params table<string, string> decoded query parameters
 ---@field query_string string raw query string ("" when absent)
 
@@ -51,13 +60,15 @@ local http = {}
 ---@field max_age integer? value for Access-Control-Max-Age
 ---@field credentials boolean? when true, adds Access-Control-Allow-Credentials: true
 
--- This module deliberately supports a small, explicit HTTP/1.1 framing
+-- This module deliberately supports a small, explicit HTTP/1.x framing
 -- subset: origin-form requests, CRLF headers, at most one value for each
--- header field, and an optional decimal Content-Length body. Chunked and
--- every other Transfer-Encoding are rejected. Connections are persistent
--- by default (HTTP/1.1); pass persistent=false to the response builders
--- for a "Connection: close" response. Pipelining is excluded: a chunk
--- that runs past the end of a request body is a hard 400.
+-- header field, and a body framed by an optional decimal Content-Length
+-- or by Transfer-Encoding: chunked (decoded, alone and final). Any other
+-- transfer coding is rejected with 501. Connections are persistent by
+-- default (HTTP/1.1); HTTP/1.0 connections are served with close. Pass
+-- persistent=false to the response builders for a "Connection: close"
+-- response. Serve the requests buffered on the wire sequentially through
+-- a http.new_connection wrapper.
 http.MAX_HEADER_BYTES = 16 * 1024
 http.MAX_BODY_BYTES = 1024 * 1024
 http.MAX_REQUEST_LINE_BYTES = 8 * 1024
@@ -81,6 +92,14 @@ local function parse_content_length(value)
     return length
 end
 
+-- The accepted transfer coding is exactly "chunked" (case-insensitive,
+-- alone and final). Every other coding, alone or combined, stays
+-- outside the subset.
+local function accept_transfer_encoding(value)
+    local trimmed = value:gsub("^[ \t]+", ""):gsub("[ \t]+$", "")
+    return trimmed:lower() == "chunked"
+end
+
 local function parse_request_head(head)
     local first_line, headers_raw = head:match("^([^\r\n]*)\r\n(.*)$")
     first_line = first_line or head
@@ -97,8 +116,9 @@ local function parse_request_head(head)
     if major ~= 1 then
         return request_error("HTTP version not supported", 505)
     end
-    if version ~= "HTTP/1.1" then
-        return request_error("Only HTTP/1.1 is supported")
+    -- Canonical spellings only: "HTTP/01.01" is not HTTP/1.1.
+    if version ~= "HTTP/1.1" and version ~= "HTTP/1.0" then
+        return request_error("Only HTTP/1.0 and HTTP/1.1 are supported")
     end
 
     local headers = {}
@@ -123,12 +143,20 @@ local function parse_request_head(head)
     if headers.host:find("[/@]") then
         return request_error("Invalid Host header")
     end
+
+    local chunked = false
     if headers["transfer-encoding"] then
-        return request_error("Transfer-Encoding is not supported", 501)
+        if not accept_transfer_encoding(headers["transfer-encoding"]) then
+            return request_error("Transfer-Encoding is not supported", 501)
+        end
+        if headers["content-length"] then
+            return request_error("Conflicting Content-Length and Transfer-Encoding")
+        end
+        chunked = true
     end
 
     local content_length = 0
-    if headers["content-length"] then
+    if not chunked and headers["content-length"] then
         local length, length_err, length_status = parse_content_length(headers["content-length"])
         if length == nil then return nil, length_err, length_status end
         content_length = length
@@ -146,16 +174,121 @@ local function parse_request_head(head)
         path = path,
         version = version,
         headers = headers,
+        chunked = chunked,
         content_length = content_length,
+        persistent_connection = version == "HTTP/1.1",
         query_params = http.parse_query_string(query_string),
         query_string = query_string,
     }
 end
 
-local function parse_complete_request(raw)
-    local request, parse_err, parse_status = http.parse_request(raw)
-    if request then request.raw = raw end
-    return request, parse_err, parse_status
+-- Read the next framing line of a chunked body from `body` at `pos`.
+-- Lines end with CRLF. A bare LF where a line ending is due is framing
+-- garbage: it is rejected in place instead of waiting for bytes that
+-- never arrive.
+-- Returns the index of the line-ending "\n", or on failure:
+--   nil, "incomplete", nil       no line ending in the buffer yet
+--   nil, err, status             framing failure (400, 431)
+local function next_framing_line(body, pos)
+    local line_feed = body:find("\n", pos, true)
+    if not line_feed then
+        if #body - pos + 1 > http.MAX_HEADER_BYTES then
+            return nil, "Chunk-size line too large", 431
+        end
+        return nil, "incomplete"
+    end
+    if body:sub(line_feed - 1, line_feed - 1) ~= "\r" then
+        return nil, "Invalid chunked body", 400
+    end
+    return line_feed
+end
+
+-- Decode one complete Transfer-Encoding: chunked body from the front of
+-- `body`. Chunk grammar per request: size line (hex digits, an optional
+-- ";extension" suffix, CRLF), chunk data, CRLF; the zero chunk ends in
+-- optional trailer lines closed by a blank line.
+-- Returns:
+--   decoded, rest, nil       a complete chunked body; `rest` is what
+--                            follows the last-chunk terminator
+--   nil, nil, "incomplete"   the buffer ends inside the framing; feed
+--                            more bytes and retry
+--   nil, nil, err, status    framing failure (400, 431, 413)
+---@param body string The body bytes accumulated so far
+---@return string? decoded The decoded body, nil when incomplete or on failure
+---@return string? rest The bytes that follow the last-chunk terminator
+---@return string|nil err nil ("incomplete") when more bytes are needed, otherwise the failure message
+---@return integer|nil status HTTP status to answer with on failure
+local function consume_chunked_body(body)
+    local pos = 1
+    local decoded = {}
+    local decoded_size = 0
+
+    while true do
+        local line_end, line_err, line_status = next_framing_line(body, pos)
+        if not line_end then
+            if line_status then
+                return nil, nil, line_err, line_status
+            end
+            return nil, nil, "incomplete"
+        end
+        local size_line = body:sub(pos, line_end - 2)
+        local hex_size, extension = size_line:match("^([%x]+)(;.*)$")
+        if not hex_size then
+            hex_size = size_line:match("^([%x]+)$") and size_line or nil
+            extension = ""
+        end
+        if not hex_size then
+            return nil, nil, "Invalid chunk size", 400
+        end
+        local size = tonumber(hex_size, 16)
+
+        if size == 0 then
+            -- Trailers are syntax-checked and then discarded: a trailer
+            -- is never a request header, so it cannot re-frame the
+            -- request that announced it.
+            local trailer_size = 0
+            local trailer_pos = line_end + 1
+            while true do
+                local trailer_end, trailer_err, trailer_status = next_framing_line(body, trailer_pos)
+                if not trailer_end then
+                    if trailer_err == "incomplete" then
+                        if trailer_size + (#body - trailer_pos + 1) > http.MAX_HEADER_BYTES then
+                            return nil, nil, "Trailer headers too large", 431
+                        end
+                        return nil, nil, "incomplete"
+                    end
+                    return nil, nil, trailer_err, trailer_status
+                end
+                trailer_size = trailer_size + (trailer_end + 1 - trailer_pos)
+                if trailer_size > http.MAX_HEADER_BYTES then
+                    return nil, nil, "Trailer headers too large", 431
+                end
+                local trailer = body:sub(trailer_pos, trailer_end - 2)
+                if trailer == "" then
+                    return table.concat(decoded), body:sub(trailer_end + 1)
+                end
+                if not trailer:match("^[!#$%%&'%*%+%-%._%^_`|~%w]+:.*$") then
+                    return nil, nil, "Invalid HTTP header", 400
+                end
+                trailer_pos = trailer_end + 1
+            end
+        end
+
+        if decoded_size + size > http.MAX_BODY_BYTES then
+            return nil, nil, "Request body too large", 413
+        end
+        local data_start = line_end + 1
+        local data_end = data_start + size - 1
+        if #body < data_end + 2 then
+            return nil, nil, "incomplete"
+        end
+        if body:sub(data_end + 1, data_end + 2) ~= "\r\n" then
+            return nil, nil, "Invalid chunked body", 400
+        end
+        decoded[#decoded + 1] = body:sub(data_start, data_end)
+        decoded_size = decoded_size + size
+        pos = data_end + 3
+    end
 end
 
 ---Parse a query string into a key/value table. Keys and values are URL
@@ -192,10 +325,13 @@ function http.url_decode(str)
     return decoded
 end
 
----Parse one complete raw request (head + body). The body must exactly
----match the declared Content-Length: short bodies report "Incomplete
+---Parse one complete raw request (head + body). A Content-Length body
+---must exactly match the declared length: short bodies report "Incomplete
 ---request body", extra bytes report "Unexpected data after request
----body". On failure returns nil, an error message and an HTTP status.
+---body". A chunked body is decoded; the buffer must end at the
+---last-chunk terminator. HTTP/1.0 requests with a Host header are
+---accepted (persistent_connection = false). On failure returns nil, an
+---error message and an HTTP status.
 ---@param raw string The raw request bytes
 ---@return lunet.http.Request|nil request The parsed request, or nil on failure
 ---@return string|nil err Error message on failure
@@ -226,22 +362,171 @@ function http.parse_request(raw)
 
     local request, parse_err, parse_status = parse_request_head(head)
     if not request then return nil, parse_err, parse_status end
-    if #body < request.content_length then
-        return request_error("Incomplete request body")
-    end
-    if #body > request.content_length then
-        return request_error("Unexpected data after request body")
+
+    if request.chunked then
+        local decoded, rest, decode_err, decode_status = consume_chunked_body(body)
+        if not decoded then
+            if decode_err == "incomplete" then
+                return request_error("Incomplete request body")
+            end
+            return nil, decode_err, decode_status
+        end
+        if #rest > 0 then
+            return request_error("Unexpected data after request body")
+        end
+        request.body = decoded
+    else
+        if #body < request.content_length then
+            return request_error("Incomplete request body")
+        end
+        if #body > request.content_length then
+            return request_error("Unexpected data after request body")
+        end
+        request.body = body
     end
 
-    request.body = body
     request.content_length = nil
+    request.raw = raw
     return request
+end
+
+---Extract one complete request from `buffer`, pulling more bytes with
+---`read_chunk` while the buffer ends inside the request. Returns:
+---   request, leftover, nil, nil   a request; `leftover` is what follows
+---                                 this request's bytes in the wire order
+---   nil, "", read_err, nil        EOF with no buffered bytes (read_err
+---                                 is nil on a clean EOF)
+---   nil, "", err, status          framing failure (400, 413, 414, 431, 501, 505)
+---@param read_chunk fun(): string|nil, string? Chunk reader pulled while the buffer is incomplete
+---@param buffer string Bytes already received for this request
+---@return lunet.http.Request|nil request The parsed request (with .raw), or nil on failure
+---@return string leftover The bytes that follow this request's framing, "" when none or on failure
+---@return string|nil err The reader's error on EOF before any bytes, otherwise a framing error message
+---@return integer|nil status HTTP status to answer with on failure
+local function consume_one(read_chunk, buffer)
+    local saw_bytes = #buffer > 0
+
+    while true do
+        local header_end = buffer:find("\r\n\r\n", 1, true)
+        if not header_end then
+            if #buffer > http.MAX_HEADER_BYTES then
+                return nil, "", "Request headers too large", 431
+            end
+            local chunk, read_err = read_chunk()
+            if chunk == nil then
+                if not saw_bytes then return nil, "", read_err end
+                return nil, "", read_err or "Incomplete HTTP request", 400
+            end
+            if type(chunk) ~= "string" then
+                return nil, "", "Invalid socket read", 400
+            end
+            saw_bytes = true
+            buffer = buffer .. chunk
+        else
+            if header_end + 3 > http.MAX_HEADER_BYTES then
+                return nil, "", "Request headers too large", 431
+            end
+
+            local request, parse_err, parse_status =
+                parse_request_head(buffer:sub(1, header_end - 1))
+            if not request then return nil, "", parse_err, parse_status end
+
+            local body = buffer:sub(header_end + 4)
+
+            if request.chunked then
+                local decoded, rest, decode_err, decode_status = consume_chunked_body(body)
+                if not decoded then
+                    if decode_err ~= "incomplete" then
+                        return nil, "", decode_err, decode_status
+                    end
+                    local chunk, read_err = read_chunk()
+                    if chunk == nil then
+                        if not saw_bytes then return nil, "", read_err end
+                        return nil, "", read_err or "Incomplete HTTP request", 400
+                    end
+                    if type(chunk) ~= "string" then
+                        return nil, "", "Invalid socket read", 400
+                    end
+                    saw_bytes = true
+                    buffer = buffer .. chunk
+                else
+                    request.body = decoded
+                    request.content_length = nil
+                    request.raw = buffer:sub(1, header_end + 3 + (#body - #rest))
+                    return request, rest or "", nil, nil
+                end
+            else
+                local content_length = request.content_length
+                if #body >= content_length then
+                    request.body = body:sub(1, content_length)
+                    request.content_length = nil
+                    request.raw = buffer:sub(1, header_end + 3 + content_length)
+                    return request, body:sub(content_length + 1), nil, nil
+                end
+                local chunk, read_err = read_chunk()
+                if chunk == nil then
+                    if not saw_bytes then return nil, "", read_err end
+                    return nil, "", read_err or "Incomplete HTTP request", 400
+                end
+                if type(chunk) ~= "string" then
+                    return nil, "", "Invalid socket read", 400
+                end
+                saw_bytes = true
+                buffer = buffer .. chunk
+            end
+        end
+    end
+end
+
+---@class lunet.http.Connection
+---@field private read_chunk fun(): string|nil, string? the wrapped chunk reader
+---@field private buffer string bytes received by earlier requests
+local Connection = {}
+Connection.__index = Connection
+
+---Serve the next request of a persistent connection. Requests already
+---buffered on the wire (pipelining) are answered without blocking on
+---the reader; the bytes each request does not consume stay queued for
+---this call. A framing error desynchronises the stream: the wrapper
+---drops its buffer and the caller answers and closes.
+---@return lunet.http.Request|nil request The parsed request (with .raw), or nil when the connection ends
+---@return string|nil err The reader's error on EOF before any bytes, otherwise a framing error message
+---@return integer|nil status HTTP status to answer with on failure
+function Connection:next_request()
+    local request, leftover, err, status = consume_one(self.read_chunk, self.buffer)
+    if request then
+        self.buffer = leftover
+        return request
+    end
+    self.buffer = ""
+    return nil, err, status
+end
+
+---Wrap a connection's chunk reader for sequential serving. One wrapper
+---per open connection; keep it alive for the connection's whole life.
+---@param read_chunk fun(): string|nil, string? Chunk reader; returns a string chunk or nil on EOF/failure
+---@return lunet.http.Connection connection The connection wrapper
+---@usage
+---```lua
+---local http = require("lunet.http")
+---local conn = http.new_connection(function()
+---    local chunk, err = socket.read(client)
+---    if not chunk then return nil, err end
+---    return chunk
+---end)
+---local request, err, status = conn:next_request()
+---```
+function http.new_connection(read_chunk)
+    return setmetatable({ read_chunk = read_chunk, buffer = "" }, Connection)
 end
 
 ---Incrementally read exactly one supported request from a stream. The
 ---reader is called repeatedly until the request is complete; it must
 ---return a string chunk, or nil plus an optional error string on
 ---EOF/failure. Header and body size limits apply as in parse_request.
+---Bytes past the declared body fail with "Unexpected data after request
+---body": to serve a stream that may hold more than one request, wrap
+---the reader with http.new_connection instead.
 ---@param read_chunk fun(): string|nil, string? Chunk reader; returns a string chunk or nil on EOF/failure
 ---@return lunet.http.Request|nil request The parsed request (with .raw), or nil on failure
 ---@return string|nil err The reader's error on EOF before any bytes, otherwise a framing error message
@@ -256,73 +541,14 @@ end
 ---end)
 ---```
 function http.read_request(read_chunk)
-    local header_chunks = {}
-    local header_size = 0
-    local request_head
-    local body_chunks
-    local body_size = 0
-    local expected_body_size
-    local saw_bytes = false
-
-    while true do
-        local chunk, read_err = read_chunk()
-        if not chunk then
-            if not saw_bytes then return nil, read_err end
-            return request_error(read_err or "Incomplete HTTP request")
+    local request, leftover, err, status = consume_one(read_chunk, "")
+    if request then
+        if #leftover > 0 then
+            return request_error("Unexpected data after request body")
         end
-        if type(chunk) ~= "string" then
-            return request_error("Invalid socket read")
-        end
-        saw_bytes = true
-
-        if not request_head then
-            header_chunks[#header_chunks + 1] = chunk
-            header_size = header_size + #chunk
-            local received = table.concat(header_chunks)
-            local header_end = received:find("\r\n\r\n", 1, true)
-            if not header_end then
-                if header_size > http.MAX_HEADER_BYTES then
-                    return request_error("Request headers too large", 431)
-                end
-            else
-                if header_end + 3 > http.MAX_HEADER_BYTES then
-                    return request_error("Request headers too large", 431)
-                end
-
-                request_head = received:sub(1, header_end - 1)
-                local request, parse_err, parse_status = parse_request_head(request_head)
-                if not request then return nil, parse_err, parse_status end
-                expected_body_size = request.content_length
-
-                body_chunks = { received:sub(header_end + 4) }
-                body_size = #body_chunks[1]
-                if body_size > http.MAX_BODY_BYTES then
-                    return request_error("Request body too large", 413)
-                end
-                if body_size > expected_body_size then
-                    return request_error("Unexpected data after request body")
-                end
-                if body_size == expected_body_size then
-                    local raw = received:sub(1, header_end + 3) .. table.concat(body_chunks)
-                    return parse_complete_request(raw)
-                end
-            end
-        else
-            body_size = body_size + #chunk
-            if body_size > http.MAX_BODY_BYTES then
-                return request_error("Request body too large", 413)
-            end
-            body_chunks[#body_chunks + 1] = chunk
-
-            if body_size > expected_body_size then
-                return request_error("Unexpected data after request body")
-            end
-            if body_size == expected_body_size then
-                local raw = request_head .. "\r\n\r\n" .. table.concat(body_chunks)
-                return parse_complete_request(raw)
-            end
-        end
+        return request
     end
+    return nil, err, status
 end
 
 ---Build one HTTP/1.1 response string: Content-Length comes from the

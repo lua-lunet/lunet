@@ -59,12 +59,13 @@ local cors = {
 }
 
 local function handle_connection(client)
+  local conn = http.new_connection(function()
+    local data, data_err = socket.read(client)
+    if not data then return nil, data_err end
+    return data
+  end)
   while true do
-    local request, read_err, read_status = http.read_request(function()
-      local data, data_err = socket.read(client)
-      if not data then return nil, data_err end
-      return data
-    end)
+    local request, read_err, read_status = conn:next_request()
     if not request and not read_status then
       socket.close(client)
       return
@@ -75,7 +76,8 @@ local function handle_connection(client)
       return
     end
 
-    local persistent = (request.headers["connection"] or ""):lower() ~= "close"
+    local persistent = request.persistent_connection
+      and (request.headers["connection"] or ""):lower() ~= "close"
     if http.is_preflight(request) then
       socket.write(client, http.preflight_response(cors, persistent))
     else

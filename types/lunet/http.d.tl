@@ -5,8 +5,14 @@ global record HttpRequest
     headers: {string: string}
     body: string
     raw: string
+    chunked: boolean
+    persistent_connection: boolean
     query_params: {string: string}
     query_string: string
+end
+
+global record HttpConnection
+    next_request: function(self: HttpConnection): HttpRequest, string, integer
 end
 
 global record CorsConfig
@@ -24,6 +30,7 @@ global record http
     url_decode: function(str: string): string
     parse_request: function(raw: string): HttpRequest, string, integer
     read_request: function(read_chunk: function(): string, string): HttpRequest, string, integer
+    new_connection: function(read_chunk: function(): string, string): HttpConnection
     response: function(status: integer, headers: {string: string}, body: string, cors: CorsConfig, persistent: boolean): string
     json_response: function(status: integer, data: any, cors: CorsConfig, persistent: boolean): string
     error_response: function(status: integer, data: any, cors: CorsConfig, persistent: boolean): string

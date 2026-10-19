@@ -21,7 +21,7 @@ ARG LUNET_TAG=v0.13.0
 # the probe compares ASCII http bytes; invariant globalization beats installing ICU
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl libluajit-5.1-2 libuv1 zlib1g netcat-openbsd \
+        ca-certificates curl libluajit-5.1-2 libuv1 zlib1g netcat-openbsd jq \
     && rm -rf /var/lib/apt/lists/*
 # the probe is a .NET 10 app: the runtime stage carries the runtime, not the SDK
 RUN apt-get update && apt-get install -y --no-install-recommends bash \

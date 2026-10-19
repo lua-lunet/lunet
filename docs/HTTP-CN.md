@@ -55,8 +55,16 @@ close）由调用方负责；JSON 辅助函数仅在被调用时才惰性地依�
 
 ```sh
 docker build -f ext/http/Dockerfile.http -t lunet-http-probe .
-docker run --rm lunet-http-probe
+docker run --rm -v "$(pwd)/ext/http:/out" lunet-http-probe
 ```
+
+挂载运行即清单模式，装置把这次运行的产物写进挂载目录：`probe-results.json`
+（原始响应，供审阅的原始记录）、`probe-manifest.lua`（期望清单，在镜像内生
+成：每个 http 模块文件一个 sha256、汇总计数、每个探针用例一条 verdict/status
+记录）。`probe_allowlist.lua` 放在旁边：按设计的例外，manifest 中 verdict
+不为 `Pass` 的每条 id 一个条目。三份产物一起提交；`spec/http_probe_spec.lua`
+对它们固化断言：结果漂移（探针版本变化、ext 变更）而不更新 allowlist 时，
+测试套件就会失败。
 
 ## lunet.http - 请求解析与响应构建
 

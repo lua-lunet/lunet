@@ -64,7 +64,9 @@ docker run --rm -v "$(pwd)/ext/http:/out" lunet-http-probe
 记录）。`probe_allowlist.lua` 放在旁边：按设计的例外，manifest 中 verdict
 不为 `Pass` 的每条 id 一个条目。三份产物一起提交；`spec/http_probe_spec.lua`
 对它们固化断言：结果漂移（探针版本变化、ext 变更）而不更新 allowlist 时，
-测试套件就会失败。
+测试套件就会失败。同目录下 `ext/http/fuzz.lua` 是门内模糊驱动：固定种子、
+确定性语料，逐输入对 `http.read_request` 的契约做断言
+（`spec/http_fuzz_spec.lua`）；模糊器的新发现升级为已提交的 spec 桩。
 
 ## lunet.http - 请求解析与响应构建
 

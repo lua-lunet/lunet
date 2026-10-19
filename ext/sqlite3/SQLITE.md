@@ -145,6 +145,27 @@ end)
   consistency-critical reads through `rw` (each call is a fresh read
   transaction, so a read issued after the write call returns is current).
 
+## The single write thread
+
+Statements on the `rw` handle execute on the libuv global thread pool; a
+statement cannot start until the previous one on that connection finishes,
+whatever the pool size. The single-writer contract this driver is built
+around nevertheless calls for the pool itself to be one thread. With
+`UV_THREADPOOL_SIZE=1` the write work literally runs on one background
+thread: statements queue in dispatch order, and no other pool job of the
+process (`fs`, `dns`, another driver's handle) can hold the worker a write
+statement is waiting behind.
+
+- The libuv default is 4. The variable must be set before the process
+  starts: a shell prefix (`UV_THREADPOOL_SIZE=1 lunet-run app.lua`),
+  systemd `Environment=`, docker `ENV`, and the like.
+- The per-connection mutex is what keeps one connection's own statements
+  correctly serialized at any pool size. One worker is the documented
+  shape, not a lock substitute.
+- If the pool is wider, the shape still works but the one-thread contract
+  above no longer holds: another pool job can run on a second worker while
+  a write statement is in flight.
+
 ## The performance model
 
 A performance-tuning exercise on a fixed-API SQLite-backed HTTP service —
@@ -267,6 +288,62 @@ unmeasurable; for a complex or high-rate one it can matter. Read the
 SQLite documentation and decide for your own workload — there is no
 magic. See `examples/10_db_prepared.lua` for the shape of the API in a
 small application.
+
+### Prepare at startup, in one place
+
+The documented pattern is a statement inventory: every statement the
+application will run is declared and prepared once when the connection
+opens, rebound per call. Five fixed statements prepared at startup beat
+five per-call SQL strings re-parsed at every request, and the inventory
+keeps the application's SQL visible in one place. This is what the
+explicit API exists to enable.
+
+### Same-statement queueing (draft design, not shipped)
+
+Today a second in-flight call on one statement is rejected with
+`statement is busy`. The busy flag guards the statement's mid-step state
+(the bound parameters, the stepping cursor), but a queued call would
+never touch that state: parameters are snapshotted per call, and a queued
+call can begin only after the in-flight one completes. The rejected
+second call forces every consumer of this shape to hand-roll the same
+write queue in application Lua.
+
+The draft proposal:
+
+- a dispatch against one statement while a call on it is in flight parks
+  the caller (FIFO, dispatch order) and runs the call on completion;
+- `statement is busy` remains only for genuinely invalid states (use
+  after close);
+- the queue belongs in the driver, beside the statement it protects.
+
+This is a design note, not a shipped contract. Parking a caller from
+inside a statement call has open questions (how a parked coroutine yields
+and resumes, whether queueing should be per statement or a whole-handle
+write chain); see the branch PR for those questions.
+
+## A db helper (draft design, not shipped)
+
+Every consumer of this driver's documented shape ends up writing the same
+application-level boilerplate: route queries between the `(rw, ro)` pair,
+hold a prepare-at-open statement inventory, serialize write traffic. An
+opt-in helper module beside the driver could carry those conventions as
+code:
+
+- **Explicit handle routing.** The caller states the handle: a
+  `query_ro(...)` call goes down the read-only connection, everything
+  else down `rw`. No sniffing SQL text to guess the route: a string match
+  on `SELECT` is a foot gun (a `WITH` or an unusual prefix routes
+  silently wrong).
+- **Prepare-at-open inventory.** The application's statements declared in
+  one place, prepared once, rebound per call (see the pattern above).
+- **The write chain.** Concurrency on the write handle serialized in one
+  place; whether that is per statement or a whole-handle write chain is
+  the queueing question of the draft design above, not something the
+  helper settles silently.
+
+This is a design candidate under discussion, not a shipped module. Its
+shape follows where same-statement queueing lands; the open questions
+live in the branch PR.
 
 ## How the pinning was verified
 

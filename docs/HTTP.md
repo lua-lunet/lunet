@@ -64,8 +64,22 @@ when `ext/http` code changes:
 
 ```sh
 docker build -f ext/http/Dockerfile.http -t lunet-http-probe .
-docker run --rm lunet-http-probe
+docker run --rm -v "$(pwd)/ext/http:/out" lunet-http-probe
 ```
+
+The mounted run (manifest mode) writes the run's artifacts into the mounted
+folder: `probe-results.json` (the raw responses, the review record),
+`probe-manifest.lua` (the expectation manifest generated inside the image:
+one sha256 per http module file, the summary count, and one verdict/status
+entry per probe test) and nothing else. `probe_allowlist.lua` sits beside
+them: the by-design outcomes, one entry per manifest id whose verdict is not
+`Pass`. The three are committed; `spec/http_probe_spec.lua` pins them, so a
+run whose outcomes drift (a probe version bump, an ext change) fails the
+suite unless the allowlist is updated with the run. In the same folder,
+`ext/http/fuzz.lua` is the in-gate fuzz driver: a fixed-seed, deterministic
+corpus over `http.read_request` with the contract asserted per input
+(`spec/http_fuzz_spec.lua`); a fuzzer discovery graduates into a committed
+spec fixture.
 
 ## lunet.http - request framing and responses
 

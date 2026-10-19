@@ -27,28 +27,40 @@ loopback only; it is not a TLS terminator and never should be.
 The framing this module implements is a deliberately small subset of
 HTTP/1.1:
 
-The parser deliberately supports a small, explicit HTTP/1.1 subset:
+The parser deliberately supports a small, explicit HTTP/1 subset:
 
 - origin-form requests, CRLF header lines; one connection serves requests
-  sequentially, one after another, until the connection closes
-- at most one value per header field, optional decimal `Content-Length` body
-- `Transfer-Encoding` (including chunked) is rejected
+  sequentially, one after another, until the connection closes; requests
+  already buffered on the wire are served too (pipelining, below)
+- at most one value per header field, optional decimal `Content-Length`
+  body
+- `Transfer-Encoding: chunked` is accepted (case-insensitive, alone and
+  final) and the body is decoded before the request is served; any other
+  transfer coding is rejected with 501
+- HTTP/1.0 requests with a `Host` header are accepted and served with
+  `Connection: close`; a missing `Host` is a 400 on every version, and
+  HTTP/0.9 (no version at all) is a 400
 - connections are persistent by default (HTTP/1.1): responses carry no
   `Connection` header. Pass `persistent=false` as the last argument of
   `http.response`/`http.json_response`/`http.error_response` (and
   `http.preflight_response`) for a `Connection: close` response.
 - a request declaring `Connection: close` is honoured: build its response
-  with `persistent=false` and end the connection loop after writing it
-- pipelining is excluded: bytes running past the end of a request body are
-  a hard 400 (`"Unexpected data after request body"`). Send the next request
-  only after reading the previous response.
+  with `persistent=false` and end the connection loop after writing it.
+  HTTP/1.0 requests carry `request.persistent_connection = false`; build
+  their response the same way and close
+- to serve the requests buffered on the wire, wrap the connection's
+  chunk reader with `http.new_connection` and call `next_request()` per
+  request: the bytes a request does not consume are the next request's
+  input. The one-shot `http.read_request` keeps the older strict
+  contract: bytes past the declared body are a hard 400
 - `MAX_HEADER_BYTES` (16 KiB), `MAX_BODY_BYTES` (1 MiB) and
   `MAX_REQUEST_LINE_BYTES` (8 KiB) guard the parser
-- rejections carry the RFC 9112 status: grammar and Host violations answer
-  400, a non-1.x major version answers 505, an unsupported transfer coding
-  answers 501, a request line past its cap answers 414, headers past their
-  cap answer 431, a body past its cap answers 413, and the router answers
-  405 with an Allow header when only the method is wrong
+- rejections carry the RFC 9112 status: grammar and Host violations
+  answer 400, a non-1.x major version answers 505, an unsupported
+  transfer coding answers 501, a request line past its cap answers 414,
+  headers past their cap answer 431, a body past its cap answers 413,
+  and the router answers 405 with an Allow header when only the method
+  is wrong
 
 Parse failures follow the `nil, message, status` convention, so a connection
 loop can answer `http.error_response(status, { message })` directly.
@@ -56,16 +68,26 @@ loop can answer `http.error_response(status, { message })` directly.
 This class is probed, not just spec'd: the [Http11Probe](https://github.com/uNetworkingAB/Http11Probe)
 rig (`ext/http/Dockerfile.http`) runs the probe's 213-case matrix against the
 happy-path target in this folder and asserts the outcome. Out-of-scope tests
-pass because the subset rejects the feature by design - chunked bodies and
-any `Transfer-Encoding` answer 501, HTTP/1.0 answers 400, `OPTIONS *`
-answers 400, and the minimal echo target answers 405 with an `Allow` header
-for un-routed methods. Rerun and commit the regenerated expectation manifest
-when `ext/http` code changes:
+pass because the subset rejects the feature by design - non-chunked
+`Transfer-Encoding` answers 501, `OPTIONS *` answers 400, and the minimal
+echo target answers 405 with an `Allow` header for un-routed methods.
+Rerun and commit the regenerated expectation manifest when `ext/http` code
+changes:
 
 ```sh
 docker build -f ext/http/Dockerfile.http -t lunet-http-probe .
-docker run --rm lunet-http-probe
+docker run --rm -v "$(pwd)/ext/http:/out" lunet-http-probe
 ```
+
+The mounted run (manifest mode) writes the run's artifacts into the mounted
+folder: `probe-results.json` (the raw responses, the review record),
+`probe-manifest.lua` (the expectation manifest generated inside the image:
+one sha256 per http module file, the summary count, and one verdict/status
+entry per probe test) and nothing else. `probe_allowlist.lua` sits beside
+them: the by-design outcomes, one entry per manifest id whose verdict is not
+`Pass`. The three are committed; `spec/http_probe_spec.lua` pins them, so a
+run whose outcomes drift (a probe version bump, an ext change) fails the
+suite unless the allowlist is updated with the run.
 
 ## lunet.http - request framing and responses
 
@@ -75,8 +97,9 @@ local http = require("lunet.http")
 
 | Function | Returns | Notes |
 |----------|---------|-------|
-| `http.parse_request(raw)` | `request, err, status` | Parses one complete raw request (head + body). The body must exactly match `Content-Length`. |
-| `http.read_request(read_chunk)` | `request, err, status` | Incremental variant: `read_chunk()` is called until the request is complete and must return a string chunk, or nil plus an optional error on EOF/failure. |
+| `http.parse_request(raw)` | `request, err, status` | Parses one complete raw request (head + body). A `Content-Length` body must exactly match the declared length; a chunked body is decoded and the buffer must end at the last-chunk terminator. |
+| `http.read_request(read_chunk)` | `request, err, status` | Incremental variant for one request: `read_chunk()` is called until the request is complete and must return a string chunk, or nil plus an optional error on EOF/failure. Bytes past the declared body are a hard 400. |
+| `http.new_connection(read_chunk)` | `connection` | Wraps a connection's chunk reader for sequential serving: `connection:next_request()` returns `request, err, status` and keeps leftover bytes queued for serving the requests buffered on the wire (pipelining). One wrapper per open connection. |
 | `http.response(status, headers, body, cors?, persistent?)` | `string` | Builds the full response. Framing is owned here: caller `Content-Length`/`Connection` headers are dropped and replaced (`Content-Length` from the body). The connection is persistent by default - no `Connection` header, per HTTP/1.1; `persistent=false` declares `Connection: close`. `Content-Type` defaults to `application/json`. |
 | `http.json_response(status, data, cors?, persistent?)` | `string` | `response()` with the data JSON-encoded. |
 | `http.error_response(status, data, cors?, persistent?)` | `string` | `json_response()` wrapping the data as `{"errors": data}`. |
@@ -89,28 +112,32 @@ local http = require("lunet.http")
 A parsed request is a fresh table:
 
 ```lua
-request.method        -- "GET" (upper case)
-request.path          -- "/counters/hits" (query string removed)
-request.version       -- "HTTP/1.1"
-request.headers       -- { [lower-case name] = value }
-request.body          -- "" when absent
-request.raw           -- the raw bytes (read_request only)
-request.query_string  -- "by=2" ("" when absent)
-request.query_params  -- { by = "2" } (URL-decoded)
+request.method              -- "GET" (upper case)
+request.path                -- "/counters/hits" (query string removed)
+request.version             -- "HTTP/1.1" or "HTTP/1.0"
+request.headers             -- { [lower-case name] = value }
+request.body                -- "" when absent; a chunked body is decoded
+request.raw                 -- the raw bytes (read_request / next_request only)
+request.chunked             -- true when the body arrived as chunked
+request.persistent_connection -- false for HTTP/1.0, true otherwise
+request.query_string        -- "by=2" ("" when absent)
+request.query_params        -- { by = "2" } (URL-decoded)
 ```
 
-A typical connection loop - sequential requests on one connection, ending
-on the client's EOF, a framing error, or a request-declared
-`Connection: close`:
+A typical connection loop - sequential requests on one connection,
+including the requests buffered on the wire, ending on the client's EOF,
+a framing error, a request-declared `Connection: close`, or an
+HTTP/1.0 connection:
 
 ```lua
 local function handle_connection(client)
+  local conn = http.new_connection(function()
+    local chunk, read_err = socket.read(client)
+    if not chunk then return nil, read_err end
+    return chunk
+  end)
   while true do
-    local request, err, status = http.read_request(function()
-      local chunk, read_err = socket.read(client)
-      if not chunk then return nil, read_err end
-      return chunk
-    end)
+    local request, err, status = conn:next_request()
     if not request and not status then
       -- EOF before any bytes: a closed or idle client owns the close.
       socket.close(client)
@@ -122,7 +149,8 @@ local function handle_connection(client)
       socket.close(client)
       return
     end
-    local persistent = (request.headers["connection"] or ""):lower() ~= "close"
+    local persistent = request.persistent_connection
+      and (request.headers["connection"] or ""):lower() ~= "close"
     if cors and http.is_preflight(request) then
       socket.write(client, http.preflight_response(cors, persistent))
     else
@@ -133,7 +161,7 @@ local function handle_connection(client)
                                          ctx.response_body(), cors, persistent))
     end
     if not persistent then
-      socket.close(client)  -- the request declared Connection: close
+      socket.close(client)  -- HTTP/1.0, or the request declared Connection: close
       return
     end
   end

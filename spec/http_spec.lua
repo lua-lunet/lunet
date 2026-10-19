@@ -117,12 +117,97 @@ describe("http extension modules", function()
       assert.are.equal(400, status)
     end)
 
-    it("rejects Transfer-Encoding with 501", function()
+    it("accepts Transfer-Encoding: chunked and decodes the body", function()
+      local r = parse("POST /echo HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n" ..
+                      "3\r\nabc\r\n5\r\ndefgh\r\n0\r\n\r\n")
+      assert.are.equal("abcdefgh", r.body)
+      assert.is_true(r.chunked)
+      assert.are.equal("HTTP/1.1", r.version)
+    end)
+
+    it("accepts chunked case-insensitively", function()
+      local r = parse("POST /echo HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: ChUnKeD\r\n\r\n" ..
+                      "2\r\nhi\r\n0\r\n\r\n")
+      assert.are.equal("hi", r.body)
+    end)
+
+    it("accepts chunk extensions and discards validated trailers", function()
+      local r = parse("POST /echo HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n" ..
+                      "1;ext=1\r\na\r\n1\r\nb\r\n0\r\nX-Trailer: t v\r\n\r\n")
+      assert.are.equal("ab", r.body)
+    end)
+
+    it("still rejects a non-chunked transfer coding with 501", function()
       local request, err, status = http.parse_request(
-        "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n")
+        "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: gzip, chunked\r\n\r\n")
       assert.is_nil(request)
       assert.are.equal("Transfer-Encoding is not supported", err)
       assert.are.equal(501, status)
+
+      request, err, status = http.parse_request(
+        "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: identity\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal("Transfer-Encoding is not supported", err)
+      assert.are.equal(501, status)
+    end)
+
+    it("rejects chunked announced twice with 501", function()
+      local request, err, status = http.parse_request(
+        "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked, chunked\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal("Transfer-Encoding is not supported", err)
+      assert.are.equal(501, status)
+    end)
+
+    it("rejects a chunked request that also declares Content-Length", function()
+      local request, err, status = http.parse_request(
+        "POST / HTTP/1.1\r\nHost: h\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal("Conflicting Content-Length and Transfer-Encoding", err)
+      assert.are.equal(400, status)
+    end)
+
+    it("rejects a chunked body over MAX_BODY_BYTES with 413", function()
+      local request, err, status = http.parse_request(
+        "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n" ..
+        string.format("%x\r\n", http.MAX_BODY_BYTES + 1) .. "\r\n0\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal("Request body too large", err)
+      assert.are.equal(413, status)
+    end)
+
+    it("rejects malformed chunk framing with 400", function()
+      local request, err, status = http.parse_request(
+        "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n" ..
+        "0x1\r\na\r\n0\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal("Invalid chunk size", err)
+      assert.are.equal(400, status)
+
+      request, err, status = http.parse_request(
+        "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n" ..
+        "1\r\nazz\r\n0\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal("Invalid chunked body", err)
+      assert.are.equal(400, status)
+    end)
+
+    it("rejects an incomplete chunked body", function()
+      local request, err, status = http.parse_request(
+        "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n" ..
+        "4\r\nabc")
+      assert.is_nil(request)
+      assert.are.equal("Incomplete request body", err)
+      assert.are.equal(400, status)
+    end)
+
+    it("rejects a bare LF where a chunked line ending is due with 400", function()
+      local request, err, status = http.parse_request(
+        "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n" ..
+        "5;\nhello\r\n0\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal("Invalid chunked body", err)
+      assert.are.equal(400, status)
     end)
 
     it("rejects duplicate headers", function()
@@ -132,10 +217,43 @@ describe("http extension modules", function()
       assert.are.equal("Duplicate HTTP header", err)
     end)
 
-    it("rejects HTTP/1.0 with 400 (same major version, unsupported here)", function()
-      local request, err, status = http.parse_request("GET / HTTP/1.0\r\nHost: h\r\n\r\n")
+    it("accepts HTTP/1.0 with a Host header and flags the connection non-persistent", function()
+      local r = parse("GET / HTTP/1.0\r\nHost: h\r\n\r\n")
+      assert.are.equal("HTTP/1.0", r.version)
+      assert.is_false(r.persistent_connection)
+      assert.are.equal("", r.body)
+    end)
+
+    it("accepts HTTP/1.0 with a body and flags the connection non-persistent", function()
+      local r = parse("POST /echo HTTP/1.0\r\nHost: h\r\nContent-Length: 5\r\n\r\nhello")
+      assert.are.equal("HTTP/1.0", r.version)
+      assert.is_false(r.persistent_connection)
+      assert.are.equal("hello", r.body)
+    end)
+
+    it("requires a Host header from HTTP/1.0 too", function()
+      local request, err, status = http.parse_request("GET / HTTP/1.0\r\n\r\n")
       assert.is_nil(request)
-      assert.are.equal("Only HTTP/1.1 is supported", err)
+      assert.are.equal("Missing Host header", err)
+      assert.are.equal(400, status)
+    end)
+
+    it("rejects HTTP/1.2 with 400 (same major version, outside the subset)", function()
+      local request, err, status = http.parse_request("GET / HTTP/1.2\r\nHost: h\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal("Only HTTP/1.0 and HTTP/1.1 are supported", err)
+      assert.are.equal(400, status)
+    end)
+
+    it("rejects non-canonical version spellings with 400", function()
+      local request, err, status = http.parse_request("GET / HTTP/01.01\r\nHost: h\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal("Only HTTP/1.0 and HTTP/1.1 are supported", err)
+      assert.are.equal(400, status)
+
+      request, err, status = http.parse_request("GET / HTTP/1.01\r\nHost: h\r\n\r\n")
+      assert.is_nil(request)
+      assert.are.equal("Only HTTP/1.0 and HTTP/1.1 are supported", err)
       assert.are.equal(400, status)
     end)
 
@@ -285,6 +403,121 @@ describe("http extension modules", function()
         "POST /kv/hits HTTP/1.1\r\nHost: h\r\nContent-Length: 2\r\n\r\nhi!extra"))
       assert.is_nil(r)
       assert.are.equal("Unexpected data after request body", err)
+    end)
+
+    it("decodes a chunked body streamed across reads", function()
+      local r = assert(http.read_request(feed(
+        "POST /echo HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n",
+        "\r\n2\r\nab\r\n", "2\r\ncd\r\n0\r\n", "\r\n")))
+      assert.are.equal("abcd", r.body)
+      assert.is_true(r.chunked)
+    end)
+
+    it("stops after a chunked body and rejects the leftover bytes with 400", function()
+      local r, err, status = http.read_request(feed(
+        "POST /echo HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n" ..
+        "2\r\nhi\r\n0\r\n\r\nGET /next HTTP/1.1\r\nHost: h\r\n\r\n"))
+      assert.is_nil(r)
+      assert.are.equal("Unexpected data after request body", err)
+      assert.are.equal(400, status)
+    end)
+
+    it("reports an incomplete chunked stream as 400", function()
+      local r, err, status = http.read_request(feed(
+        "POST /echo HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n" ..
+        "4\r\nabc"))
+      assert.is_nil(r)
+      assert.are.equal("Incomplete HTTP request", err)
+      assert.are.equal(400, status)
+    end)
+  end)
+
+  describe("http.new_connection (pipelined framing)", function()
+    local function connection(chunks)
+      local index = 0
+      return http.new_connection(function()
+        index = index + 1
+        return chunks[index]
+      end)
+    end
+
+    it("serves two pipelined requests buffered on the same read", function()
+      local conn = connection({
+        "GET /kv/one HTTP/1.1\r\nHost: h\r\n\r\n" ..
+        "GET /kv/two HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n",
+      })
+      local first = assert(conn:next_request())
+      assert.are.equal("/kv/one", first.path)
+      assert.are.equal("", first.body)
+      local second = assert(conn:next_request())
+      assert.are.equal("/kv/two", second.path)
+      assert.are.equal("close", second.headers["connection"])
+    end)
+
+    it("keeps a trailing partial request for the next call", function()
+      local conn = connection({
+        "POST /echo HTTP/1.1\r\nHost: h\r\nContent-Length: 4\r\n\r\nVALUE",
+        "GET /next HTTP/1.1\r\nHost: h\r\n\r\n",
+      })
+      local first = assert(conn:next_request())
+      assert.are.equal("VALU", first.body)
+      local second = assert(conn:next_request())
+      assert.are.equal("/next", second.path)
+    end)
+
+    it("keeps a trailing partial chunked request for the next call", function()
+      local conn = connection({
+        "POST /echo HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n" ..
+        "3\r\nabc\r\n0\r\n\r\nGET /next HTT",
+        "P/1.1\r\nHost: h\r\n\r\n",
+      })
+      local first = assert(conn:next_request())
+      assert.are.equal("abc", first.body)
+      local second = assert(conn:next_request())
+      assert.are.equal("/next", second.path)
+    end)
+
+    it("returns no error on clean EOF and ends serving", function()
+      local conn = connection({})
+      local request, err = conn:next_request()
+      assert.is_nil(request)
+      assert.is_nil(err)
+    end)
+
+    it("passes a reader error through on EOF with no buffered bytes", function()
+      local conn = http.new_connection(function()
+        return nil, "closed"
+      end)
+      local request, err = conn:next_request()
+      assert.is_nil(request)
+      assert.are.equal("closed", err)
+    end)
+
+    it("answers a framing error with a status and stops the stream", function()
+      local served = {}
+      local conn = connection({
+        "GET /kv/one HTTP/1.1\r\nHost: h\r\n\r\n",
+        "GET /broken HTTP/1.1\r\nBad Header\r\n\r\n",  -- no colon: rejected
+      })
+      local first = assert(conn:next_request())
+      served[#served + 1] = first.path
+      local request, err, status = conn:next_request()
+      assert.is_nil(request)
+      assert.are.equal("Invalid HTTP header", err)
+      assert.are.equal(400, status)
+      assert.are.same({ "/kv/one" }, served)
+    end)
+
+    it("serves a chunked request and continues with the pipelined next one", function()
+      local conn = connection({
+        "POST /echo HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n" ..
+        "3\r\nabc\r\n0\r\n\r\n" ..
+        "GET /after HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n",
+      })
+      local first = assert(conn:next_request())
+      assert.are.equal("abc", first.body)
+      local second = assert(conn:next_request())
+      assert.are.equal("/after", second.path)
     end)
   end)
 
@@ -444,7 +677,8 @@ describe("http extension modules", function()
       assert.is_nil(epersistent:find("connection:", 1, false))
     end)
 
-    it("still rejects pipelined bytes past the body with a hard 400", function()
+    it("read_request stays strict: pipes past the body are a hard 400 " ..
+       "(pipelining goes through http.new_connection)", function()
       local r, err, status = http.read_request(function()
         return "GET /kv/one HTTP/1.1\r\nHost: h\r\n\r\n" ..
                "GET /kv/two HTTP/1.1\r\nHost: h\r\n\r\n"
@@ -457,13 +691,16 @@ describe("http extension modules", function()
     -- The documented per-connection serve pattern (docs/HTTP.md,
     -- examples/08_http.lua): sequential requests on one connection until
     -- the client's EOF, a framing error, or a request-declared close.
+    -- Bytes a request leaves over (pipelining) are the next request's
+    -- input.
     local function serve_connection(read_chunk, write_response)
       router.reset()
       router.route("GET", "/kv/:name", function(_, _, params)
         return { name = params.name }
       end)
+      local conn = http.new_connection(read_chunk)
       while true do
-        local request, read_err, read_status = http.read_request(read_chunk)
+        local request, read_err, read_status = conn:next_request()
         if not request and not read_status then
           return "eof"  -- idle/EOF close owns the exit
         end
@@ -471,7 +708,8 @@ describe("http extension modules", function()
           write_response(http.error_response(read_status or 400, { read_err }, nil, false))
           return "error"
         end
-        local persistent = (request.headers["connection"] or ""):lower() ~= "close"
+        local persistent = request.persistent_connection
+          and (request.headers["connection"] or ""):lower() ~= "close"
         local ctx = http_context.new(request)
         ctx.env_config = {}
         router.handle(ctx)
@@ -503,6 +741,41 @@ describe("http extension modules", function()
       assert.is_nil(responses[1]:find("connection:", 1, false))
       -- Second response: the request declared close, so the response does
       -- too, and the loop ended.
+      assert.are.truthy(responses[2]:find('{"name":"two"}', 1, true))
+      assert.are.truthy(responses[2]:find("connection: close", 1, false))
+    end)
+
+    it("serves an HTTP/1.0 request with 2xx and closes the connection", function()
+      local wire = { "GET /kv/one HTTP/1.0\r\nHost: h\r\n\r\n" }
+      local responses = {}
+      local outcome = serve_connection(function()
+        local chunk = wire[1]
+        wire[1] = nil
+        return chunk  -- nil afterwards: clean EOF, never reached
+      end, function(response) responses[#responses + 1] = response end)
+
+      assert.are.equal("request-close", outcome)
+      assert.are.equal(1, #responses)
+      assert.are.truthy(responses[1]:find('{"name":"one"}', 1, true))
+      assert.are.truthy(responses[1]:find("connection: close", 1, false))
+    end)
+
+    it("serves two pipelined requests back to back on one connection", function()
+      local wire = {
+        "GET /kv/one HTTP/1.1\r\nHost: h\r\n\r\n" ..
+        "GET /kv/two HTTP/1.0\r\nHost: h\r\n\r\n",
+      }
+      local responses = {}
+      local outcome = serve_connection(function()
+        local chunk = wire[1]
+        wire[1] = nil
+        return chunk
+      end, function(response) responses[#responses + 1] = response end)
+
+      assert.are.equal("request-close", outcome)
+      assert.are.equal(2, #responses)
+      assert.are.truthy(responses[1]:find('{"name":"one"}', 1, true))
+      assert.is_nil(responses[1]:find("connection:", 1, false))
       assert.are.truthy(responses[2]:find('{"name":"two"}', 1, true))
       assert.are.truthy(responses[2]:find("connection: close", 1, false))
     end)

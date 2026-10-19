@@ -1,6 +1,7 @@
 -- The happy-path target for the Http11Probe rig (ext/http/Dockerfile.http).
--- GET / answers 200; POST /echo echoes the request body. Everything the
--- framing subset rejects is answered by the connection loop per its status map.
+-- GET / answers 200; POST /echo echoes the request body; the connection
+-- loop serves every request buffered on the wire (pipelining included)
+-- and closes after HTTP/1.0 requests and request-declared closes.
 local lunet = require("lunet")
 local socket = require("lunet.socket")
 local http = require("lunet.http")
@@ -19,12 +20,13 @@ end)
 local cors = nil
 
 local function handle_connection(client)
+  local conn = http.new_connection(function()
+    local data, data_err = socket.read(client)
+    if not data then return nil, data_err end
+    return data
+  end)
   while true do
-    local request, read_err, read_status = http.read_request(function()
-      local data, data_err = socket.read(client)
-      if not data then return nil, data_err end
-      return data
-    end)
+    local request, read_err, read_status = conn:next_request()
     if not request and not read_status then
       socket.close(client)
       return
@@ -34,7 +36,8 @@ local function handle_connection(client)
       socket.close(client)
       return
     end
-    local persistent = (request.headers["connection"] or ""):lower() ~= "close"
+    local persistent = request.persistent_connection
+      and (request.headers["connection"] or ""):lower() ~= "close"
     if http.is_preflight(request) then
       socket.write(client, http.preflight_response(cors, persistent))
     else

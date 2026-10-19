@@ -24,19 +24,25 @@ close）由调用方负责；JSON 辅助函数仅在被调用时才惰性地依�
 
 本模块实现的帧格式是 HTTP/1.1 中一个刻意很小的子集：
 
-解析器刻意只支持一个小而明确的 HTTP/1.1 子集：
+解析器刻意只支持一个小而明确的 HTTP/1 子集：
 
 - origin-form 请求，CRLF 换行的头字段；一个连接按顺序逐个服务请求，
-  直到连接关闭
+  直到连接关闭；线上已缓冲的请求也会被服务（流水线，见下）
 - 每个头字段至多一个值，可选的十进制 `Content-Length` 请求体
-- 拒绝 `Transfer-Encoding`（包括 chunked）
+- `Transfer-Encoding: chunked` 被接受（大小写不敏感、单独且为最后一个
+  编码），请求体在服务前先解码；任何其他传输编码答 501
+- 带 `Host` 头的 HTTP/1.0 请求被接受并以 `Connection: close` 服务；任何
+  版本缺失 `Host` 答 400，HTTP/0.9（没有版本号）答 400
 - 连接默认持久（HTTP/1.1）：响应不携带 `Connection` 头。把 `persistent=false`
   作为最后一个实参传给 `http.response`/`http.json_response`/`http.error_response`
   （以及 `http.preflight_response`）即可声明 `Connection: close` 响应。
 - 请求声明 `Connection: close` 时会被尊重：用 `persistent=false` 构建其响应，
-  并在写出后结束连接循环
-- 流水线被排除：越过请求体末尾的字节会得到硬性 400
-  （`"Unexpected data after request body"`）。读完上一个响应后再发送下一个请求。
+  并在写出后结束连接循环。HTTP/1.0 请求携带 `request.persistent_connection =
+  false`，同样以该方式构建响应并关闭
+- 要服务线上已缓冲的请求，用 `http.new_connection` 包装连接的分块读取器，
+  每个请求调用一次 `next_request()`：一个请求未消费的字节就是下一个请求的
+  输入。单次 `http.read_request` 保持旧的高严格契约：越过声明请求体的字节
+  得到硬性 400
 - `MAX_HEADER_BYTES`（16 KiB）、`MAX_BODY_BYTES`（1 MiB）与
   `MAX_REQUEST_LINE_BYTES`（8 KiB）保护解析器
 - 拒绝时携带 RFC 9112 状态码：语法与 Host 违规答 400，非 1.x 大版本答 505，
@@ -49,14 +55,23 @@ close）由调用方负责；JSON 辅助函数仅在被调用时才惰性地依�
 这一类解析器不只由规格测试覆盖，还有探针验证：[Http11Probe](https://github.com/uNetworkingAB/Http11Probe)
 探针装置（`ext/http/Dockerfile.http`）对本目录下的快乐路径目标运行它的
 213 例矩阵并固化断言结果。范围之外的用例通过，是因为子集**有意拒绝**该特性
- -  chunked 与任何 `Transfer-Encoding` 答 501，HTTP/1.0 答 400，`OPTIONS *`
+ - 非chunked 的 `Transfer-Encoding` 答 501，`OPTIONS *`
 答 400，最小 echo 目标对未注册方法答 405 并带 `Allow` 头。`ext/http`
 代码变更时重跑装置并提交再生成的期望清单：
 
 ```sh
 docker build -f ext/http/Dockerfile.http -t lunet-http-probe .
-docker run --rm lunet-http-probe
+docker run --rm -v "$(pwd)/ext/http:/out" lunet-http-probe
 ```
+
+挂载运行（清单模式）会把该次运行的产物写入挂载目录：`probe-results.json`
+（原始响应，评审记录）、`probe-manifest.lua`（镜像内生成的期望清单：
+每个 http 模块文件一个 sha256、汇总计数，以及每个探针用例一条
+verdict/status 记录），仅此而已。`probe_allowlist.lua` 与它们并列：按设计
+的运行结果，清单里每个非 `Pass` 的用例一条。三者一起提交；
+`spec/http_probe_spec.lua` 把它们固定住，因此一旦某次运行的结果漂移
+（探针版本升级、ext 变更），除非随该次运行同步更新 allowlist，测试套件
+就会失败。
 
 ## lunet.http - 请求解析与响应构建
 
@@ -66,8 +81,9 @@ local http = require("lunet.http")
 
 | 函数 | 返回 | 说明 |
 |------|------|------|
-| `http.parse_request(raw)` | `request, err, status` | 解析一个完整的原始请求（头 + 体）。请求体必须与 `Content-Length` 完全一致。 |
-| `http.read_request(read_chunk)` | `request, err, status` | 增量变体：反复调用 `read_chunk()` 直到请求完整；读取器返回字符串分块，EOF/失败时返回 nil 加可选错误信息。 |
+| `http.parse_request(raw)` | `request, err, status` | 解析一个完整的原始请求（头 + 体）。`Content-Length` 请求体必须与声明长度完全一致；chunked 请求体先解码，缓冲区必须停在最后一个分块的终止符处。 |
+| `http.read_request(read_chunk)` | `request, err, status` | 单个请求的增量变体：反复调用 `read_chunk()` 直到请求完整；读取器返回字符串分块，EOF/失败时返回 nil 加可选错误信息。越过声明请求体的字节得到硬性 400。 |
+| `http.new_connection(read_chunk)` | `connection` | 为顺序服务包装连接的分块读取器：`connection:next_request()` 返回 `request, err, status`，并把剩余字节排队，用于服务线上已缓冲的请求（流水线）。每个打开的连接一个包装对象。 |
 | `http.response(status, headers, body, cors?, persistent?)` | `string` | 构建完整响应。帧格式由本函数负责：调用方的 `Content-Length`/`Connection` 头会被丢弃并替换（`Content-Length` 取自请求体）。连接默认持久 - 按 HTTP/1.1 不带 `Connection` 头；`persistent=false` 则声明 `Connection: close`。`Content-Type` 默认为 `application/json`。 |
 | `http.json_response(status, data, cors?, persistent?)` | `string` | `response()`，数据经 JSON 编码。 |
 | `http.error_response(status, data, cors?, persistent?)` | `string` | `json_response()`，数据包装为 `{"errors": data}`。 |
@@ -80,27 +96,30 @@ local http = require("lunet.http")
 解析出的请求是一个全新的表：
 
 ```lua
-request.method        -- "GET"（大写）
-request.path          -- "/counters/hits"（已去掉查询串）
-request.version       -- "HTTP/1.1"
-request.headers       -- { [小写头名] = 值 }
-request.body          -- 缺省时为 ""
-request.raw           -- 原始字节（仅 read_request 提供）
-request.query_string  -- "by=2"（缺省时为 ""）
-request.query_params  -- { by = "2" }（URL 解码后）
+request.method                  -- "GET"（大写）
+request.path                    -- "/counters/hits"（已去掉查询串）
+request.version                 -- "HTTP/1.1" 或 "HTTP/1.0"
+request.headers                 -- { [小写头名] = 值 }
+request.body                    -- 缺省时为 ""；chunked 请求体已解码
+request.raw                     -- 原始字节（read_request / next_request 提供）
+request.chunked                 -- 请求体以 chunked 到达时为 true
+request.persistent_connection   -- HTTP/1.0 为 false，其余为 true
+request.query_string            -- "by=2"（缺省时为 ""）
+request.query_params            -- { by = "2" }（URL 解码后）
 ```
 
-典型的连接循环 - 一个连接上按顺序服务多个请求，在客户端 EOF、帧格式错误
-或请求声明的 `Connection: close` 时结束：
+典型的连接循环 - 一个连接上按顺序服务多个请求（包括线上已缓冲的），在客户端
+EOF、帧格式错误、请求声明的 `Connection: close`，或 HTTP/1.0 连接时结束：
 
 ```lua
 local function handle_connection(client)
+  local conn = http.new_connection(function()
+    local chunk, read_err = socket.read(client)
+    if not chunk then return nil, read_err end
+    return chunk
+  end)
   while true do
-    local request, err, status = http.read_request(function()
-      local chunk, read_err = socket.read(client)
-      if not chunk then return nil, read_err end
-      return chunk
-    end)
+    local request, err, status = conn:next_request()
     if not request and not status then
       -- 任何字节之前遇到 EOF：关闭或空闲的客户端拥有这次关闭。
       socket.close(client)
@@ -112,7 +131,8 @@ local function handle_connection(client)
       socket.close(client)
       return
     end
-    local persistent = (request.headers["connection"] or ""):lower() ~= "close"
+    local persistent = request.persistent_connection
+      and (request.headers["connection"] or ""):lower() ~= "close"
     if cors and http.is_preflight(request) then
       socket.write(client, http.preflight_response(cors, persistent))
     else
@@ -123,7 +143,7 @@ local function handle_connection(client)
                                          ctx.response_body(), cors, persistent))
     end
     if not persistent then
-      socket.close(client)  -- 请求声明了 Connection: close
+      socket.close(client)  -- HTTP/1.0，或请求声明了 Connection: close
       return
     end
   end

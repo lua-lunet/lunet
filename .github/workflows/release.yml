@@ -543,6 +543,7 @@ jobs:
         LUNET_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref_name }}
       run: |
         gh release upload "$LUNET_RELEASE_TAG" \
+          -R "$GITHUB_REPOSITORY" \
           release-assets/lunet-windows-amd64.zip \
           release-assets/lunet-windows-amd64-sdk.zip \
           --clobber

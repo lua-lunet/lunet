@@ -184,33 +184,8 @@ SQLite 产生的错误携带 `code` 与 `extended_code`（否则只有 `message`
 - 语句失败是**给调用者的结果，绝不是 worker 关机**：连接保持可用，失败之后的下一次调用照常成功。
 - 启动清单里的 `prepare` 失败返回 `(nil, err)`——释放句柄对，修好清单再开始服务。
 
-## 事务
+## 驱动特有事实
 
-使用 `lunet.sqlite3_tx`（`sqlite3_tx.lua`，与二进制一起发布）。事务放在 `rw` 句柄上。
-
-```lua
-local sqlite = require("lunet.sqlite3")
-local tx = require("lunet.sqlite3_tx")
-
-local ok, err = tx.transaction(rw, function(t)
-    t.exec("DELETE FROM nodes WHERE path = ?", dst)
-    local r = t.exec("UPDATE nodes SET path=? WHERE path=? AND version=?",
-                     dst, src, version)
-    if r.affected_rows == 0 then return nil, "version conflict" end
-    return true
-end, "IMMEDIATE")
-
-if not ok and err.poisoned then db.close(rw) end
-```
-
-返回非 nil 提交；返回 `nil, reason` 或抛错则回滚。完整契约见 `sqlite3_tx.lua` 的头注释。
-
-**要紧的一条规则：** 事务属于*连接*，不属于协程。逐调用签出、用完归还的连接池会把 `BEGIN`、工作与 `COMMIT` 摊到不同句柄上，最终什么也提交不了。`transaction()` 在整个单元内持有一个句柄——这正是它接收 `conn` 而非配置的原因。
-
-### 驱动特有事实
-
-- **凡是要写的，都传 `"IMMEDIATE"`。** 第三个参数是锁模式。SQLite 默认的 `DEFERRED` 直到第一条语句才取锁，别的写者可能抢先拿到写锁，于是 `BEGIN` 成功之后你的 `UPDATE` 一样会以 `SQLITE_BUSY` 失败。`IMMEDIATE` 把这个失败提前暴露。`EXCLUSIVE` 连读者也挡住。
-- 不同于 Postgres，语句错误不会毒化会话——SQLite 允许你在 `fn` 里捕获 `t.*` 错误并继续。通常仍是错的，但不会让之后的每条语句都失败。
 - **`query`/`exec` 绑定参数。** `db.exec(rw, "INSERT INTO t VALUES (?,?)", a, b)` 绑定 `a`、`b`，与 `exec_params` 相同。
 - **路由拆分需要文件路径。** `:memory:` 无法拆分：两条逻辑路径在那里别名同一个物理连接，访问经其所有者（`rw` worker）串行化。打算用内联 `ro` 路径就传文件路径；在 `:memory:` 上只用 `rw`。
 
@@ -255,5 +230,3 @@ xmake test
 LUNET_BIN=$(find build -path '*/release/lunet-run' -type f | head -1)
 "$LUNET_BIN" test/smoke_sqlite3_contract.lua
 ```
-
-`test/smoke_sqlite3_tx.lua` 钉住事务包装器的控制流。

@@ -255,45 +255,8 @@ Key cases:
 - A failed `prepare` in the startup inventory returns `(nil, err)` — release
   the pair and fix the inventory before serving.
 
-## Transactions
+## Driver-specific facts
 
-Use `lunet.sqlite3_tx` (`sqlite3_tx.lua`, shipped next to the binary).
-Transactions belong on the `rw` handle.
-
-```lua
-local sqlite = require("lunet.sqlite3")
-local tx = require("lunet.sqlite3_tx")
-
-local ok, err = tx.transaction(rw, function(t)
-    t.exec("DELETE FROM nodes WHERE path = ?", dst)
-    local r = t.exec("UPDATE nodes SET path=? WHERE path=? AND version=?",
-                     dst, src, version)
-    if r.affected_rows == 0 then return nil, "version conflict" end
-    return true
-end, "IMMEDIATE")
-
-if not ok and err.poisoned then db.close(rw) end
-```
-
-Return non-nil to commit; return `nil, reason` or raise to roll back. See the
-header comment in `sqlite3_tx.lua` for the full contract.
-
-**The rule that matters:** a transaction belongs to the *connection*, not the
-coroutine. A pool that checks a handle out per call and returns it afterwards
-will scatter `BEGIN`, the work, and `COMMIT` across handles and commit nothing.
-`transaction()` holds one handle for the whole unit, which is why it takes a
-`conn` rather than a config.
-
-### Driver-specific facts
-
-- **Pass `"IMMEDIATE"` for anything that writes.** The third argument is the
-  locking mode. SQLite's default `DEFERRED` takes no lock until the first
-  statement, so another writer can grab the write lock first and your `UPDATE`
-  fails with `SQLITE_BUSY` *after* `BEGIN` succeeded. `IMMEDIATE` moves that
-  failure up front. `EXCLUSIVE` also blocks readers.
-- Unlike Postgres, a statement error does not poison the session — SQLite lets
-  you catch a `t.*` error inside `fn` and continue. Usually still wrong, but it
-  will not fail every later statement.
 - **`query`/`exec` bind parameters.** `db.exec(rw, "INSERT INTO t VALUES (?,?)",
   a, b)` binds `a` and `b` just like `exec_params`.
 - **The routing split needs a file path.** `:memory:` cannot be split: the
@@ -377,5 +340,3 @@ xmake test
 LUNET_BIN=$(find build -path '*/release/lunet-run' -type f | head -1)
 "$LUNET_BIN" test/smoke_sqlite3_contract.lua
 ```
-
-`test/smoke_sqlite3_tx.lua` pins the transaction wrapper's control flow.

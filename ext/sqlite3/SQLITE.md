@@ -30,10 +30,8 @@ values are never concatenated into SQL. There is deliberately no `db.escape`.
 
 | Function | Notes |
 |---|---|
-| `open(config)` | `{ path = "app.db" }`, optionally `create = "WAL"|"NORMAL"` and the passthrough settings (`busy_timeout` ms, `foreign_keys` bool, `synchronous` "OFF"\|"NORMAL"\|"FULL"); **caches** the `(rw, ro)` pair keyed on the path string — `:memory:` is never cached |
-| `open_raw(config)` | same config as `open`, but always opens a fresh pair; the cache is bypassed |
-| `destroy(path)` | close both cached handles for a path and clear the cache entry; no-op if none |
-| `close(conn)` | close a single handle (the `open_raw` lifetime) |
+| `open(config)` | `{ path = "app.db" }`, optionally `create = "WAL"|"NORMAL"` and the passthrough settings (`busy_timeout` ms, `foreign_keys` bool, `synchronous` "OFF"\|"NORMAL"\|"FULL") |
+| `close(conn)` | close a single handle |
 | `query(conn, sql, ...)` | returns array of row tables |
 | `exec(conn, sql, ...)` | returns `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | same behaviour as the above |
@@ -42,9 +40,8 @@ values are never concatenated into SQL. There is deliberately no `db.escape`.
 The split of responsibilities: the binary (`lunet.sqlite3core`) owns the
 async I/O — one worker-hop open returning `(rw, ro, err)`, statements
 dispatched to the uv worker pool on `rw`, executed inline on the loop thread
-on `ro`. The Lua loader owns the policy — the path-keyed cache, `open_raw`,
-`destroy`. Neither reaches into the other's job; the Lua cache cannot
-mis-handle the C stack and the C core cannot grow cache policy. All calls
+on `ro`.
+All calls
 must run inside a coroutine spawned via `lunet.spawn`.
 
 ## The open contract
@@ -110,13 +107,14 @@ lunet.spawn(function()
   -- no worker hop, no yield.
   local rows = assert(db.query(ro, "SELECT * FROM t"))
 
-  db.destroy("app.db")
+  db.close(rw)
+  db.close(ro)
 end)
 ```
 
-- `rw` — the read-write connection: one writer, per-connection mutex,
-  statements dispatched to the uv worker pool. It also reads: it is the
-  general connection, and the only one that writes.
+- `rw` — the read-write connection: one dedicated worker, statements
+  dispatched to the uv worker pool. It also reads: it is the general
+  connection, and the only one that writes.
 - `ro` — a second connection opened with `SQLITE_OPEN_READONLY`, for read
   traffic. **Queries and execs on it run inline on the loop thread — there
   is no background thread and no yield.** In WAL mode readers never contend
@@ -124,15 +122,11 @@ end)
   that a heavy read (large scan, cold page cache) stalls every coroutine,
   socket and timer for its duration. If you do not want the inline reader,
   discard it by convention — `local rw, _ = db.open({ path = "app.db" })`
-  (`_` is Lua convention, not a language feature; the ro connection still
-  exists until `destroy(path)`, at the cost of one file descriptor).
+  (`_` is Lua convention, not a language feature).
 - **Failure shape:** on open failure both handles are `nil` and the error is
   the third return — `local rw, ro, err = db.open(...)`. This is a
   sqlite3-specific shape: the network drivers keep `(conn, err)`.
-- **Handle lifetimes:** handles from `open` are closed via `destroy(path)`
-  (both together, cache entry cleared); handles from `open_raw` are closed
-  per-handle via `close`. A cached handle closed via `close` leaves the
-  cache entry holding a dead pair — don't.
+- **Handle lifetimes:** handles are closed per-handle via `close`.
 - A consumer who ignores `ro` gets the old single-connection behaviour.
 - **Routing is build-time correctness the consumer owns.** There is no
   read/write tagging and no dispatch machinery. A write mis-routed to `ro`
@@ -172,9 +166,7 @@ on the same connection. If you see mediocre latency, check which handle
 your reads are on before anything else.
 
 There is deliberately **no pooling on this driver**. The single write path
-IS the design: to go faster, route reads to `ro` — never widen a pool. The
-`open`/`open_raw`/`destroy` trio exists so the right shape is also the
-easy shape: open once per path (cached), read from `ro`, destroy when done.
+IS the design: to go faster, route reads to `ro` — never widen a pool.
 
 ## Transactions
 
@@ -193,7 +185,7 @@ local ok, err = tx.transaction(rw, function(t)
     return true
 end, "IMMEDIATE")
 
-if not ok and err.poisoned then db.destroy(path) end
+if not ok and err.poisoned then db.close(rw) end
 ```
 
 Return non-nil to commit; return `nil, reason` or raise to roll back. See the
@@ -251,9 +243,6 @@ stmt:close()                        -- finalize now, or let GC do it
   handle's semantics.
 - **Write SQL on the read-only handle is rejected loudly at prepare time**
   — earlier than the step-time failure of a mis-routed plain exec.
-- **Busy discipline:** one statement, one in-flight call. A second
-  concurrent call on the same statement fails with `statement is busy`
-  instead of corrupting the mid-step state.
 - `stmt:close()` finalizes the vendor statement; after it, use fails
   loudly. A statement dropped without `close` is finalized by the
   finalizer.

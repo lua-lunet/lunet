@@ -25,7 +25,6 @@ typedef struct lunet_sqlite_stmt_s lunet_sqlite_stmt_t;
 
 typedef struct {
   sqlite3* conn;
-  uv_mutex_t mutex;
   int closed;
   /* Set on the read-only handle returned as open()'s second connection.
    * Queries and execs on it run inline on the loop thread (no worker hop,
@@ -38,15 +37,12 @@ typedef struct {
   lunet_sqlite_stmt_t* stmts;
 } lunet_sqlite_conn_t;
 
-/* A prepared statement: one connection, one vendor statement. The busy
- * flag guards re-entrant use (a second call while one is in flight fails
- * loudly instead of corrupting the mid-step state). */
+/* A prepared statement: one connection, one vendor statement. */
 struct lunet_sqlite_stmt_s {
   lunet_sqlite_conn_t* conn;
   sqlite3_stmt* stmt;
   lunet_sqlite_stmt_t* next;
   lunet_sqlite_stmt_t* prev;
-  int busy;
   int closed;
 };
 
@@ -97,9 +93,6 @@ static void lunet_sqlite_conn_close(lunet_sqlite_conn_t* wrapper) {
 /* Full cleanup including mutex; only call when mutex is not held (for example, from GC). */
 static void lunet_sqlite_conn_destroy(lunet_sqlite_conn_t* wrapper) {
   lunet_sqlite_conn_close(wrapper);
-  if (wrapper) {
-    uv_mutex_destroy(&wrapper->mutex);
-  }
 }
 
 static int conn_gc(lua_State* L) {
@@ -395,7 +388,6 @@ static void push_conn_wrapper(lua_State* co, sqlite3* conn, int readonly) {
   memset(wrapper, 0, sizeof(*wrapper));
   wrapper->conn = conn;
   wrapper->readonly = readonly;
-  uv_mutex_init(&wrapper->mutex);
   luaL_getmetatable(co, LUNET_SQLITE_CONN_MT);
   lua_setmetatable(co, -2);
 }
@@ -571,10 +563,7 @@ int lunet_db_close(lua_State* L) {
     return 1;
   }
 
-  uv_mutex_lock(&wrapper->mutex);
-  lunet_sqlite_conn_close(wrapper); /* Keep mutex intact until after unlock. */
-  uv_mutex_unlock(&wrapper->mutex);
-  // Mutex will be destroyed by GC via lunet_sqlite_conn_destroy
+  lunet_sqlite_conn_close(wrapper);
 
   lua_pushnil(L);
   return 1;
@@ -715,10 +704,8 @@ static void db_query_work_cb(uv_work_t* req) {
   db_query_ctx_t* ctx = (db_query_ctx_t*)req->data;
   sqlite3_stmt* stmt = NULL;
 
-  uv_mutex_lock(&ctx->wrapper->mutex);
   if (ctx->wrapper->closed || !ctx->wrapper->conn) {
     snprintf(ctx->err, sizeof(ctx->err), "connection is closed");
-    uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
 
@@ -728,7 +715,6 @@ static void db_query_work_cb(uv_work_t* req) {
     stmt = ctx->pstmt->stmt;
     if (!stmt) {
       snprintf(ctx->err, sizeof(ctx->err), "statement is closed");
-      uv_mutex_unlock(&ctx->wrapper->mutex);
       return;
     }
     sqlite3_reset(stmt);
@@ -739,19 +725,16 @@ static void db_query_work_cb(uv_work_t* req) {
         snprintf(ctx->err, sizeof(ctx->err), "bind failed: %s", sqlite3_errmsg(ctx->wrapper->conn));
       }
       sqlite3_reset(stmt);
-      uv_mutex_unlock(&ctx->wrapper->mutex);
       return;
     }
     collect_query_rows(ctx, stmt);
     sqlite3_reset(stmt); /* leave the statement ready for the next call */
-    uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
 
   int rc = sqlite3_prepare_v2(ctx->wrapper->conn, ctx->query, -1, &stmt, NULL);
   if (rc != SQLITE_OK) {
     snprintf(ctx->err, sizeof(ctx->err), "%s", sqlite3_errmsg(ctx->wrapper->conn));
-    uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
 
@@ -762,7 +745,6 @@ static void db_query_work_cb(uv_work_t* req) {
               snprintf(ctx->err, sizeof(ctx->err), "bind failed: %s", sqlite3_errmsg(ctx->wrapper->conn));
           }
           sqlite3_finalize(stmt);
-          uv_mutex_unlock(&ctx->wrapper->mutex);
           return;
       }
   }
@@ -770,7 +752,6 @@ static void db_query_work_cb(uv_work_t* req) {
   collect_query_rows(ctx, stmt);
 
   sqlite3_finalize(stmt);
-  uv_mutex_unlock(&ctx->wrapper->mutex);
 }
 
 /* Push the query outcome as two Lua values: (rows, nil) on success or
@@ -841,7 +822,6 @@ static void db_query_after_cb(uv_work_t* req, int status) {
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.query\n");
-    if (ctx->pstmt) ctx->pstmt->busy = 0;
     if (ctx->stmt_valref) lunet_valref_release(L, ctx->stmt_valref);
     db_query_ctx_free(ctx);
     return;
@@ -849,7 +829,6 @@ static void db_query_after_cb(uv_work_t* req, int status) {
   lua_State* co = lua_tothread(L, -1);
   lua_pop(L, 1);
 
-  if (ctx->pstmt) ctx->pstmt->busy = 0;
   if (ctx->stmt_valref) lunet_valref_release(L, ctx->stmt_valref);
 
   db_query_push_values(co, ctx);
@@ -966,10 +945,8 @@ typedef struct {
 static void db_exec_work_cb(uv_work_t* req) {
   db_exec_ctx_t* ctx = (db_exec_ctx_t*)req->data;
 
-  uv_mutex_lock(&ctx->wrapper->mutex);
   if (ctx->wrapper->closed || !ctx->wrapper->conn) {
     snprintf(ctx->err, sizeof(ctx->err), "connection is closed");
-    uv_mutex_unlock(&ctx->wrapper->mutex);
     return;
   }
 
@@ -978,7 +955,6 @@ static void db_exec_work_cb(uv_work_t* req) {
     sqlite3_stmt* stmt = ctx->pstmt->stmt;
     if (!stmt) {
       snprintf(ctx->err, sizeof(ctx->err), "statement is closed");
-      uv_mutex_unlock(&ctx->wrapper->mutex);
       return;
     }
     sqlite3_reset(stmt);
@@ -989,7 +965,6 @@ static void db_exec_work_cb(uv_work_t* req) {
         snprintf(ctx->err, sizeof(ctx->err), "bind failed: %s", sqlite3_errmsg(ctx->wrapper->conn));
       }
       sqlite3_reset(stmt);
-      uv_mutex_unlock(&ctx->wrapper->mutex);
       return;
     }
     rc = sqlite3_step(stmt);
@@ -1002,7 +977,6 @@ static void db_exec_work_cb(uv_work_t* req) {
       int rc = sqlite3_prepare_v2(ctx->wrapper->conn, ctx->query, -1, &stmt, NULL);
       if (rc != SQLITE_OK) {
           snprintf(ctx->err, sizeof(ctx->err), "%s", sqlite3_errmsg(ctx->wrapper->conn));
-          uv_mutex_unlock(&ctx->wrapper->mutex);
           return;
       }
       rc = bind_params(stmt, ctx->params, ctx->nparams, ctx->err, sizeof(ctx->err));
@@ -1011,7 +985,6 @@ static void db_exec_work_cb(uv_work_t* req) {
               snprintf(ctx->err, sizeof(ctx->err), "bind failed: %s", sqlite3_errmsg(ctx->wrapper->conn));
           }
           sqlite3_finalize(stmt);
-          uv_mutex_unlock(&ctx->wrapper->mutex);
           return;
       }
       rc = sqlite3_step(stmt);
@@ -1025,14 +998,12 @@ static void db_exec_work_cb(uv_work_t* req) {
       if (rc != SQLITE_OK) {
         snprintf(ctx->err, sizeof(ctx->err), "%s", errmsg ? errmsg : sqlite3_errmsg(ctx->wrapper->conn));
         if (errmsg) sqlite3_free(errmsg);
-        uv_mutex_unlock(&ctx->wrapper->mutex);
         return;
       }
   }
 
   ctx->affected_rows = sqlite3_changes(ctx->wrapper->conn);
   ctx->insert_id = sqlite3_last_insert_rowid(ctx->wrapper->conn);
-  uv_mutex_unlock(&ctx->wrapper->mutex);
 }
 
 /* Push the exec outcome as two Lua values: (result, nil) on success or
@@ -1069,7 +1040,6 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
   if (!lua_isthread(L, -1)) {
     lua_pop(L, 1);
     fprintf(stderr, "invalid coroutine in db.exec\n");
-    if (ctx->pstmt) ctx->pstmt->busy = 0;
     if (ctx->stmt_valref) lunet_valref_release(L, ctx->stmt_valref);
     db_exec_ctx_free(ctx);
     return;
@@ -1077,7 +1047,6 @@ static void db_exec_after_cb(uv_work_t* req, int status) {
   lua_State* co = lua_tothread(L, -1);
   lua_pop(L, 1);
 
-  if (ctx->pstmt) ctx->pstmt->busy = 0;
   if (ctx->stmt_valref) lunet_valref_release(L, ctx->stmt_valref);
 
   db_exec_push_values(co, ctx);
@@ -1332,23 +1301,18 @@ int lunet_db_exec_params(lua_State* L) {
  * db.prepare(conn, sql) hands back a reusable statement handle: prepare
  * once, then stmt:query(...) / stmt:exec(...) per call with the vendor
  * reset + rebind discipline, and stmt:close() to finalize. One statement
- * is bound to one connection. A second call while one is in flight fails
- * loudly ("statement is busy") instead of corrupting the mid-step state.
+ * is bound to one connection.
  * ========================================================================== */
 
 static int stmt_gc(lua_State* L) {
   lunet_sqlite_stmt_t* s = (lunet_sqlite_stmt_t*)luaL_checkudata(L, 1, LUNET_SQLITE_STMT_MT);
   if (s->closed || !s->stmt || !s->conn) return 0;
-  /* The busy flag can only be set while a valref pins this userdata, so
-   * GC can never observe it. */
-  uv_mutex_lock(&s->conn->mutex);
   if (!s->closed && s->stmt) {
     sqlite3_finalize(s->stmt);
     s->stmt = NULL;
     s->closed = 1;
     conn_untrack_stmt(s->conn, s);
   }
-  uv_mutex_unlock(&s->conn->mutex);
   return 0;
 }
 
@@ -1365,11 +1329,6 @@ static int stmt_close(lua_State* L) {
     lua_pushnil(L);
     return 1;
   }
-  if (s->busy) {
-    lua_pushstring(L, "statement is busy");
-    return 1;
-  }
-  uv_mutex_lock(&s->conn->mutex);
   if (!s->closed && s->stmt) {
     sqlite3_finalize(s->stmt);
     s->stmt = NULL;
@@ -1378,7 +1337,6 @@ static int stmt_close(lua_State* L) {
   } else {
     s->closed = 1;
   }
-  uv_mutex_unlock(&s->conn->mutex);
   lua_pushnil(L);
   return 1;
 }
@@ -1396,11 +1354,6 @@ static int stmt_dispatch(lua_State* L, int is_exec) {
   if (s->closed || !s->conn) {
     lua_pushnil(L);
     lua_pushstring(L, "statement is closed");
-    return 2;
-  }
-  if (s->busy) {
-    lua_pushnil(L);
-    lua_pushstring(L, "statement is busy");
     return 2;
   }
   if (s->conn->closed) {
@@ -1431,9 +1384,7 @@ static int stmt_dispatch(lua_State* L, int is_exec) {
         lua_pushstring(L, "out of memory");
         return 2;
       }
-      s->busy = 1;
       db_exec_work_cb(&ctx->req);
-      s->busy = 0;
       db_exec_push_values(L, ctx);
       db_exec_ctx_free(ctx);
       return 2;
@@ -1455,9 +1406,7 @@ static int stmt_dispatch(lua_State* L, int is_exec) {
       lua_pushstring(L, "out of memory");
       return 2;
     }
-    s->busy = 1;
     db_query_work_cb(&ctx->req);
-    s->busy = 0;
     db_query_push_values(L, ctx);
     db_query_ctx_free(ctx);
     return 2;
@@ -1487,13 +1436,11 @@ static int stmt_dispatch(lua_State* L, int is_exec) {
      * the busy flag. */
     lua_pushvalue(L, 1);
     lunet_valref_create_raw(L, ctx->stmt_valref);
-    s->busy = 1;
 
     lunet_coref_create(L, ctx->co_ref);
     int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_exec_work_cb, db_exec_after_cb);
     if (ret < 0) {
       lunet_coref_release(L, ctx->co_ref);
-      s->busy = 0;
       lunet_valref_release(L, ctx->stmt_valref);
       lunet_free_nonnull(ctx);
       lua_pushnil(L);
@@ -1522,13 +1469,11 @@ static int stmt_dispatch(lua_State* L, int is_exec) {
   }
   lua_pushvalue(L, 1);
   lunet_valref_create_raw(L, ctx->stmt_valref);
-  s->busy = 1;
 
   lunet_coref_create(L, ctx->co_ref);
   int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_query_work_cb, db_query_after_cb);
   if (ret < 0) {
     lunet_coref_release(L, ctx->co_ref);
-    s->busy = 0;
     lunet_valref_release(L, ctx->stmt_valref);
     lunet_free_nonnull(ctx);
     lua_pushnil(L);
@@ -1586,10 +1531,8 @@ static void db_prepare_work_cb(uv_work_t* req) {
   db_prepare_ctx_t* ctx = (db_prepare_ctx_t*)req->data;
   lunet_sqlite_stmt_t* s = ctx->target;
 
-  uv_mutex_lock(&s->conn->mutex);
   if (s->conn->closed || !s->conn->conn) {
     snprintf(ctx->err, sizeof(ctx->err), "connection is closed");
-    uv_mutex_unlock(&s->conn->mutex);
     return;
   }
   int rc = sqlite3_prepare_v2(s->conn->conn, ctx->sql, -1, &s->stmt, NULL);
@@ -1597,7 +1540,6 @@ static void db_prepare_work_cb(uv_work_t* req) {
     snprintf(ctx->err, sizeof(ctx->err), "%s", sqlite3_errmsg(s->conn->conn));
     s->stmt = NULL;
   }
-  uv_mutex_unlock(&s->conn->mutex);
 }
 
 /* Finalize a not-yet-handed-over statement and take it off the connection's
@@ -1626,9 +1568,7 @@ static void db_prepare_after_cb(uv_work_t* req, int status) {
       prepare_discard(s);
     } else {
       /* Prepared but nowhere to hand it: finalize so nothing leaks. */
-      uv_mutex_lock(&s->conn->mutex);
       prepare_discard(s);
-      uv_mutex_unlock(&s->conn->mutex);
     }
     lunet_free_nonnull(ctx->sql);
     lunet_free_nonnull(ctx);
@@ -1643,9 +1583,7 @@ static void db_prepare_after_cb(uv_work_t* req, int status) {
   lunet_valref_release(L, ctx->ud_ref);
 
   if (ctx->err[0] != '\0') {
-    uv_mutex_lock(&s->conn->mutex);
     prepare_discard(s);
-    uv_mutex_unlock(&s->conn->mutex);
     lua_pop(L, 1);
     lua_pushnil(co);
     lua_pushstring(co, ctx->err);
@@ -1704,7 +1642,6 @@ int lunet_db_prepare(lua_State* L) {
      * inline statement semantics — and giving write SQL a loud rejection
      * at prepare time instead of a step-time failure on first execution. */
     char err[256] = "";
-    uv_mutex_lock(&wrapper->mutex);
     int rc = sqlite3_prepare_v2(wrapper->conn, sql, -1, &s->stmt, NULL);
     if (rc != SQLITE_OK) {
       snprintf(err, sizeof(err), "%s", sqlite3_errmsg(wrapper->conn));
@@ -1715,7 +1652,6 @@ int lunet_db_prepare(lua_State* L) {
       snprintf(err, sizeof(err),
                "write statement rejected on the read-only connection");
     }
-    uv_mutex_unlock(&wrapper->mutex);
     if (err[0] != '\0') {
       s->closed = 1;
       conn_untrack_stmt(wrapper, s);

@@ -25,10 +25,8 @@ SQLite 驱动。可以直接 `require("lunet.sqlite3")` 发布压缩包中的预
 
 | 函数 | 说明 |
 |---|---|
-| `open(config)` | `{ path = "app.db" }`，可选 `create = "WAL"\|"NORMAL"` 与透传设置（`busy_timeout` 毫秒、`foreign_keys` 布尔、`synchronous` "OFF"\|"NORMAL"\|"FULL"）；按路径字符串**缓存** `(rw, ro)` 对——`:memory:` 永不缓存 |
-| `open_raw(config)` | 与 `open` 相同的配置，但总是打开全新一对；完全绕过缓存 |
-| `destroy(path)` | 关闭某路径的两个缓存句柄并清除缓存项；无缓存项时是 no-op |
-| `close(conn)` | 关闭单个句柄（`open_raw` 的生命周期） |
+| `open(config)` | `{ path = "app.db" }`，可选 `create = "WAL"\|"NORMAL"` 与透传设置（`busy_timeout` 毫秒、`foreign_keys` 布尔、`synchronous` "OFF"\|"NORMAL"\|"FULL"） |
+| `close(conn)` | 关闭单个句柄 |
 | `query(conn, sql, ...)` | 返回行表数组 |
 | `exec(conn, sql, ...)` | 返回 `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | 与上述行为一致 |
@@ -36,8 +34,7 @@ SQLite 驱动。可以直接 `require("lunet.sqlite3")` 发布压缩包中的预
 
 职责的拆分：二进制模块（`lunet.sqlite3core`）只管异步 I/O——一次 worker 跳
 的 open 返回 `(rw, ro, err)`，`rw` 上的语句派发到 uv worker 池，`ro` 上的语
-句在循环线程内联执行。Lua 加载器只管策略——按路径的句柄缓存、`open_raw`、
-`destroy`。谁也不插手对方的活；Lua 缓存碰不到 C 栈，C 核也长不出缓存策略。
+
 所有调用必须在 `lunet.spawn` 出的协程里。
 
 ## open 契约
@@ -70,7 +67,7 @@ local rw, ro, err = db.open({
 
 -- 4. 单元测试：把路径换成 :memory:，同样的代码形状照跑。
 --    驱动返回一个连接充当两个句柄；create= 被忽略；那里的 ro 不强制
---    只读。:memory: 永不缓存——每次 open 都是全新私有数据库。
+--    只读。每次 open 都是全新私有数据库。
 local rw, ro, err = db.open({ path = ":memory:" })
 ```
 
@@ -98,11 +95,12 @@ lunet.spawn(function()
   -- 不经过 worker，不发生 yield。
   local rows = assert(db.query(ro, "SELECT * FROM t"))
 
-  db.destroy("app.db")
+  db.close(rw)
+  db.close(ro)
 end)
 ```
 
-- `rw` —— 读写连接：单写者、每连接互斥锁、语句派发到 uv worker 池。它也
+- `rw` —— 读写连接：单专用 worker、语句派发到 uv worker 池。它也
   能读：它就是那个通用连接，而且是唯一能写的。
 - `ro` —— 以 `SQLITE_OPEN_READONLY` 打开的第二个连接，用于读流量。**其上
   的 `query`/`exec` 在循环线程内联执行——没有后台线程，也不发生 yield。**
@@ -110,13 +108,11 @@ end)
   （大扫描、冷页缓存）会让所有协程、socket 和定时器停摆其执行时长。如果
   不想要内联读句柄，按约定丢弃它——`local rw, _ = db.open({ path =
   "app.db" })`（`_` 只是 Lua 惯例，不是语言特性；ro 连接仍存在，直到
-  `destroy(path)`，代价只是一个文件描述符）。
+  丢弃即可）。
 - **失败形态：** 打开失败时两个句柄均为 `nil`，错误是第三个返回值 ——
   `local rw, ro, err = db.open(...)`。这是 sqlite3 驱动特有的形态：网络驱动
   仍保持 `(conn, err)`。
-- **句柄生命周期：** `open` 出来的句柄经 `destroy(path)` 一起关闭（缓存项
-  同时清除）；`open_raw` 出来的句柄逐个经 `close` 关闭。用 `close` 关缓存句
-  柄会在缓存里留下一对死句柄——不要那样做。
+- **句柄生命周期：** 句柄逐个经 `close` 关闭。
 - 忽略 `ro`、只使用 `rw` 的消费者，行为与从前的单连接一致。
 - **路由是消费者在构建期拥有的正确性。** 没有读写语句标记，也没有派发机制。
   误路由到 `ro` 的写语句在 `prepare` 阶段成功（廉价解析，不加锁），在 `step`
@@ -148,8 +144,7 @@ end)
 上排在写后面。如果你发现延迟不理想，先检查读走的是哪个句柄。
 
 本驱动**有意不提供池化**。单写路径就是设计本身：想更快，就把读交给 `ro`
-——永远不要靠加宽池。`open`/`open_raw`/`destroy` 三件套的存在，是让正确的
-形状同时也是轻松的形状：每路径只开一次（缓存），从 `ro` 读，用完 `destroy`。
+——永远不要靠加宽池。
 
 ## 事务
 
@@ -168,7 +163,7 @@ local ok, err = tx.transaction(rw, function(t)
     return true
 end, "IMMEDIATE")
 
-if not ok and err.poisoned then db.destroy(path) end
+if not ok and err.poisoned then db.close(rw) end
 ```
 
 返回非 nil 值即提交；返回 `nil, reason` 或抛出错误则回滚。完整约定见
@@ -218,8 +213,6 @@ stmt:close()                        -- 立即 finalize，或交给 GC
    进入 worker 池；在只读句柄上准备的语句内联执行，与该句柄的语义一致。
 - **只读句柄上的写 SQL 会在 prepare 阶段就被大声拒绝**——比误路由的普通
   exec 在步进阶段才失败要早得多。
-- **忙（busy）纪律：** 一条语句同时只允许一个在途调用。对同一语句的第二个
-  并发调用会以 `statement is busy` 大声失败，而不是破坏中间状态。
 - `stmt:close()` finalize 厂商语句；之后使用会大声报错。未 `close` 就丢弃的
   语句由 finalizer 兜底 finalize。
 - 连接关闭时其上仍然打开的语句是安全的：所有打开的语句都随之 finalize，

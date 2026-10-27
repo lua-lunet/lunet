@@ -1,19 +1,16 @@
 ---@meta
 
 ---@class sqlite3
----SQLite driver with the path-keyed handle cache. The binary module
----(lunet.sqlite3core) owns the async I/O; this loader owns the policy:
----open() caches the (rw, ro) pair keyed on the path string, destroy(path)
----closes both and clears the entry, open_raw() bypasses the cache. See
----ext/sqlite3/SQLITE.md.
+---SQLite driver. The binary module (lunet.sqlite3core) owns the async I/O;
+---open() returns the fresh (rw, ro, err) pair. See ext/sqlite3/SQLITE.md.
 local db = {}
 
----Convenience open: returns the cached (rw, ro) pair for this path if one
----exists, otherwise opens a fresh pair and caches it.
+---Open a fresh (rw, ro, err) pair. Handles are closed per-handle via
+---close().
 ---params:
 ---  path          string  database file; ":memory:" opens a fresh private
----                        in-memory database (never cached; ro is the same
----                        connection and does not enforce read-only)
+---                        in-memory database (ro is the same connection and
+---                        does not enforce read-only)
 ---  create        string  "WAL" create the file and set journal_mode=WAL;
 ---                        "NORMAL" create the file, leave the journal mode
 ---                        at the SQLite default. Without create= the file
@@ -35,22 +32,7 @@ local db = {}
 ---@return string|nil err Error message if failed (third return, sqlite3-specific shape)
 function db.open(params) end
 
----Raw open: always opens a fresh (rw, ro, err) pair, bypassing the cache.
----The caller owns the lifetimes and closes each handle with close().
----Takes the same params table as open(); ":memory:" returns the same
----connection as both handles.
----@param params table Connection parameters
----@return lightuserdata|nil rw Read-write connection, nil on error
----@return lightuserdata|nil ro Read-only connection; nil on error
----@return string|nil err Error message if failed
-function db.open_raw(params) end
-
----Close both cached handles for a path and clear the cache entry. No-op
----when there is no entry.
----@param path string The path the handles were opened with
-function db.destroy(path) end
-
----Close a single handle (the open_raw lifetime)
+---Close a single handle.
 ---@param conn lightuserdata The connection to close
 ---@return string|nil error Error message if failed
 function db.close(conn) end
@@ -92,8 +74,7 @@ function db.exec_params(conn, sql, params) end
 ---@class sqlite3_stmt
 ---A reusable prepared statement bound to one connection: prepare once,
 ---then query/exec per call (the driver resets and rebinds the vendor
----statement each call), then close. A second call while one is in flight
----fails with "statement is busy". Closing the owning connection closes
+---statement each call), then close. Closing the owning connection closes
 ---every statement still open on it. See ext/sqlite3/SQLITE.md,
 ---"Prepared statements".
 local stmt = {} -- luacheck: ignore

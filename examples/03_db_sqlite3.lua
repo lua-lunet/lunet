@@ -148,25 +148,6 @@ lunet.spawn(function()
     db.close(rw)
     db.close(ro)
 
-    -- The convenience open caches the pair keyed on the path: a second
-    -- open of the same file returns the SAME handles, destroy(path)
-    -- closes both and clears the entry, open_raw always opens fresh.
-    -- See ext/sqlite3/SQLITE.md.
-    print()
-    print("Cached open + destroy(path) + open_raw...")
-    local cw1, co1, cerr = db.open({ path = DB_PATH })
-    assert(cw1 and co1 and not cerr, "cached open failed: " .. tostring(cerr))
-    local cw2, co2 = db.open({ path = DB_PATH })
-    assert(cw1 == cw2 and co1 == co2, "repeat open must return the same pair")
-    local raw1, raw2, rerr = db.open_raw({ path = DB_PATH })
-    assert(raw1 and raw2 and not rerr, "open_raw failed: " .. tostring(rerr))
-    assert(raw1 ~= cw1, "open_raw must not return cached handles")
-    db.destroy(DB_PATH)
-    local cw3 = db.open({ path = DB_PATH })
-    assert(cw3 ~= nil and cw3 ~= cw1, "post-destroy open must be a fresh pair")
-    print("  same pair on repeat open; open_raw fresh; destroy clears")
-    db.destroy(DB_PATH)
-
     os.remove(DB_PATH)
     os.remove(DB_PATH .. "-wal")
     os.remove(DB_PATH .. "-shm")

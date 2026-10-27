@@ -1082,6 +1082,9 @@ task("smoke")
         -- Prepared statements: prepare once, reset + rebind per call,
         -- ro write rejection at prepare, busy discipline, close order.
         os.execv(runner, {"test/smoke_sqlite3_prepare.lua"})
+        -- The ownership contract: inline ro, rw worker FIFO, distinct
+        -- results for concurrent same-name callers, close drain.
+        os.execv(runner, {"test/smoke_sqlite3_contract.lua"})
 
         local mysql_modules = os.files("build/**/release/lunet/mysql.*")
         if #mysql_modules > 0 then

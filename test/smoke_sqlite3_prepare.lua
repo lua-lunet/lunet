@@ -1,14 +1,15 @@
--- Smoke test for the lunet.sqlite3 prepared statements
+-- Smoke test for the lunet.sqlite3 named statements
 --
 -- Run after the driver build:
 --   "$(find build -path '*/release/lunet-run' -type f | head -1)" test/smoke_sqlite3_prepare.lua
 --
--- Covers: prepare → exec with params twice (values differ — the reset +
--- clear-bindings discipline is proven by the second run), query with
--- params, write rejection on the read-only handle at PREPARE time, the
--- busy error on a second concurrent call, loud use-after-close, and GC
--- safety (a dropped statement finalizes without crashing). Files live
--- under .tmp/ so a run never litters the repo root.
+-- Covers: prepare on the rw inventory → exec with params twice (the
+-- snapshot + reset + rebind discipline is proven by the second run),
+-- query with params, the FIFO queue under concurrent same-name callers
+-- (distinct results, never a busy error — the reversed mistake of the old
+-- design), route rejections on the ro handle, loud use-after-close, GC
+-- safety, and close-ordering statements. Files live under .tmp/ so a run
+-- never litters the repo root.
 
 local lunet = require("lunet")
 local db = require("lunet.sqlite3")
@@ -28,25 +29,31 @@ end
 
 local DB_PATH = ".tmp/smoke_prepare.db"
 
-os.execute("mkdir -p .tmp")
-os.remove(DB_PATH); os.remove(DB_PATH .. "-wal"); os.remove(DB_PATH .. "-shm")
+local function clean(p)
+    os.remove(p); os.remove(p .. "-wal"); os.remove(p .. "-shm"); os.remove(p .. "-journal")
+end
 
+os.execute("mkdir -p .tmp")
+clean(DB_PATH)
+
+local rw, ro, err
 lunet.spawn(function()
-    local rw, ro = db.open({ path = DB_PATH, create = "WAL" })
-    check(rw and ro, "open succeeds")
+    rw, ro, err = db.open({ path = DB_PATH, create = "WAL" })
+    check(rw and ro and not err, "open succeeds")
     if not rw then
         print(string.format("\n%d checks, %d failures", steps, failures))
         __lunet_exit_code = 1
         return
     end
 
-    local _, err = db.exec(rw, "CREATE TABLE t (name TEXT, n INTEGER)")
-    check(err == nil, "table created")
+    local _, cerr = db.exec(rw, "CREATE TABLE t (name TEXT, n INTEGER)")
+    check(not cerr, "table created")
     local rows = db.query(rw, "SELECT COUNT(*) AS n FROM t")
     check(rows and rows[1] and rows[1].n == 0, "table is empty")
 
-    -- 1. Prepare a write, exec with params twice: different values must
-    --    land — proves reset + clear-bindings between calls.
+    -- 1. Prepare a write on the inventory, exec with params twice:
+    --    different values must land — snapshot + reset + rebind between
+    --    calls.
     local ins, perr = db.prepare(rw, "INSERT INTO t (name, n) VALUES (?, ?)")
     check(ins and not perr, "prepare insert succeeds")
     if ins then
@@ -69,67 +76,49 @@ lunet.spawn(function()
         local q2, qe2 = sel:query("second")
         check(q2 and not qe2 and q2[1] and q2[1].n == 2, "second query with params returns the other row")
         local q3 = sel:query("missing")
-        check(q3 and q3[1] == nil, "query with unbound match returns no rows")
+        check(q3 and q3[1] == nil, "query with an unbound match returns no rows")
     end
 
-    -- 3. Write rejection on the read-only handle happens at PREPARE.
+    -- 3. Routing: the ro handle cannot prepare or exec; a read goes
+    --    through query_ro inline.
     local wstmt, werr = db.prepare(ro, "INSERT INTO t (name, n) VALUES (?, ?)")
-    check(not wstmt and type(werr) == "string", "write SQL on ro fails loudly at prepare (" .. tostring(werr) .. ")")
-    -- A read on ro prepares and queries fine.
-    local rsel, rerr = db.prepare(ro, "SELECT name FROM t WHERE n = ?")
-    check(rsel and not rerr, "read SQL on ro prepares")
-    if rsel then
-        local q, qe = rsel:query(2)
-        check(q and q[1] and q[1].name == "second" and not qe, "read statement executes on ro")
-        rsel:close()
-    end
+    check(not wstmt and type(werr) == "table" and werr.op == "route",
+        "prepare on ro is a route violation (" .. tostring(werr and werr.message) .. ")")
+    local _, ro_exec_err = db.query_ro(ro, "INSERT INTO t (name, n) VALUES ('x', 9)")
+    check(ro_exec_err ~= nil and ro_exec_err.code == 8,
+        "a write sent to the ro connection through query_ro reports SQLITE_READONLY")
 
-    -- 4. Busy: a second call while one is in flight fails loudly, not
-    --    silently. Two spawned coroutines: the first yields into the
-    --    worker hop; the second then hits the busy flag on the loop
-    --    thread before the first can land.
-    local landed = 0
-    local first_err = nil
-    local busy_err = nil
-    local reuse_err = nil
+    -- 4. Concurrent same-name callers queue: two spawned coroutines, both
+    --    exec through ins, BOTH land with their own bound values. The old
+    --    design failed with 'statement is busy'; the new design queues.
+    local landed_first, landed_second = nil, nil
     if ins then
         lunet.spawn(function()
             local _, e = ins:exec("concurrent", 3)
-            first_err = e
-            landed = landed + 1
+            landed_first = (e == nil)
         end)
         lunet.spawn(function()
-            -- Runs while the first exec is still in flight: the entry
-            -- point sees the busy flag on the loop thread and returns the
-            -- loud error without yielding.
             local _, e = ins:exec("overlapping", 4)
-            busy_err = e
-            -- Yield the loop thread once so the in-flight exec lands and
-            -- its after callback clears the busy flag, then reuse.
-            db.query(rw, "SELECT 1")
-            local _, e2 = ins:exec("third", 5)
-            reuse_err = e2
-            landed = landed + 1
+            landed_second = (e == nil)
         end)
+        local guard = 0
+        while (landed_first == nil or landed_second == nil) and guard < 2000 do
+            guard = guard + 1
+            db.query(rw, "SELECT 1")
+        end
+        check(landed_first and landed_second,
+            "two concurrent same-name callers both land (FIFO queue, no busy errors)")
+        rows = db.query(rw, "SELECT n FROM t WHERE name = 'concurrent'")
+        check(rows and rows[1] and rows[1].n == 3, "the first caller's snapshot landed")
+        rows = db.query(rw, "SELECT n FROM t WHERE name = 'overlapping'")
+        check(rows and rows[1] and rows[1].n == 4, "the second caller's snapshot landed")
     end
-    -- Pump the loop until both coroutines have landed.
-    local guard = 0
-    while landed < 2 and guard < 1000 do
-        guard = guard + 1
-        db.query(rw, "SELECT 1")
-    end
-    check(busy_err == "statement is busy",
-        "second concurrent call fails loudly with 'statement is busy' (got " .. tostring(busy_err) .. ")")
-    check(first_err == nil, "the in-flight exec landed cleanly")
-    check(reuse_err == nil, "statement usable again after the in-flight call lands")
-    rows = db.query(rw, "SELECT name, n FROM t ORDER BY rowid")
-    check(rows and #rows == 4, "exactly four rows landed (got " .. tostring(rows and #rows) .. ")")
 
     -- 5. stmt:close() then use = loud error.
     if ins then
         check(ins:close() == nil, "stmt:close succeeds")
-        local _, cerr = ins:exec("nope", 6)
-        check(cerr ~= nil, "use after close fails loudly (" .. tostring(cerr) .. ")")
+        local _, close_err = ins:exec("nope", 6)
+        check(close_err ~= nil, "use after close fails loudly (" .. tostring(close_err and close_err.message) .. ")")
         check(ins:close() == nil, "closing a closed statement is a no-op")
     end
 
@@ -160,11 +149,12 @@ lunet.spawn(function()
     db.close(ro)
     if alive then
         local _, aerr = alive:query("first")
-        check(aerr ~= nil, "statement severed by connection close fails loudly (" .. tostring(aerr) .. ")")
+        check(aerr ~= nil, "statement severed by connection close fails loudly ("
+              .. tostring(aerr and aerr.message) .. ")")
         check(alive:close() == nil, "closing a severed statement is a no-op")
     end
 
-    os.remove(DB_PATH); os.remove(DB_PATH .. "-wal"); os.remove(DB_PATH .. "-shm")
+    clean(DB_PATH)
 
     print(string.format("\n%d checks, %d failures", steps, failures))
     __lunet_exit_code = failures > 0 and 1 or 0

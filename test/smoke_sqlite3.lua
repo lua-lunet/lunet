@@ -9,20 +9,20 @@ local function test_sqlite3()
 
     -- Test 1: Open in-memory database (raw: the smoke manages lifetimes)
     print("1. Opening in-memory database...")
-    local conn, ro, err = db.open_raw({path = ":memory:"})
+    local conn, ro, err = db.open({ path = ":memory:" })
     if not conn then
-        print("FAIL: Could not open database: " .. tostring(err))
+        print("FAIL: Could not open database: " .. (err and err.message or tostring(err)))
         __lunet_exit_code = 1
         return
     end
-    print("   OK: Database opened (one connection returned as rw and ro)")
+    print("   OK: Database opened (one physical connection behind both logical paths)")
 
     local _, rows
     -- Test 2: Create table
     print("2. Creating table...")
     _, err = db.exec(conn, "CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)")
     if err then
-        print("FAIL: Could not create table: " .. tostring(err))
+        print("FAIL: Could not create table: " .. (err and err.message or tostring(err)))
         __lunet_exit_code = 1
         return
     end
@@ -32,7 +32,7 @@ local function test_sqlite3()
     print("3. Inserting data...")
     _, err = db.exec(conn, "INSERT INTO test (name) VALUES ('hello')")
     if err then
-        print("FAIL: Could not insert: " .. tostring(err))
+        print("FAIL: Could not insert: " .. (err and err.message or tostring(err)))
         __lunet_exit_code = 1
         return
     end
@@ -42,7 +42,7 @@ local function test_sqlite3()
     print("4. Querying data...")
     rows, err = db.query(conn, "SELECT * FROM test")
     if err then
-        print("FAIL: Could not query: " .. tostring(err))
+        print("FAIL: Could not query: " .. (err and err.message or tostring(err)))
         __lunet_exit_code = 1
         return
     end
@@ -53,12 +53,12 @@ local function test_sqlite3()
     end
     print("   OK: Query returned expected data")
 
-    -- Test 4b: the ro handle sees rw's writes — on :memory: both handles
-    -- are the same connection (unit-test swap semantics).
+    -- Test 4b: the ro logical path sees rw's writes — on :memory: both
+    -- paths alias one physical connection serialized through its owner.
     print("4b. Querying through the ro handle...")
-    rows, err = db.query(ro, "SELECT * FROM test")
+    rows, err = db.query_ro(ro, "SELECT * FROM test")
     if err then
-        print("FAIL: Could not query via ro: " .. tostring(err))
+        print("FAIL: Could not query via ro: " .. (err and err.message or tostring(err)))
         __lunet_exit_code = 1
         return
     end
@@ -71,9 +71,9 @@ local function test_sqlite3()
 
     -- Test 5: Parameterized query
     print("5. Parameterized query...")
-    rows, err = db.query_params(conn, "SELECT * FROM test WHERE name = ?", "hello")
+    rows, err = db.query_params(conn, "SELECT * FROM test WHERE name = ?", { "hello" })
     if err then
-        print("FAIL: Could not run parameterized query: " .. tostring(err))
+        print("FAIL: Could not run parameterized query: " .. (err and err.message or tostring(err)))
         __lunet_exit_code = 1
         return
     end

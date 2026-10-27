@@ -142,7 +142,7 @@ function M.transaction(conn, fn, mode)
 
     local began, berr = native.exec(conn, "BEGIN " .. mode)
     if not began then
-        return nil, mkerr(berr or "BEGIN failed", true)
+        return nil, mkerr(berr and text(berr) or "BEGIN failed", true)
     end
 
     local tx = {}
@@ -173,7 +173,7 @@ function M.transaction(conn, fn, mode)
     if ok and r1 ~= nil then
         local committed, cerr = native.exec(conn, "COMMIT")
         if not committed then
-            return nil, mkerr(cerr or "COMMIT failed", true)
+            return nil, mkerr(cerr and text(cerr) or "COMMIT failed", true)
         end
         return r1, r2
     end
@@ -181,11 +181,12 @@ function M.transaction(conn, fn, mode)
     -- Abort path: fn raised, or returned nil to signal rollback.
     local rolled, rerr = native.exec(conn, "ROLLBACK")
     local poisoned = not rolled
+    if rerr ~= nil then rerr = text(rerr) end
 
     local message
     if not ok then
         if type(r1) == "table" and r1[TX_ERR] ~= nil then
-            message = r1[TX_ERR]
+            message = text(r1[TX_ERR])
         else
             message = text(r1)
         end

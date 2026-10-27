@@ -34,12 +34,11 @@ end
 
 lunet.spawn(function()
     local path = os.tmpname() .. ".db"
-    -- the cached convenience open: the smoke closes via destroy(path).
-    -- The tmpname file does not exist, so create it — NORMAL leaves the
+    -- The tmpname file does not exist, so create it -- NORMAL leaves the
     -- journal mode alone and produces no -wal/-shm side files.
-    local conn, _, err = db.open({ path = path, create = "NORMAL" })
+    local conn, ro_side, err = db.open({ path = path, create = "NORMAL" })
     if not conn then
-        print("cannot open sqlite db: " .. tostring(err))
+        print("cannot open sqlite db: " .. (err and err.message or tostring(err)))
         os.exit(1)
     end
 
@@ -125,7 +124,8 @@ lunet.spawn(function()
     print("\n=== connection still usable after all that ===")
     check(count("/src") == 1, "connection works after aborted transactions")
 
-    db.destroy(path)
+    db.close(conn)
+    db.close(ro_side)
     os.remove(path)
 
     print(string.format("\n%d checks, %d failures", steps, failures))

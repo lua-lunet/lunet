@@ -1,5 +1,5 @@
 --[[
-SQLite3 Prepared Statement Demo for lunet
+SQLite3 Named-Statement Inventory Demo for lunet
 
 Prerequisites:
   Build core + sqlite3 driver:
@@ -11,11 +11,13 @@ Usage:
   LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1)
   "$LUNET_BIN" examples/10_db_prepared.lua
 
-Demonstrates the explicit prepared-statement API: a static table of the
-queries this application issues, prepared once at open, executed per
-request with fresh bound parameters, closed at shutdown.
+Demonstrates the startup inventory: the named statements this application
+issues are declared in one table, prepared once on the rw worker before
+serving, executed per request with fresh bound parameters (each call
+snapshots its own parameters), and closed through the FIFO at shutdown.
+Short point reads run inline on the ro handle instead.
 
-Whether prepared statements are worth it: for a trivial statement the
+Whether named statements are worth it: for a trivial statement the
 per-call prepare is unmeasurable; for a complex or expensive statement
 issued at high rate it can matter. Read the SQLite documentation and
 decide for your own workload — there is no magic.
@@ -27,24 +29,15 @@ local db = require("lunet.sqlite3")
 local DB_PATH = ".tmp/10_db_prepared_demo.db"
 
 -- The application's statement inventory, declared once at the top:
--- this is the whole point of the explicit API — the queries are visible
--- in one place and prepared exactly where the connection opens.
-local QUERIES = {
-    create_users = [[
-        CREATE TABLE users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            age INTEGER
-        )
-    ]],
+-- the statements are visible in one place and prepared on the rw owner
+-- before the application serves any request.
+local INVENTORY = {
     insert_user = "INSERT INTO users (name, age) VALUES (?, ?)",
-    list_users = "SELECT id, name, age FROM users ORDER BY id",
     users_older_than = "SELECT id, name FROM users WHERE age > ? ORDER BY age",
-    update_age = "UPDATE users SET age = ? WHERE name = ?",
 }
 
 lunet.spawn(function()
-    print("=== SQLite3 Prepared Statement Demo ===")
+    print("=== SQLite3 Named-Statement Inventory Demo ===")
     print()
 
     os.execute("mkdir -p .tmp")
@@ -54,73 +47,94 @@ lunet.spawn(function()
 
     local rw, ro, err = db.open({ path = DB_PATH, create = "WAL" })
     if not rw then
-        error("Failed to open database: " .. tostring(err))
+        error("Failed to open database: " .. (err and err.message or tostring(err)))
     end
     print("Opened " .. DB_PATH)
 
-    -- Prepare-at-open. Schema setup is a one-off: plain exec is right for it.
-    local _, cerr = db.exec(rw, QUERIES.create_users)
-    assert(not cerr, "create failed: " .. tostring(cerr))
+    -- Schema setup is a one-off ad-hoc statement: plain exec is right.
+    local _, cerr = db.exec(rw, [[
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            age INTEGER
+        )
+    ]])
+    assert(not cerr, "create failed: " .. (cerr and cerr.message or tostring(cerr)))
 
-    -- Statements bound to rw ride the worker pool; the insert is prepared
-    -- once and executed per user with fresh parameters.
-    local ins, perr = db.prepare(rw, QUERIES.insert_user)
-    assert(ins, "prepare insert failed: " .. tostring(perr))
+    -- Prepare the inventory BEFORE serving. Each prepare waits for the
+    -- rw worker to compile the SQL on the owner thread.
+    local stmts = {}
+    for name, sql in pairs(INVENTORY) do
+        local stmt, perr = db.prepare(rw, sql)
+        assert(stmt, "prepare " .. name .. " failed: " .. (perr and perr.message or tostring(perr)))
+        stmts[name] = stmt
+    end
+    print("Inventory prepared on the rw worker")
 
+    -- Named statements: every call snapshots its own parameters and the
+    -- worker rebinds the statement per call.
     local users = {
         { name = "Alice", age = 28 },
         { name = "Bob", age = 35 },
         { name = "O'Brien", age = 42 }
     }
     for _, user in ipairs(users) do
-        local result, xerr = ins:exec(user.name, user.age)
-        assert(not xerr, "insert failed: " .. tostring(xerr))
+        local result, xerr = stmts.insert_user:exec(user.name, user.age)
+        assert(not xerr, "insert failed: " .. (xerr and xerr.message or tostring(xerr)))
         print(("Inserted %s (id=%d)"):format(user.name, result.last_insert_id))
     end
 
-    -- A read statement on the read-only handle runs inline on the loop
-    -- thread, matching that handle's semantics.
-    local list, qerr = db.prepare(ro, QUERIES.list_users)
-    assert(list, "prepare list failed: " .. tostring(qerr))
-    local rows
-    rows, err = list:query()
-    assert(not err, "list failed: " .. tostring(err))
-    print()
-    print("All users via a prepared read:")
-    for _, row in ipairs(rows) do
-        print(("  [%d] %s age=%d"):format(row.id, row.name, row.age))
-    end
-
-    -- Reset discipline: the same statement, executed again with different
-    -- parameters, is the whole point of the API.
-    local older, oerr = db.prepare(ro, QUERIES.users_older_than)
-    assert(older, "prepare filter failed: " .. tostring(oerr))
+    -- A read through the same statement rides the same FIFO.
+    local rows, qerr
     for _, threshold in ipairs({ 30, 40 }) do
-        rows, err = older:query(threshold)
-        assert(not err, "filter failed: " .. tostring(err))
+        rows, qerr = stmts.users_older_than:query(threshold)
+        assert(rows, "filter failed: " .. (qerr and qerr.message or tostring(qerr)))
         print()
-        print(("Users older than %d:"):format(threshold))
+        print(("Users older than %d (named statement):"):format(threshold))
         for _, row in ipairs(rows) do
             print(("  %s"):format(row.name))
         end
     end
 
-    -- Write SQL prepared on the read-only handle is rejected loudly at
-    -- PREPARE time — earlier than the step-time failure of a mis-routed
-    -- plain exec.
+    -- The named statement reaches back to every committed row too.
+    rows, qerr = stmts.users_older_than:query(0)
+    assert(rows, "read failed: " .. (qerr and qerr.message or tostring(qerr)))
     print()
-    local _, werr = db.prepare(ro, QUERIES.update_age)
-    assert(werr, "write SQL on ro must fail at prepare")
-    print("Write SQL on ro rejected at prepare: " .. werr)
+    print("All users (same named statement, fresh parameters):")
+    for _, row in ipairs(rows) do
+        print(("  [%d] %s"):format(row.id, row.name))
+    end
 
-    assert(ins:close() == nil, "insert close failed")
-    assert(list:close() == nil, "list close failed")
-    assert(older:close() == nil, "filter close failed")
+    -- Short point reads do not need a statement: query_ro runs inline on
+    -- the loop thread with a transient statement per call.
+    print()
+    local points, rerr = db.query_ro(ro, "SELECT COUNT(*) AS n FROM users")
+    assert(points, "point read failed: " .. (rerr and rerr.message or tostring(rerr)))
+    print(("Point read on ro: %d users"):format(points[1].n))
+
+    -- Routing is the API: the ro handle cannot run the rw-only calls.
+    print()
+    local _, route_err = db.prepare(ro, "SELECT 1")
+    assert(route_err and route_err.op == "route", "prepare on ro must be a route violation")
+    print("prepare on ro rejected as a route violation: " .. route_err.message)
+    -- And a write sent to the ro connection through query_ro is SQLite's
+    -- own read-only rejection at step.
+    local _, werr = db.query_ro(ro, "INSERT INTO users (name, age) VALUES ('Mallory', 99)")
+    assert(werr and werr.code == 8, "write on ro must fail with SQLITE_READONLY")
+    print("write via query_ro on ro rejected: " .. werr.message)
+
+    -- Close the inventory one statement at a time; the closes go through
+    -- the same FIFO as the calls.
+    for name in pairs(stmts) do
+        assert(stmts[name]:close() == nil, "close " .. name .. " failed")
+    end
+    print()
+    print("Inventory closed")
 
     -- Use after close fails loudly.
-    local _, after_close_err = ins:exec("Nobody", 0)
+    local _, after_close_err = stmts.insert_user:exec("Nobody", 0)
     assert(after_close_err, "use after close must fail")
-    print("Use after close rejected: " .. after_close_err)
+    print("Use after close rejected: " .. after_close_err.message)
 
     db.close(rw)
     db.close(ro)

@@ -126,6 +126,12 @@ int lunet_db_exec(lua_State* L);
 int lunet_db_query_params(lua_State* L);
 int lunet_db_exec_params(lua_State* L);
 int lunet_db_prepare(lua_State* L);
+#if defined(LUNET_DB_SQLITE3)
+/* The inline read path is a sqlite3 ownership decision (`query_ro` runs on
+ * the loop thread); the other drivers keep table metadata on their own
+ * query call and do not register it. */
+int lunet_db_query_ro(lua_State* L);
+#endif
 
 static int lunet_open_db(lua_State *L) {
   luaL_Reg funcs[] = {{"open", lunet_db_open},
@@ -135,6 +141,9 @@ static int lunet_open_db(lua_State *L) {
                       {"query_params", lunet_db_query_params},
                       {"exec_params", lunet_db_exec_params},
                       {"prepare", lunet_db_prepare},
+#if defined(LUNET_DB_SQLITE3)
+                      {"query_ro", lunet_db_query_ro},
+#endif
                       {NULL, NULL}};
   luaL_newlib(L, funcs);
   return 1;
@@ -157,7 +166,8 @@ static void lunet_init_once(void) {
 // Driver-specific module entry points
 /* sqlite3 registers as lunet.sqlite3core: the public lunet.sqlite3 surface
  * is the Lua loader (ext/sqlite3/sqlite3.lua, shipped beside the binary)
- * which adds the path-keyed handle cache, open_raw, and destroy on top. */
+ * which passes the option surface through and adds the opt-in connect
+ * helper on top. */
 #if defined(LUNET_DB_SQLITE3)
 LUNET_API int luaopen_lunet_sqlite3core(lua_State *L) {
   lunet_init_once();

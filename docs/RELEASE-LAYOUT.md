@@ -22,7 +22,7 @@ lunet/                              # extension modules
   mysql.so                          #   (.dll on Windows)
   sqlite3.lua                       # sqlite3 loader (the binary registers
                                     #   as lunet.sqlite3core)
-  sqlite3_tx.lua / postgres_tx.lua  # DB transaction wrappers
+  postgres_tx.lua                  # DB transaction wrapper
   mysql_tx.lua
   http.lua                          # HTTP/1.1 request framing + responses,
                                     #   opt-in CORS (lunet.http)

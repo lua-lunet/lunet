@@ -7,50 +7,80 @@ describe("sqlite3 module #native", function()
 
   it("exports the driver surface", function()
     assert.are.equal("table", type(db))
-    for _, fn in ipairs({ "open", "open_raw", "destroy", "close", "query", "exec",
+    for _, fn in ipairs({ "open", "connect", "close", "query_ro", "query", "exec",
                           "query_params", "exec_params", "prepare" }) do
       assert.are.equal("function", type(db[fn]))
     end
   end)
 
-  it("requires calling open from a coroutine", function()
-    -- The driver guards on running inside the runtime's coroutines before
-    -- validating arguments; outside one it errors instead of returning.
+  -- open-style guards are raised before any yield or queue, so they
+  -- surface through a plain coroutine.resume.
+  local function open_error(params)
+    local co = coroutine.create(function()
+      return db.open(params)
+    end)
+    local resumed, err = coroutine.resume(co)
+    return resumed, err
+  end
+
+  local function connect_error(path, opts)
+    local co = coroutine.create(function()
+      return db.connect(path, opts)
+    end)
+    local resumed, err = coroutine.resume(co)
+    return resumed, err
+  end
+
+  it("requires calling open inside a coroutine", function()
     assert.has_error(function()
       db.open({ path = "sqlite3_spec_should_not_exist.db" })
     end)
   end)
 
-  it("requires calling open_raw from a coroutine", function()
-    assert.has_error(function()
-      db.open_raw({ path = "sqlite3_spec_should_not_exist.db" })
-    end)
-  end)
-
   it("requires a params table to open", function()
-    local co = coroutine.create(function()
-      return db.open("not-a-table")
-    end)
-    -- db.open raises (lua_error) rather than returning nil, err, so resume
-    -- reports the coroutine as failed with the message.
-    local resumed, err = coroutine.resume(co)
+    local resumed, err = open_error("not-a-table")
     assert.is_false(resumed)
     assert.is_truthy(err)
   end)
 
-  it("destroy on a never-opened path is a no-op", function()
-    -- destroy is the Lua loader's cache miss + close: with no cache entry
-    -- it touches no C function and needs no runtime.
-    assert.has_no_error(function()
-      db.destroy("sqlite3_spec_never_opened.db")
-    end)
+  it("rejects an unknown option name loudly", function()
+    local resumed, err = open_error({ path = "x.db", pool_size = 4 })
+    assert.is_false(resumed)
+    assert.matches("pool_size", tostring(err))
+  end)
+
+  it("rejects an invalid create value", function()
+    local resumed, err = open_error({ path = "x.db", create = "MAGIC" })
+    assert.is_false(resumed)
+    assert.matches("create", tostring(err))
+  end)
+
+  it("rejects an invalid synchronous value", function()
+    local resumed, err = open_error({ path = "x.db", synchronous = "TURBO" })
+    assert.is_false(resumed)
+    assert.matches("synchronous", tostring(err))
+  end)
+
+  it("rejects a negative busy_timeout", function()
+    local resumed, err = open_error({ path = "x.db", busy_timeout = -1 })
+    assert.is_false(resumed)
+    assert.matches("busy_timeout", tostring(err))
+  end)
+
+  it("rejects an invalid mutex value", function()
+    local resumed, err = open_error({ path = "x.db", mutex = "YESSIR" })
+    assert.is_false(resumed)
+    assert.matches("mutex", tostring(err))
+  end)
+
+  it("connect rejects an unknown option too", function()
+    local resumed, err = connect_error("x.db", { crash_on_error = true })
+    assert.is_false(resumed)
+    assert.matches("crash_on_error", tostring(err))
   end)
 
   describe("prepare validation", function()
     it("requires calling prepare from a coroutine", function()
-      -- The driver guards on running inside the runtime's coroutines
-      -- before validating arguments; outside one it errors instead of
-      -- returning.
       assert.has_error(function()
         db.prepare(nil, "SELECT 1")
       end)

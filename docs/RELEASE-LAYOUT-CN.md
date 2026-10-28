@@ -22,7 +22,7 @@ lunet/                              # 扩展模块
   mysql.so                          #   （Windows 上为 .dll）
   sqlite3.lua                       # sqlite3 加载器（二进制注册为
                                     #   lunet.sqlite3core）
-  sqlite3_tx.lua / postgres_tx.lua  # 数据库事务封装
+  postgres_tx.lua                  # 数据库事务封装
   mysql_tx.lua
   http.lua                          # HTTP/1.1 请求解析 + 响应构建、可选 CORS
                                     #   （lunet.http）

@@ -364,8 +364,7 @@ jobs:
         # and lunet.jsonic (no binary of its own).
         cp ext/security/security.lua "$DIST_DIR/lunet/"
         # DB transaction wrappers: one per driver, deliberately not shared.
-        cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
-           ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
+        cp ext/postgres/postgres_tx.lua ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
         # Documentation: copy every docs/*.md (and its -CN.md counterpart)
         # into the archive by default, excluding internal-only and
         # maintainer-only docs that are not meant for end users.
@@ -418,8 +417,7 @@ jobs:
         # and lunet.jsonic (no binary of its own).
         cp ext/security/security.lua "$DIST_DIR/lunet/"
         # DB transaction wrappers: one per driver, deliberately not shared.
-        cp ext/sqlite3/sqlite3_tx.lua ext/postgres/postgres_tx.lua \
-           ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
+        cp ext/postgres/postgres_tx.lua ext/mysql/mysql_tx.lua "$DIST_DIR/lunet/"
         # Documentation: copy every docs/*.md (and its -CN.md counterpart)
         # into the archive by default, excluding internal-only and
         # maintainer-only docs that are not meant for end users.
@@ -498,7 +496,7 @@ jobs:
         # and lunet.jsonic (no binary of its own).
         Copy-Item ext\security\security.lua (Join-Path $dist "lunet")
         # DB transaction wrappers: one per driver, deliberately not shared.
-        Copy-Item ext\sqlite3\sqlite3_tx.lua, ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
+        Copy-Item ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
         # Documentation: copy every docs\*.md (and its -CN.md counterpart)
         # into the archive by default, excluding internal-only and
         # maintainer-only docs that are not meant for end users.

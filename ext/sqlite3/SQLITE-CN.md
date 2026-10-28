@@ -1,252 +1,232 @@
 # `lunet.sqlite3`
 
-SQLite 驱动。可以直接 `require("lunet.sqlite3")` 发布压缩包中的预构建模块
-（`lunet/sqlite3.lua` + `lunet/sqlite3core.so`；压缩包布局见
-[docs/RELEASE-LAYOUT-CN.md](../docs/RELEASE-LAYOUT-CN.md)），也可以自己用
-`xmake build lunet-sqlite3` 构建。本页是完整参考：API、句柄生命周期，以及
-性能模型——这个形状背后的*为什么*。
+SQLite 驱动。可以直接 `require("lunet.sqlite3")` 使用发布包里预构建的模块（`lunet/sqlite3.lua` + `lunet/sqlite3core.so`；归档布局见 [docs/RELEASE-LAYOUT-CN.md](../docs/RELEASE-LAYOUT-CN.md)），也可以用 `xmake build lunet-sqlite3` 自行构建。本页是完整参考：API、两条所有权路径、open 契约与性能模型。
 
-占位符为 `?`。参数通过 `sqlite3_bind_*` 原生绑定，值永远不会被拼接进 SQL。
-本项目有意不提供 `db.escape`。
+占位符是 `?`。参数通过 `sqlite3_bind_*` 原生绑定，值永远不会拼接进 SQL。因此没有 `db.escape`。
 
-> ## 使用只读连接前必读
->
-> 在某些负载下，以 WAL 模式打开并把读交给只读连接（它**没有后台线程**，
-> 因此**有可能拖住主循环**）确实能拿到峰值性能。这笔交易是否成立，完全取
-> 决于你的负载和你链接的 SQLite 版本；注意事项很多。**依赖它之前，请先读
-> 懂 [SQLite 文档](https://sqlite.org/wal.html)。** 设置想设的任何参数——
-> 什么会生效取决于你的负载。
->
-> **有疑问就不要用只读连接，全部走读写连接。** 如果它停摆、阻塞或行为不
-> 符预期，那是没有读本警告的问题——驱动做的事与本文所写完全一致，不多不
-> 少。这里没有任何魔法。
+## 所有权与路由
 
-## 表面
+驱动有两条逻辑路径，各自只有一个所有者，应用决定工作放在哪条上：
+
+- **`ro` 归 Lunet 的单事件循环线程所有。** `query_ro(ro, sql, ...)` 同步、内联、不发生 yield。在这次调用进行期间，循环不可能同时执行另一个 `ro` 调用：其他协程只有等控制权交还调度器才会执行，在飞的多条请求绝不意味着这条连接上同时有两个 SQLite 调用在跑。每次调用都是*临时语句*：prepare、bind、step、收集、finalize——什么都不缓存。`ro` 只用于短、可测量的点读；重读会让循环在其执行期间停摆。这条路径刻意没有命名语句缓存，也没有语句池。
+- **`rw` 归一个专用后台 worker 线程所有。** 它处理写，以及对事件循环来说太重、应当在 SQLite 执行期间让出循环的读。调用 `rw` 会暂停调用协程；worker 完成操作后，运行时带着结果恢复该协程。整条 `rw` 连接上的工作按 FIFO 派发顺序串行执行。`rw` 连接只有一条，属主 worker 只有一个——没有连接池，也没有语句池。
+
+路由是显式的，绝不从 SQL 前缀推断：
+
+| 调用 | 连接 | 运行位置 |
+|---|---|---|
+| `query_ro(ro, sql, ...)` | `ro` | 事件循环线程内联 |
+| `query(rw, sql, ...)` | `rw` | 专用 worker，yield |
+| `exec(rw, sql, ...)` | `rw` | 专用 worker，yield |
+| `query_params` / `exec_params` | `rw` | 专用 worker，yield |
+| `prepare(rw, sql)` | `rw` | 专用 worker，yield |
+
+`rw` 同时也是通用连接——它也读。路由调用有警卫：用 `ro` 句柄调用
+`query`、`query_params`、`exec`、`exec_params` 与 `prepare` 会响亮地失败，
+返回一个路由错误表（`op` 为 `"route"`，消息指向 `query_ro`）——路由契约
+就是 API 本身，不是提示。而*经 `query_ro` 把写语句发往文件 `ro` 句柄*
+——真正在 `ro` 连接上运行的调用——则由 SQLite 自身在 step 阶段以其只读
+错误拒绝（`code = 8`，`SQLITE_READONLY`），绝不可能静默提交。`ro` 上的
+读看到的是读开始那一刻的已提交状态；一致性关键的读走 `rw`（那里每次
+调用都是一次全新读，且在写调用返回之后发出，所以是最新的）。
+
+SQLite 的互斥锁模式不建立 FIFO 调度，它替代不了这份所有权契约：它只决定 SQLite 如何与其自身的锁竞争。见 [互斥锁模式](#mutex-模式)。
+
+## Surface
 
 | 函数 | 说明 |
 |---|---|
-| `open(config)` | `{ path = "app.db" }`，可选 `create = "WAL"\|"NORMAL"` 与透传设置（`busy_timeout` 毫秒、`foreign_keys` 布尔、`synchronous` "OFF"\|"NORMAL"\|"FULL"）；按路径字符串**缓存** `(rw, ro)` 对——`:memory:` 永不缓存 |
-| `open_raw(config)` | 与 `open` 相同的配置，但总是打开全新一对；完全绕过缓存 |
-| `destroy(path)` | 关闭某路径的两个缓存句柄并清除缓存项；无缓存项时是 no-op |
-| `close(conn)` | 关闭单个句柄（`open_raw` 的生命周期） |
-| `query(conn, sql, ...)` | 返回行表数组 |
-| `exec(conn, sql, ...)` | 返回 `{ affected_rows, last_insert_id }` |
-| `query_params` / `exec_params` | 与上述行为一致 |
-| `prepare(conn, sql)` | 可复用的预处理语句；`stmt:query` / `stmt:exec` / `stmt:close`——见[预处理语句](#预处理语句prepared-statements) |
+| `open(config)` | 原始驱动 open；见 [open 契约](#open-契约)。成功返回 `(rw, ro, nil)`，失败 `(nil, nil, err)` |
+| `connect(path, opts)` | 可选的封装 helper：`synchronous = "NORMAL"` 默认值，调用方选项覆盖；见 [helper](#helper) |
+| `close(conn)` | `rw`：先排空已受理的工作，再关闭；`ro`：内联关闭 |
+| `query_ro(conn, sql, ...)` | 在 `ro` 上内联执行；每次调用一条临时语句 |
+| `query(conn, sql, ...)` | 返回行集，在 `rw` 上——写语句带 `RETURNING` 也用它 |
+| `exec(conn, sql, ...)` | `{ affected_rows, last_insert_id }`，在 `rw` 上 |
+| `query_params` / `exec_params` | 与上两个相同，但用显式绑定列表 |
+| `prepare(conn, sql)` | 供启动清单使用的命名语句；yield。`stmt:query` / `stmt:exec` / `stmt:close` ——见 [命名语句](#命名语句) |
 
-职责的拆分：二进制模块（`lunet.sqlite3core`）只管异步 I/O——一次 worker 跳
-的 open 返回 `(rw, ro, err)`，`rw` 上的语句派发到 uv worker 池，`ro` 上的语
-句在循环线程内联执行。Lua 加载器只管策略——按路径的句柄缓存、`open_raw`、
-`destroy`。谁也不插手对方的活；Lua 缓存碰不到 C 栈，C 核也长不出缓存策略。
-所有调用必须在 `lunet.spawn` 出的协程里。
+错误是 Lua 表——见 [错误](#错误)。
+
+所有调用都必须在用 `lunet.spawn` 派生的协程里执行。
 
 ## open 契约
 
 ```lua
 local db = require("lunet.sqlite3")
 
--- 1. 已由部署方准备好的既有数据库文件。驱动以读写方式打开它，且绝不
---    更改其日志模式。文件缺失是响亮的错误——准备（建文件、设 WAL）是
---    部署侧的动作：
+-- 1. 已存在、已预留的数据库文件。驱动以读写方式打开，且绝不碰它的日志模式。
+--    文件不存在是响亮的错误——预留（创建文件、设定 WAL）是部署动作：
 --      sqlite3 app.db "PRAGMA journal_mode=WAL;"
 local rw, ro, err = db.open({ path = "app.db" })
 
--- 2. 让驱动来建文件——模式在创建时声明：
+-- 2. 让驱动创建文件——模式在创建时声明：
 local rw, ro, err = db.open({ path = "app.db", create = "WAL" })
---    create = "WAL"    -> 建文件并设 journal_mode=WAL（检查 pragma 的返回
---                         值；文件系统承载不了 WAL 时 open 响亮失败）。
---    create = "NORMAL" -> 建文件，日志模式保持 SQLite 默认（回滚日志）。
---    不存在"取消 WAL"：WAL 对文件是持久的，驱动绝不会擅自更改既有文件
---    的模式。对既有文件传 create=WAL 会重发该 pragma（幂等）；
---    create=NORMAL 则对模式不做任何事。
+--    create = "WAL"    -> 创建文件、请求 WAL，并验证 SQLite 确实返回了 WAL
+--                         （无法承载 WAL 的文件系统会让 open 响亮失败）。
+--    create = "NORMAL" -> 创建文件，日志模式保持在 SQLite 默认值。
+--    create 省略       -> 文件必须已存在，且其日志模式不被改动。
+--    这里没有"撤销 WAL"：WAL 对文件是持久的，驱动绝不擅自改动既有文件的模式。
+--    对既有文件 create=WAL 会重新发出该 pragma（幂等）。
 
--- 3. 知情用户的透传设置，作用于 open 时的两个连接：
+-- 3. 透传项，应用到各自相关的连接上：
 local rw, ro, err = db.open({
     path = "app.db", create = "WAL",
-    busy_timeout = 3000,        -- 毫秒：每个连接的 busy handler
-    foreign_keys = true,        -- PRAGMA foreign_keys（厂商默认关）
-    synchronous  = "NORMAL",    -- 持久性权衡；绝不是驱动默认值
+    busy_timeout = 3000,        -- 毫秒：每个连接上的 busy handler
+    foreign_keys = true,        -- PRAGMA foreign_keys
+    synchronous  = "NORMAL",    -- 持久性取舍；见下面的 helper
 })
 
--- 4. 单元测试：把路径换成 :memory:，同样的代码形状照跑。
---    驱动返回一个连接充当两个句柄；create= 被忽略；那里的 ro 不强制
---    只读。:memory: 永不缓存——每次 open 都是全新私有数据库。
+-- 4. 单元测试：把 path 换成 :memory:，同样的代码形状就能跑。
+--    两条逻辑路径共用一个物理连接，访问经其所有者（rw worker）串行化。
+--    那里 ro 不强制只读——:memory: 是测试替身，不是文件级只读保证。
 local rw, ro, err = db.open({ path = ":memory:" })
 ```
 
-透传设置是每连接、后写者赢——open 之后可以独立调整任一句柄：
+```lua
+-- 5. 显式互斥锁模式（可选；默认不变）：
+local rw, ro, err = db.open({ path = "app.db", mutex = "nomutex" })
+```
+
+### mutex 模式
+
+`mutex` 选择打开的连接所用的线程模式：
+
+- 省略：SQLite 的编译配置默认——通常是 serialized 模式。什么都不变。
+- `mutex = "nomutex"`：SQLite 的 multi-thread 模式。这是**显式选择，声明调用方遵守单所有者、无非并发使用的契约**——在本驱动的所有权模型下（循环线程一个 `ro`，worker 一个 `rw`），每条连接同一时刻恰好只有一个属主，逐条调用中的互斥锁纯属开销。除非你确定要，否则保持默认。
+- `mutex = "fullmutex"`：SQLite 的 fully-serialized 模式，显式指定。
+
+互斥锁模式在打开时逐连接设置（`SQLITE_OPEN_NOMUTEX` / `SQLITE_OPEN_FULLMUTEX` 打开标志）；驱动绝不会替嵌入式运行时翻转进程级 SQLite 配置。
+
+### 未知选项
+
+未知选项名与非法值都会清晰明了地失败——它们是响亮的错误，绝不会被静默忽略。接受的选项集是：`path`、`create`、`busy_timeout`、`foreign_keys`、`synchronous`、`mutex`。
+
+失败的 open 不返回任何可用的一半句柄对，并释放它打开过的一切：两个句柄都是 `nil`，错误是第三个返回值。
+
+### helper
 
 ```lua
-db.exec(rw, "PRAGMA busy_timeout = 5000")  -- 只改 rw；ro 保持 open 时的值
+local db = assert(require("lunet.sqlite3"))
+local rw, ro, err = db.connect("app.db", { create = "WAL" })
+```
+
+`connect(path, opts)` 是面向应用的 `open` 封装：它从 `synchronous = "NORMAL"` 出发，然后把调用方选项复制覆盖到默认值上——调用方的显式值优先，其他受支持的选项原样透传。原始 `open` 绝不会取得 helper 的默认值；想要别的设置的驱动都是显式选择。
+
+透传项是逐连接的、以最后一次写为准——open 之后可以独立微调任一受控句柄：
+
+```lua
+db.exec(rw, "PRAGMA busy_timeout = 5000")  -- 只影响 rw；ro 保持 open 时的值
 ```
 
 ## 读与写
-
-`open` 返回两个连接：
 
 ```lua
 local db = require("lunet.sqlite3")
 
 lunet.spawn(function()
   local rw, ro, err = db.open({ path = "app.db", create = "WAL" })
-  if not rw then error(err) end
+  if not rw then error(err.message) end
 
-  -- 写入走 rw（照旧进入 worker 池）……
+  -- 写走 rw（专用 worker）……
   assert(db.exec(rw, "INSERT INTO t VALUES (?)", 1))
 
-  -- ……读取走 ro：在读句柄上语句在循环线程内联执行——
-  -- 不经过 worker，不发生 yield。
-  local rows = assert(db.query(ro, "SELECT * FROM t"))
+  -- ……短的点读走 ro：在循环线程内联，不 yield，每次调用一条临时语句。
+  local rows = assert(db.query_ro(ro, "SELECT * FROM t"))
 
-  db.destroy("app.db")
+  db.close(rw)   -- 排空已受理的 rw 工作，然后关闭
+  db.close(ro)
 end)
 ```
 
-- `rw` —— 读写连接：单写者、每连接互斥锁、语句派发到 uv worker 池。它也
-  能读：它就是那个通用连接，而且是唯一能写的。
-- `ro` —— 以 `SQLITE_OPEN_READONLY` 打开的第二个连接，用于读流量。**其上
-  的 `query`/`exec` 在循环线程内联执行——没有后台线程，也不发生 yield。**
-  WAL 模式下读者与写者互不阻塞，因此循环线程路径就是快路径；代价是重读
-  （大扫描、冷页缓存）会让所有协程、socket 和定时器停摆其执行时长。如果
-  不想要内联读句柄，按约定丢弃它——`local rw, _ = db.open({ path =
-  "app.db" })`（`_` 只是 Lua 惯例，不是语言特性；ro 连接仍存在，直到
-  `destroy(path)`，代价只是一个文件描述符）。
-- **失败形态：** 打开失败时两个句柄均为 `nil`，错误是第三个返回值 ——
-  `local rw, ro, err = db.open(...)`。这是 sqlite3 驱动特有的形态：网络驱动
-  仍保持 `(conn, err)`。
-- **句柄生命周期：** `open` 出来的句柄经 `destroy(path)` 一起关闭（缓存项
-  同时清除）；`open_raw` 出来的句柄逐个经 `close` 关闭。用 `close` 关缓存句
-  柄会在缓存里留下一对死句柄——不要那样做。
-- 忽略 `ro`、只使用 `rw` 的消费者，行为与从前的单连接一致。
-- **路由是消费者在构建期拥有的正确性。** 没有读写语句标记，也没有派发机制。
-  误路由到 `ro` 的写语句在 `prepare` 阶段成功（廉价解析，不加锁），在 `step`
-  阶段响亮失败并返回 `SQLITE_READONLY`（"attempt to write a readonly
-  database"）——绝不可能静默提交。`sqlite3_db_readonly(ro, "main")` 仍在底层
-  可用，供测试把不变量当一等断言使用。
-- **快照：** `ro` 上的读看到的是读开始那一刻的已提交状态。同一瞬间的
-  写后读在 `ro` 上是旧的；一致性关键的读走 `rw`（每次调用都是全新的读事
-  务，写调用返回之后发出的读必然是新的）。
+- `rw` ——读写连接：一个专用后台 worker 线程，FIFO 派发。它也是通用连接，也是唯一能写的。
+- `ro` ——以 `SQLITE_OPEN_READONLY` 打开的第二个连接，用于点读。若不想用它，`local rw, _ = db.open({ path = "app.db" })`（`_` 是 Lua 惯例，不是语言特性），所有调用都落在 `rw` 上。
 
-## 性能模型
+## 命名语句
 
-对一个固定 API、以 SQLite 为后端的 HTTP 服务所做的性能调优 ——
-[lua-lunet/twelve-dollar-server-challenge](https://github.com/lua-lunet/twelve-dollar-server-challenge)
-—— 得出了最优配置的形状，而本驱动就是那个形状：
-
-- **读写分离。** 一个连接独占写入；只读连接服务读流量。WAL 模式下读者与唯
-  一的写者互不阻塞，两条路径从不互相等待。
-- **写入走单线程。** SQLite 同一时刻只允许一个写者；更多的写连接买不到任
-  何东西，只会增加争用。
-- **只读连接上的并发读，在循环线程上执行。** 在 `SQLITE_OPEN_READONLY`
-  连接上做读是纯粹针对页缓存的 CPU 工作：把它内联执行——不经 worker 池、
-  不 yield、不跨线程交接——消除了读路径上最大的每请求开销。在那次调优中，
-  负载带内拆分方案的 p95 比把所有语句都挤进单个池化句柄快约 4 倍，且每种
-  配置下 `SQLITE_BUSY` 事件为零。
-
-要避免的失败模式：反过来的路由——把读多写少的负载全压到 `rw` 连接上——可
-能是次优的：每个读都要付出 worker 池的代价和跨线程交接，而且读要在同一连接
-上排在写后面。如果你发现延迟不理想，先检查读走的是哪个句柄。
-
-本驱动**有意不提供池化**。单写路径就是设计本身：想更快，就把读交给 `ro`
-——永远不要靠加宽池。`open`/`open_raw`/`destroy` 三件套的存在，是让正确的
-形状同时也是轻松的形状：每路径只开一次（缓存），从 `ro` 读，用完 `destroy`。
-
-## 事务
-
-使用 `lunet.sqlite3_tx`（`sqlite3_tx.lua`，与二进制一同发布）。
-事务请放在 `rw` 句柄上。
-
-```lua
-local sqlite = require("lunet.sqlite3")
-local tx = require("lunet.sqlite3_tx")
-
-local ok, err = tx.transaction(rw, function(t)
-    t.exec("DELETE FROM nodes WHERE path = ?", dst)
-    local r = t.exec("UPDATE nodes SET path=? WHERE path=? AND version=?",
-                     dst, src, version)
-    if r.affected_rows == 0 then return nil, "version conflict" end
-    return true
-end, "IMMEDIATE")
-
-if not ok and err.poisoned then db.destroy(path) end
-```
-
-返回非 nil 值即提交；返回 `nil, reason` 或抛出错误则回滚。完整约定见
-`sqlite3_tx.lua` 的头部注释。
-
-**最关键的规则：** 事务属于**连接**，而不属于协程。若连接池在每次调用后都把句柄
-归还，`BEGIN`、工作语句与 `COMMIT` 会落在不同句柄上，最终什么也没提交。
-`transaction()` 在整个工作单元期间持有同一个句柄——这正是它接收 `conn` 而不是
-配置表的原因。
-
-### 驱动特有事实
-
-- **任何涉及写入的场景都请传 `"IMMEDIATE"`。** 第三个参数是加锁模式。SQLite 默认
-  的 `DEFERRED` 在首条语句之前不加锁，因此另一个写者可能先抢到写锁，导致你的
-  `UPDATE` 在 `BEGIN` **已经成功之后**才以 `SQLITE_BUSY` 失败。`IMMEDIATE` 把这个
-  失败提前。`EXCLUSIVE` 还会阻塞读者。
-- 与 Postgres 不同，语句错误不会污染会话——SQLite 允许你在 `fn` 内捕获 `t.*` 的
-  错误后继续。这通常仍是错的，但不会导致后续语句全部失败。
-- **`query`/`exec` 会绑定参数。** 在 2026-07-25 之前并非如此：只有
-  `query_params`/`exec_params` 调用了 `collect_params`，因此
-  `db.exec(conn, "INSERT INTO t VALUES (?,?)", a, b)` 会让两个占位符都未绑定
-  （即 `NULL`）却报告成功。如果你改动 `sqlite3.c` 中的 `lunet_db_query` 或
-  `lunet_db_exec`，请保留 `collect_params` 调用——此处的回归是静默的数据丢失，
-  而不是崩溃。
-- **读写拆分需要文件路径。** 对 `":memory:"` 以 `SQLITE_OPEN_READONLY` 再开的
-  第二个连接是一个全新、空、私有的数据库——不是写者数据的读者。打算使用
-  `ro` 时请传文件路径；在 `:memory:` 上只用 `rw` 即可。
-
-## 预处理语句（Prepared statements）
-
-`prepare` 让厂商语句跨调用存活，而不是每次调用都重新解析加规划：SQL 只编译
-一次（`sqlite3_prepare_v2`），之后每次调用重置、重新绑定并步进。
+`prepare` 保持厂商语句存活，而不是逐调用编译：SQL 由 worker 一次性编译（`sqlite3_prepare_v2`），每次调用重置、重新绑定、步进。
 
 ```lua
 local stmt, err = db.prepare(rw, "SELECT name FROM users WHERE age > ?")
-if not stmt then error(err) end
+if not stmt then error(err.message) end
 
-local rows, qerr = stmt:query(30)   -- 绑定语义与 query 一致
-local res, eerr  = stmt:exec(...)   -- 用于 INSERT/UPDATE/DELETE
-stmt:close()                        -- 立即 finalize，或交给 GC
+local rows, qerr = stmt:query(30)   -- 绑定语义与 query 相同
+local res, eerr  = stmt:exec(...)   -- INSERT/UPDATE/DELETE 用这个
+stmt:close()                        -- 现在在属主上 finalize；或交给 GC
 ```
 
-- `stmt:query(...)` / `stmt:exec(...)` 每次调用都重新绑定变参，语义与
-  `query` / `exec` 完全一致；每次调用在绑定前先执行 `sqlite3_reset` 加
-  `sqlite3_clear_bindings`，并让语句保持就绪供下次调用。
-- **一条语句绑定一个连接。** 在读写句柄上准备的语句与该句柄的其他语句一样
-   进入 worker 池；在只读句柄上准备的语句内联执行，与该句柄的语义一致。
-- **只读句柄上的写 SQL 会在 prepare 阶段就被大声拒绝**——比误路由的普通
-  exec 在步进阶段才失败要早得多。
-- **忙（busy）纪律：** 一条语句同时只允许一个在途调用。对同一语句的第二个
-  并发调用会以 `statement is busy` 大声失败，而不是破坏中间状态。
-- `stmt:close()` finalize 厂商语句；之后使用会大声报错。未 `close` 就丢弃的
-  语句由 finalizer 兜底 finalize。
-- 连接关闭时其上仍然打开的语句是安全的：所有打开的语句都随之 finalize，
-  每个幸存的语句 userdata 之后使用时大声报错。
-- 本驱动不存在 `pool_size` 问题：它没有池。
+命名语句以一次**启动清单**的方式声明：应用在开始服务请求之前在 `rw` 连接上准备好它们，每条语句终身绑定该连接。
 
-值得吗？对一条无关紧要的语句，每次调用的准备成本测不出来；对复杂或高频率
-的语句则可能值得。阅读 SQLite 文档，按你自己的负载决定——这里没有魔法。
-小应用中该 API 的形态见 `examples/10_db_prepared.lua`。
+- 每次调用在派发前对参数做快照；worker 在属主上执行该快照，然后在下一条排队调用开始前重置语句。
+- **同一语句的并发调用者按次序等待，各自拿回各自的结果。** 普通的并发使用绝不产生语句级 busy 错误——FIFO 队列就是调度，不是 SQLite 锁。
 
-## 固定连接（pinning）是如何被验证的
+## 错误
 
-SQLite 不需要服务器，因此这一项**是**提交进仓库的测试：
-`test/smoke_sqlite3_tx.lua`（21 项检查）。在
-`xmake build lunet-sqlite3 && xmake build-release` 之后用
-`lunet-run test/smoke_sqlite3_tx.lua` 运行。
+错误是 Lua 表，保留 SQLite 的消息、主码与扩展码以及操作上下文：
 
-真正值得保留的方法论——与 postgres、mysql 驱动的人工验证一致（见各自的 README）：
+```lua
+rows, err = db.query_ro(ro, "SELECT * FROM nope")
+-- err = {
+--   message       = "no such table: nope",   -- sqlite3_errmsg()
+--   code          = 1,                        -- 主码 (SQLITE_ERROR)
+--   extended_code = 1,                        -- sqlite3_extended_errcode()
+--   op            = "query_ro",               -- 操作上下文
+-- }
+```
 
-1. 覆盖两种结果与两条中止路径：提交、abort-by-nil、在 `fn` 内抛出错误、以及在
-   `fn` 内制造语句错误。每条中止路径都必须让事务前的状态保持原样。
-2. 在事务内断言 `t.exec` 返回的 `affected_rows`——那是 compare-and-set 的信号，
-   而 `t.query` 不会报告它。
-3. 在干净回滚后断言 `err.poisoned == false`，并证明连接随后仍然可用。
-4. 覆盖各项防护：非法加锁模式、nil 连接、非函数的事务体。
-5. 由于 SQLite 是单文件的，这里没有 postgres/mysql 那样的第二会话 observer。这是
-   本测试**无法**展示的一点，因此请把 postgres 那一轮当作隔离性的真正证明，而把
-   本测试当作包装器控制流的证明。
+SQLite 产生的错误携带 `code` 与 `extended_code`（否则只有 `message` 与 `op`——比如路由违规或连接已关闭）。请读 `err.message`，别用 `tostring(err)`。
 
-最近一次运行：全部 21 项检查通过（2026-07-25）。
+关键情形：
+
+- *经 `query_ro` 发往文件 `ro` 句柄的写*在 step 阶段收到 SQLite 的只读
+  错误（`code = 8`，`SQLITE_READONLY`，`extended_code` 在场）。其余调用
+  （query/params/exec/prepare）用 `ro` 句柄调用则得到路由违例
+  （`op = "route"`）——路由由调用决定，错误的调用根本不会到达 SQLite。
+- 语句失败是**给调用者的结果，绝不是 worker 关机**：连接保持可用，失败之后的下一次调用照常成功。
+- 启动清单里的 `prepare` 失败返回 `(nil, err)`——释放句柄对，修好清单再开始服务。
+
+## 驱动特有事实
+
+- **`query`/`exec` 绑定参数。** `db.exec(rw, "INSERT INTO t VALUES (?,?)", a, b)` 绑定 `a`、`b`，与 `exec_params` 相同。
+- **路由拆分需要文件路径。** `:memory:` 无法拆分：两条逻辑路径在那里别名同一个物理连接，访问经其所有者（`rw` worker）串行化。打算用内联 `ro` 路径就传文件路径；在 `:memory:` 上只用 `rw`。
+
+## 值
+
+绑定：`nil` → NULL，数字 → integer 或 double（可精确表示整数按整数绑定），布尔 → 0/1，字符串 → text。列按逐个单元格保留 SQLite 产出的类型：`NULL` 读作 Lua `nil`，整数读作 Lua 数字，实数读作 Lua 数字，text 读作 Lua 字符串，blob 读作承载精确字节的 Lua 字符串（保长，包含内嵌 NUL）。逐单元格的 SQLite 类型驱动转换——同一列跨行类型不同也能逐行正确读出。
+
+## 生命周期与拆除
+
+应用在其生命周期内持有打开的句柄对，并于拆除时关闭。不存在进程级、按路径为键的连接缓存：开两次就是两个独立句柄对，关闭其一不影响另一个。
+
+- `close(rw)` 等待已受理的 `rw` 工作排空（FIFO——close 排在其后排队），在属主上 finalize 清单中的每条语句，然后关闭一次物理连接。之后任何使用都会大声失败。
+- `close(ro)` 内联关闭。
+- 未 `stmt:close()` 就丢弃的语句由 GC 回收时 finalize；关闭连接会一并 finalize 其上所有仍然打开的语句。
+
+## 性能模型
+
+对一个固定 API 的 SQLite 后端 HTTP 服务做的性能调优——
+[lua-lunet/twelve-dollar-server-challenge](https://github.com/lua-lunet/twelve-dollar-server-challenge)
+——给出了最优形态，本驱动就是这个形态：
+
+- **读写分离。** 一条连接持有写；只读连接服务点读。WAL 模式下读者与单个写者永不冲突，两条路径互不阻塞。
+- **写只用一条线程。** SQLite 同一时间只允许一个写者；更多写连接买不到任何东西，只添竞争。
+- **短读在循环线程内联。** 提交方案实测了短内联读的逐调用临时 prepare 并予以保留：一个快速点读只在自身执行期间占用事件循环，没有 worker 跳转、没有 yield、没有跨线程交接。那次调优里，该拆分在整个负载区间测得比"所有语句都过单个池化句柄"好约 4 倍的 p95，且所有配置下 `SQLITE_BUSY` 事件数为零。
+- **重活下循环。** 对事件循环太慢的读属于 `rw`，那里的 FIFO worker 把它们排在写后面串行执行而绝不阻塞循环——只为这类工作接受额外的跳转。
+
+要避免的失败模式是反向路由——把读重的负载压到 `rw` 上——那样往往次优：每次读都要付 worker 跳转与跨线程交接的代价，读还得在同一条连接上排在写后面排队。若延迟平平，先检查你的读落在哪个句柄上。
+
+本驱动刻意**没有池**。单写路径就是设计本身：要更快，把点读路由到 `query_ro`——绝不加宽池。
+
+## 所有权契约的验证
+
+SQLite 无需服务器，所以验证材料就是提交进仓库的测试：
+
+- `spec/sqlite3_spec.lua` —— surface、选项与路由校验。
+- `test/smoke_sqlite3_contract.lua` —— 实机契约：内联 `ro` 不 yield、`rw` 的挂起/恢复、FIFO 顺序与并发同名调用者的各取所需、选项默认值与覆盖、启动失败清理、先失败后成功、close 排空。
+
+`xmake build lunet-sqlite3 && xmake build-release` 之后运行：
+
+```
+xmake test
+LUNET_BIN=$(find build -path '*/release/lunet-run' -type f | head -1)
+"$LUNET_BIN" test/smoke_sqlite3_contract.lua
+```

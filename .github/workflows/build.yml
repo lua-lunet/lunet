@@ -118,7 +118,7 @@ jobs:
     - name: Install xmake
       uses: xmake-io/github-action-setup-xmake@v1
       with:
-        xmake-version: "3.0.8"
+        xmake-version: "3.1.2"
 
     - name: Install Dependencies (Linux)
       if: runner.os == 'Linux'
@@ -762,7 +762,7 @@ jobs:
     - name: Install xmake
       uses: xmake-io/github-action-setup-xmake@v1
       with:
-        xmake-version: "3.0.8"
+        xmake-version: "3.1.2"
 
     - name: Install Dependencies (Linux)
       run: bash contributing/deps/debian.sh --ci
@@ -790,7 +790,7 @@ jobs:
     - name: Install xmake
       uses: xmake-io/github-action-setup-xmake@v1
       with:
-        xmake-version: "3.0.8"
+        xmake-version: "3.1.2"
 
     - name: Install Dependencies (Linux)
       if: runner.os == 'Linux'
@@ -839,7 +839,7 @@ jobs:
     - name: Install xmake
       uses: xmake-io/github-action-setup-xmake@v1
       with:
-        xmake-version: "3.0.8"
+        xmake-version: "3.1.2"
 
     - name: Install Dependencies (Linux)
       if: runner.os == 'Linux'
@@ -961,7 +961,7 @@ jobs:
     - name: Install xmake
       uses: xmake-io/github-action-setup-xmake@v1
       with:
-        xmake-version: "3.0.8"
+        xmake-version: "3.1.2"
     - name: Install QA deps
       run: |
         bash contributing/deps/debian.sh --ci --qa-only
@@ -987,7 +987,7 @@ jobs:
     - name: Setup xmake
       uses: xmake-io/github-action-setup-xmake@v1
       with:
-        xmake-version: "3.0.8"
+        xmake-version: "3.1.2"
 
     - name: Download release archives
       uses: actions/download-artifact@v4

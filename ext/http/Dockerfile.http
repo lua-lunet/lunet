@@ -17,7 +17,7 @@ RUN git clone --depth 1 --branch ${HTTP11PROBE_REF} https://github.com/uNetworki
 RUN dotnet publish src/Http11Probe.Cli -c Release -o /probe
 
 FROM --platform=linux/arm64 debian:bookworm-slim
-ARG LUNET_TAG=v0.14.1
+ARG LUNET_TAG=v0.15.1
 # the probe compares ASCII http bytes; invariant globalization beats installing ICU
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
 RUN apt-get update && apt-get install -y --no-install-recommends \

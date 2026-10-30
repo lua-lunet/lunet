@@ -6,6 +6,7 @@
 
 set_project("lunet")
 set_version("0.2.0")
+set_xmakever("3.1.2")
 set_languages("c99")
 
 add_rules("mode.debug", "mode.release")
@@ -189,6 +190,45 @@ local core_sources = {
 -- Package Requirements (MUST be at root scope, before any targets)
 -- =============================================================================
 
+-- Homebrew pours zlib, curl, libpq and mysql-client as keg-only: their
+-- .pc files sit outside pkg-config's default search path. configs.configdirs
+-- (xmake >= 3.1.2) wires each pkgconfig:: requirement straight at the keg,
+-- without touching the process-wide environment. Exporting PKG_CONFIG_PATH
+-- by hand remains the fallback for unusual setups.
+local function brew_keg_pkgconfig(keg)
+    if not is_host("macosx") then
+        return nil
+    end
+    -- Build the candidate prefix list incrementally: os.getenv returns nil
+    -- when unset, and a nil inside a table literal would stop ipairs at
+    -- index 1 and silently skip every fallback below it.
+    local prefixes = {}
+    local homebrew_prefix = os.getenv("HOMEBREW_PREFIX")
+    if homebrew_prefix then
+        table.insert(prefixes, homebrew_prefix)
+    end
+    table.insert(prefixes, "/opt/homebrew")
+    table.insert(prefixes, "/usr/local")
+    for _, prefix in ipairs(prefixes) do
+        local dir = prefix .. "/opt/" .. keg .. "/lib/pkgconfig"
+        if os.isdir(dir) then
+            return dir
+        end
+    end
+    return nil
+end
+
+-- Attach configs.configdirs to a pkgconfig:: require's option table when
+-- the probe finds the keg; otherwise the table is returned unchanged.
+local function keg_options(keg, opts)
+    local dir = brew_keg_pkgconfig(keg)
+    if dir then
+        opts.configs = opts.configs or {}
+        opts.configs.configdirs = dir
+    end
+    return opts
+end
+
 -- Core dependencies (required)
 if is_plat("windows") then
     add_requires("vcpkg::luajit", {alias = "luajit"})
@@ -197,7 +237,7 @@ if is_plat("windows") then
 else
     add_requires("pkgconfig::luajit", {alias = "luajit"})
     add_requires("pkgconfig::libuv", {alias = "libuv"})
-    add_requires("pkgconfig::zlib", {alias = "zlib"})
+    add_requires("pkgconfig::zlib", keg_options("zlib", {alias = "zlib"}))
 end
 
 if lunet_easy_memory_enabled() then
@@ -213,15 +253,15 @@ if is_plat("windows") then
     add_requires("vcpkg::libpq", {alias = "pq", optional = true})
 else
     add_requires("pkgconfig::sqlite3", {alias = "sqlite3", optional = true})
-    add_requires("pkgconfig::mysqlclient", {alias = "mysql", optional = true})
-    add_requires("pkgconfig::libpq", {alias = "pq", optional = true})
+    add_requires("pkgconfig::mysqlclient", keg_options("mysql-client", {alias = "mysql", optional = true}))
+    add_requires("pkgconfig::libpq", keg_options("libpq", {alias = "pq", optional = true}))
 end
 
 -- HTTP client dependencies (optional)
 if is_plat("windows") then
     add_requires("vcpkg::curl", {alias = "curl", optional = true})
 else
-    add_requires("pkgconfig::libcurl", {alias = "curl", optional = true})
+    add_requires("pkgconfig::libcurl", keg_options("curl", {alias = "curl", optional = true}))
 end
 
 -- Shared library target for require("lunet")

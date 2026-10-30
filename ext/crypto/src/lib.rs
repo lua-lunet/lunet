@@ -69,19 +69,6 @@ fn buf_in<'a>(ptr: *const u8, len: usize, what: &str) -> Result<&'a [u8], String
     Ok(unsafe { std::slice::from_raw_parts(ptr, len) })
 }
 
-/// Borrow a Lua output buffer as a mutable slice for one call.
-#[allow(unsafe_code)]
-fn buf_out<'a>(ptr: *mut u8, cap: usize, what: &str) -> Result<&'a mut [u8], String> {
-    if cap == 0 {
-        return Ok(&mut []);
-    }
-    if ptr.is_null() {
-        return Err(format!("{what}: null output pointer with capacity {cap}"));
-    }
-    // SAFETY: non-null checked above; caller contract per buf_in.
-    Ok(unsafe { std::slice::from_raw_parts_mut(ptr, cap) })
-}
-
 /// SHA-256 digest size in bytes, per libsodium (crypto_hash_sha256_BYTES).
 const SHA256BYTES: usize = 32;
 
@@ -608,4 +595,366 @@ pub extern "C" fn lunet_crypto_last_error(len: *mut usize) -> *const u8 {
 #[no_mangle]
 pub extern "C" fn lunet_crypto_version() -> *const c_char {
     b"0.1.0\0".as_ptr() as *const c_char
+}
+
+// ---------------------------------------------------------------------------
+// FFI boundary tests: the exported shims driven exactly as the Lua loader
+// drives them. Known-answer vectors are from independent implementations
+// (FIPS 180-4 / RFC 4231-style inputs recomputed with Python's
+// hashlib/hmac), so a wrong binding fails loudly.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod ffi_tests {
+    #![allow(unsafe_code)]
+    use super::*;
+    use std::os::raw::c_int;
+
+    /// A 32-byte HMAC key for the malformed-argument test.
+    const KEY: [u8; 32] = [0x42; 32];
+
+    /// The last error message, read back through the exported
+    /// `lunet_crypto_last_error` exactly as the Lua loader does.
+    fn last_error_string() -> String {
+        let mut len: usize = 0;
+        let ptr = lunet_crypto_last_error(&mut len);
+        if ptr.is_null() || len == 0 {
+            return String::new();
+        }
+        // SAFETY (test-only): the pointer/length pair comes from the same
+        // call into the crate's own thread-local buffer.
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec();
+        bytes.into_iter().map(|b| b as char).collect()
+    }
+
+    // -------------------------------------------------------------------
+    // The lunet.sodium primitive surface. Known-answer vectors are from
+    // independent implementations (FIPS 180-4 / RFC 4231-style inputs
+    // recomputed with Python's hashlib/hmac against libsodium's FIXED
+    // 32-byte HMAC key size), so a wrong binding here fails loudly.
+    // -------------------------------------------------------------------
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn sha256(input: &[u8]) -> (c_int, [u8; SHA256BYTES]) {
+        let mut out = [0u8; SHA256BYTES];
+        let rc = lunet_sodium_sha256(input.as_ptr(), input.len(), out.as_mut_ptr());
+        (rc, out)
+    }
+
+    fn hmac_sha256(input: &[u8], key: &[u8]) -> (c_int, [u8; SHA256BYTES]) {
+        let mut out = [0u8; SHA256BYTES];
+        let rc = lunet_sodium_hmac_sha256(
+            input.as_ptr(),
+            input.len(),
+            key.as_ptr(),
+            key.len(),
+            out.as_mut_ptr(),
+        );
+        (rc, out)
+    }
+
+    fn base64_encode(input: &[u8], variant: c_int) -> (c_int, String) {
+        let mut out = vec![0u8; base64_encoded_len(input.len())];
+        let rc =
+            lunet_sodium_base64_encode(input.as_ptr(), input.len(), variant, out.as_mut_ptr(), out.len());
+        (rc, cstring(&out))
+    }
+
+    fn base64_decode(input: &[u8], variant: c_int) -> (c_int, Vec<u8>, usize) {
+        let mut out = vec![0u8; base64_decoded_len(input.len())];
+        let mut written: usize = 0;
+        let rc = lunet_sodium_base64_decode(
+            input.as_ptr(),
+            input.len(),
+            variant,
+            out.as_mut_ptr(),
+            out.len(),
+            &mut written,
+        );
+        (rc, out, written)
+    }
+
+    /// Read a NUL-terminated string from a buffer that was just written.
+    /// Test-only; the returned pointer is always within the owned vec.
+    fn cstring(buf: &[u8]) -> String {
+        let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        String::from_utf8_lossy(&buf[..len]).into_owned()
+    }
+
+    #[test]
+    fn base64_encode_decode_known_answers_all_variants() {
+        let vectors: &[(&str, &str, &str)] = &[
+            // (raw, padded base64, unpadded base64)
+            ("", "", ""),
+            ("f", "Zg==", "Zg"),
+            ("fo", "Zm8=", "Zm8"),
+            ("foo", "Zm9v", "Zm9v"),
+            ("foob", "Zm9vYg==", "Zm9vYg"),
+            ("fooba", "Zm9vYmE=", "Zm9vYmE"),
+            ("foobar", "Zm9vYmFy", "Zm9vYmFy"),
+        ];
+        for &(raw, padded, unpadded) in vectors {
+            let padded = padded.as_bytes();
+            let unpadded = unpadded.as_bytes();
+
+            let (rc, got) = base64_encode(raw.as_bytes(), BASE64_VARIANT_ORIGINAL);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(got.as_bytes(), padded);
+
+            let (rc, got) = base64_encode(raw.as_bytes(), BASE64_VARIANT_ORIGINAL_NO_PADDING);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(got.as_bytes(), unpadded);
+
+            let (rc, got) = base64_encode(raw.as_bytes(), BASE64_VARIANT_URLSAFE);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(got.as_bytes(), padded);
+
+            let (rc, got) = base64_encode(raw.as_bytes(), BASE64_VARIANT_URLSAFE_NO_PADDING);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(got.as_bytes(), unpadded);
+
+            let (rc, _buf, n) = base64_decode(padded, BASE64_VARIANT_ORIGINAL);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(&_buf[..n], raw.as_bytes());
+
+            let (rc, _buf, n) = base64_decode(unpadded, BASE64_VARIANT_ORIGINAL_NO_PADDING);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(&_buf[..n], raw.as_bytes());
+
+            let (rc, _buf, n) = base64_decode(padded, BASE64_VARIANT_URLSAFE);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(&_buf[..n], raw.as_bytes());
+
+            let (rc, _buf, n) = base64_decode(unpadded, BASE64_VARIANT_URLSAFE_NO_PADDING);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert_eq!(&_buf[..n], raw.as_bytes());
+        }
+    }
+
+    #[test]
+    fn base64_binary_roundtrip_and_error_conventions() {
+        // Raw bytes spanning the alphabet table (NUL, high bytes).
+        let blob: Vec<u8> = (0..=255).collect();
+        for variant in [
+            BASE64_VARIANT_ORIGINAL,
+            BASE64_VARIANT_ORIGINAL_NO_PADDING,
+            BASE64_VARIANT_URLSAFE,
+            BASE64_VARIANT_URLSAFE_NO_PADDING,
+        ] {
+            let (rc, encoding) = base64_encode(&blob, variant);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            let (rc, buf, n) = base64_decode(encoding.as_bytes(), variant);
+            assert_eq!(rc, RC_OK, "{}", last_error_string());
+            assert!(buf[..n] == blob, "roundtrip variant {variant}");
+        }
+
+        // Malformed input: one opaque RC_INVAL, reported through
+        // last_error, nothing decoded.
+        let mut buf = [0u8; 8];
+        let mut w = 0usize;
+        assert_eq!(
+            lunet_sodium_base64_decode(
+                b"!!!!".as_ptr(),
+                4,
+                BASE64_VARIANT_ORIGINAL,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut w
+            ),
+            RC_INVAL
+        );
+        assert!(!last_error_string().is_empty());
+        assert!(buf.iter().all(|&b| b == 0));
+
+        // Unknown variant: RC_INVAL, loud message, both directions.
+        assert_eq!(lunet_sodium_base64_encode(b"z".as_ptr(), 1, 99, buf.as_mut_ptr(), buf.len()), RC_INVAL);
+        assert!(last_error_string().contains("unknown"));
+        assert_eq!(
+            lunet_sodium_base64_decode(b"z".as_ptr(), 1, 0, buf.as_mut_ptr(), buf.len(), &mut w),
+            RC_INVAL
+        );
+        assert!(last_error_string().contains("unknown"));
+
+        // Trailing garbage rejects with full-consumption contract.
+        assert_eq!(
+            lunet_sodium_base64_decode(
+                b"Zm9v!!".as_ptr(),
+                6,
+                BASE64_VARIANT_ORIGINAL,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut w
+            ),
+            RC_INVAL
+        );
+        assert!(last_error_string().contains("unparseable"));
+    }
+
+    #[test]
+    fn sodium_sha256_known_answers() {
+        let (rc, out) = sha256(b"");
+        assert_eq!(rc, RC_OK, "{}", last_error_string());
+        assert_eq!(
+            hex(&out),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let (rc, out) = sha256(b"abc");
+        assert_eq!(rc, RC_OK);
+        assert_eq!(
+            hex(&out),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let (rc, out) = sha256(b"The quick brown fox jumps over the lazy dog");
+        assert_eq!(rc, RC_OK);
+        assert_eq!(
+            hex(&out),
+            "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592"
+        );
+        // Empty input via a NULL pointer (LuaJIT may hand NULL for "") is
+        // the empty slice, not malformed.
+        let mut out = [0u8; SHA256BYTES];
+        assert_eq!(
+            lunet_sodium_sha256(std::ptr::null(), 0, out.as_mut_ptr()),
+            RC_OK
+        );
+        assert_eq!(hex(&out), hex(&sha256(b"").1));
+    }
+
+    #[test]
+    fn sodium_hmac_sha256_known_answers() {
+        // 32-byte keys (libsodium's fixed HMAC-SHA-256 key size);
+        // expected tags computed with Python's hmac module.
+        let k1 = [0x0bu8; 32];
+        let (rc, out) = hmac_sha256(b"Hi There", &k1);
+        assert_eq!(rc, RC_OK, "{}", last_error_string());
+        assert_eq!(
+            hex(&out),
+            "198a607eb44bfbc69903a0f1cf2bbdc5ba0aa3f3d9ae3c1c7a3b1696a0b68cf7"
+        );
+        let k2 = *b"01234567890123456789012345678901";
+        let (rc, out) = hmac_sha256(b"lunet.sodium known-answer", &k2);
+        assert_eq!(rc, RC_OK);
+        assert_eq!(
+            hex(&out),
+            "385bb9f6f70ceb6ae2c6a918e0fd024ff3cb38aca35f43cb9c67611ec1791662"
+        );
+        let k3: Vec<u8> = (0u8..32).collect();
+        let (rc, out) = hmac_sha256(b"", &k3);
+        assert_eq!(rc, RC_OK);
+        assert_eq!(
+            hex(&out),
+            "d38b42096d80f45f826b44a9d5607de72496a415d3f4a1a8c88e3bb9da8dc1cb"
+        );
+        // Determinism, and a different key changes the tag.
+        let (rc1, t1) = hmac_sha256(b"payload", &k1);
+        let (rc2, t2) = hmac_sha256(b"payload", &k1);
+        assert_eq!(rc1, RC_OK);
+        assert_eq!(rc2, RC_OK);
+        assert_eq!(t1, t2);
+        let (_, t3) = hmac_sha256(b"payload", &k2);
+        assert_ne!(t1, t3);
+    }
+
+    #[test]
+    fn sodium_malformed_arguments_are_rc_inval_and_nothing_panics() {
+        let mut out = [0u8; SHA256BYTES];
+        // Wrong key lengths: too short, too long, empty.
+        for bad_len in [0usize, 31, 33] {
+            let rc = lunet_sodium_hmac_sha256(
+                b"m".as_ptr(),
+                1,
+                KEY.as_ptr(),
+                bad_len,
+                out.as_mut_ptr(),
+            );
+            assert_eq!(rc, RC_INVAL, "key length {bad_len} must be rejected");
+            assert!(last_error_string().contains("exactly 32 bytes"));
+        }
+        // Null key pointer with a non-zero length.
+        assert_eq!(
+            lunet_sodium_hmac_sha256(
+                b"m".as_ptr(),
+                1,
+                std::ptr::null(),
+                32,
+                out.as_mut_ptr()
+            ),
+            RC_INVAL
+        );
+        // Null output pointers.
+        assert_eq!(
+            lunet_sodium_sha256(b"m".as_ptr(), 1, std::ptr::null_mut()),
+            RC_INVAL
+        );
+        assert_eq!(
+            lunet_sodium_hmac_sha256(
+                b"m".as_ptr(),
+                1,
+                KEY.as_ptr(),
+                KEY.len(),
+                std::ptr::null_mut()
+            ),
+            RC_INVAL
+        );
+        assert_eq!(lunet_sodium_randombytes(std::ptr::null_mut(), 16), RC_INVAL);
+        // Null input with a NON-zero length.
+        assert_eq!(
+            lunet_sodium_sha256(std::ptr::null(), 5, out.as_mut_ptr()),
+            RC_INVAL
+        );
+        // Zero-length random is a successful no-op, even with NULL.
+        assert_eq!(lunet_sodium_randombytes(std::ptr::null_mut(), 0), RC_OK);
+    }
+
+    #[test]
+    fn sodium_randombytes_lengths_and_unpredictability() {
+        let mut a = [0u8; 64];
+        assert_eq!(
+            lunet_sodium_randombytes(a.as_mut_ptr(), a.len()),
+            RC_OK,
+            "{}",
+            last_error_string()
+        );
+        let mut b = [0u8; 64];
+        assert_eq!(lunet_sodium_randombytes(b.as_mut_ptr(), b.len()), RC_OK);
+        // Two draws differ (2^-512 collision odds for 64 random bytes —
+        // a deterministic RNG or a constant fill fails this loudly).
+        assert_ne!(a, b);
+        // Lenient statistical shape over a bigger sample: not all zero
+        // and both bit values occur (an all-zero or all-0xFF fill fails).
+        let mut big = [0u8; 1024];
+        assert_eq!(lunet_sodium_randombytes(big.as_mut_ptr(), big.len()), RC_OK);
+        assert!(big.iter().any(|&b| b != 0), "all-zero fill is not random");
+        assert!(big.iter().any(|&b| b != 0xFF), "all-0xFF fill is not random");
+        // One byte draws work (no length floor).
+        let mut one = [0u8; 1];
+        assert_eq!(lunet_sodium_randombytes(one.as_mut_ptr(), 1), RC_OK);
+    }
+
+
+    #[test]
+    fn pwhash_str_round_trips_and_rejects_wrong_password() {
+        // malformed C-level args raise RC_INVAL, not a panic
+        let mut out = [0u8; 128];
+        assert_eq!(lunet_sodium_pwhash_str(std::ptr::null(), 5, 2, 67108864, out.as_mut_ptr(), out.len()), RC_INVAL);
+        assert_eq!(lunet_sodium_pwhash_str(b"x".as_ptr(), 1, 2, 67108864, std::ptr::null_mut(), 128), RC_INVAL);
+
+        // hash + verify round trip
+        let passwd = b"secret";
+        assert_eq!(lunet_sodium_pwhash_str(passwd.as_ptr(), passwd.len(), 2, 67108864, out.as_mut_ptr(), out.len()), RC_OK);
+        let hash_len = out.iter().position(|&b| b == 0).unwrap_or(out.len());
+        assert!(hash_len > 0);
+        assert_eq!(lunet_sodium_pwhash_str_verify(out.as_ptr(), hash_len, passwd.as_ptr(), passwd.len()), RC_OK);
+
+        // wrong password -> mismatch (RC_OK_ABSENT), not RC_ERR
+        let wrong = b"wrong";
+        assert_eq!(lunet_sodium_pwhash_str_verify(out.as_ptr(), hash_len, wrong.as_ptr(), wrong.len()), RC_OK_ABSENT);
+
+        // short output buffer -> RC_INVAL
+        let mut tiny = [0u8; 4];
+        assert_eq!(lunet_sodium_pwhash_str(passwd.as_ptr(), passwd.len(), 2, 67108864, tiny.as_mut_ptr(), tiny.len()), RC_INVAL);
+    }
 }

@@ -42,9 +42,11 @@ lunet/                              # 扩展模块
   liblunet_paxe.dylib               #   （macOS）
   lunet_paxe.dll                    #   （Windows）
   paxe.lua                          # PAXE Lua FFI 加载器
-  sodium.lua                        # lunet.sodium 加密原语加载器
-                                    #   （SHA-256 / HMAC-SHA-256 / randombytes，
-                                    #   垫片位于同一个 cdylib 中）
+  liblunet_crypto.so                # libsodium 原语 cdylib（Linux）：
+  liblunet_crypto.dylib             #   SHA-256 / HMAC / randombytes /
+  lunet_crypto.dll                  #   base64 / Argon2id（macOS .dylib、
+  sodium.lua                        #   Windows .dll）及其 lunet.sodium
+                                    #   加载器
 types/                              # LuaCATS 类型注解（---@meta，纯文档，无运行时代码）
   lunet.lua                         #   每个注解都有 Teal 对应文件（*.d.tl）
   lunet/
@@ -59,7 +61,7 @@ types/                              # LuaCATS 类型注解（---@meta，纯文�
     security.lua                    # 加密 + JWT HS256 辅助模块
     signal.lua                      # 操作系统信号处理
     socket.lua                      # TCP 套接字操作
-    sodium.lua                      # SHA-256 / HMAC-SHA-256 / randombytes
+    sodium.lua                      # SHA-256 / HMAC / random / base64 / pwhash
     sqlite3.lua                     # sqlite3 加载器（二进制：lunet.sqlite3core）
     udp.lua                         # UDP 套接字操作
 *.md                                # 随包文档（见下文"随包文档"一节）
@@ -118,7 +120,7 @@ local json  = require("lunet.jsonic")
 |------------|------------------------------|
 | lnt_shared | `LUNET_LNT_SHARED_LIB`       |
 | jsonic     | `LUNET_JSONIC_LIB`           |
-| sodium     | `LUNET_SODIUM_LIB`（回退到 `LUNET_PAXE_LIB`） |
+| sodium     | `LUNET_CRYPTO_LIB`                            |
 | paxe       | `LUNET_PAXE_LIB`             |
 
 ## 独立使用扩展（不依赖 lunet-run）
@@ -287,13 +289,9 @@ Lua 封装层，而不是直接调用 FFI - 二进制格式属于编解码器内
 
 ---
 
-## lunet.sodium - 加密原语（SHA-256 / HMAC-SHA-256 / randombytes）
+## lunet.sodium - 加密原语（SHA-256 / HMAC / random / base64 / pwhash）
 
-跨平台（Linux / macOS / Windows）。从**与 PAXE 相同的 cdylib**
-（`liblunet_paxe`）导出的极简 libsodium 原语接口，该 cdylib 已经静态链接了
-libsodium - 进程中永远不需要第二个 libsodium。仅导出三个符号（外加用于
-错误消息的共享符号 `lunet_paxe_last_error`）；完整的 ABI 承诺、Lua API 与
-安全说明见 [`docs/SODIUM-CN.md`](SODIUM-CN.md)。
+跨平台（Linux / macOS / Windows）。从独立的 crypto cdylib `liblunet_crypto` 导出的极简 libsodium 原语接口，该库静态链接自己的 libsodium。导出面为七个 `lunet_sodium_*` 原语，外加用于错误消息的 `lunet_crypto_last_error` 与 `lunet_crypto_version`。完整的 ABI 承诺、Lua API 与安全说明见 [`docs/SODIUM-CN.md`](SODIUM-CN.md)。
 
 ### FFI 声明
 
@@ -303,7 +301,12 @@ ffi.cdef[[
   int lunet_sodium_hmac_sha256(const uint8_t* input, size_t input_len,
                                const uint8_t* key, size_t key_len, uint8_t* out);
   int lunet_sodium_randombytes(uint8_t* out, size_t out_len);
-  const uint8_t* lunet_paxe_last_error(size_t* len);
+  int lunet_sodium_pwhash_str(const uint8_t* passwd, size_t passwd_len,
+                              unsigned long long opslimit, size_t memlimit,
+                              uint8_t* out, size_t out_cap);
+  int lunet_sodium_pwhash_str_verify(const uint8_t* hash, size_t hash_len,
+                                     const uint8_t* passwd, size_t passwd_len);
+  const uint8_t* lunet_crypto_last_error(size_t* len);
 ]]
 ```
 
@@ -323,7 +326,7 @@ ffi.cdef[[
 ```lua
 local ffi = require("ffi")
 ffi.cdef[[ /* 粘贴上面的 cdef 块 */ ]]
-local lib = ffi.load("./lunet/liblunet_paxe.so")  -- 或 .dylib / lunet_paxe.dll
+local lib = ffi.load("./lunet/liblunet_crypto.so")  -- 或 .dylib / lunet_crypto.dll
 
 local out = ffi.new("uint8_t[32]")
 assert(lib.lunet_sodium_sha256("abc", 3, out) == 0)
@@ -367,8 +370,7 @@ apt-get install -y libmariadb3       # lunet.mysql（在 Debian trixie 上提供
 apt-get install -y libsqlite3-0      # lunet.sqlite3
 ```
 
-PAXE 扩展（`liblunet_paxe`）将 libsodium **静态链接**；
-不需要 `libsodium23` 软件包或任何非版本化 `.so` 符号链接。
+PAXE（`liblunet_paxe`）与 crypto（`liblunet_crypto`）扩展各自静态链接 libsodium，不需要 `libsodium23` 软件包或任何非版本化 `.so` 符号链接。
 
 **macOS**：
 

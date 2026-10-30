@@ -16,21 +16,21 @@
 -- (Python's hmac module) against libsodium's FIXED 32-byte HMAC key
 -- size, so a wrong FFI binding fails loudly here.
 --
--- Module resolution mirrors spec/paxe_spec.lua: the FFI loader is the
--- Lua file ext/paxe/sodium.lua, not a C module; package.preload routes
--- require("lunet.sodium") to the dev-tree loader explicitly, and the
--- pending gate fires exactly when the cdylib is absent (the loader
--- raises at load time when it cannot find liblunet_paxe).
+-- Module resolution: the FFI loader is the Lua file ext/crypto/sodium.lua
+-- (not a C module); package.preload routes require("lunet.sodium") to the
+-- dev-tree loader explicitly, and the pending gate fires exactly when the
+-- cdylib is absent (the loader raises at load time when it cannot find
+-- liblunet_crypto).
 
 describe("Sodium Module #native", function()
   local spec_dir = debug.getinfo(1, "S").source:match("^@(.+)/[^/]+$") or "spec"
   package.preload["lunet.sodium"] = function()
-    return assert(loadfile(spec_dir .. "/../ext/paxe/sodium.lua"))()
+    return assert(loadfile(spec_dir .. "/../ext/crypto/sodium.lua"))()
   end
 
   local ok, sodium = pcall(require, "lunet.sodium")
   if not ok then
-    pending("lunet.sodium not built (xmake build-paxe)", function() end)
+    pending("lunet.sodium not built (xmake build-crypto)", function() end)
     return
   end
 
@@ -221,6 +221,56 @@ describe("Sodium Module #native", function()
 
     it("raises on a non-string payload, naming the argument", function()
       local raised, err = pcall(sodium.base64_encode, nil, sodium.BASE64_VARIANT_ORIGINAL)
+      assert.is_false(raised)
+      assert.truthy(tostring(err):find("string expected", 1, true))
+    end)
+  end)
+
+  describe("pwhash_str / pwhash_str_verify (Argon2id)", function()
+    it("round-trips a password", function()
+      local h, err = sodium.pwhash_str("secret")
+      assert.is_nil(err)
+      assert.is_string(h)
+      assert.truthy(h:match("^%$argon2id%$"))
+      assert.is_true(sodium.pwhash_str_verify("secret", h))
+    end)
+
+    it("rejects a wrong password", function()
+      local h = sodium.pwhash_str("secret")
+      assert.is_false(sodium.pwhash_str_verify("wrong", h))
+    end)
+
+    it("returns false for a malformed hash", function()
+      assert.is_false(sodium.pwhash_str_verify("secret", "not-a-hash"))
+    end)
+
+    it("overrides limits via opts table", function()
+      local h = sodium.pwhash_str("secret", { opslimit = 3, memlimit = 67108864 })
+      assert.is_string(h)
+      assert.truthy(h:find("t=3", 1, true))
+      assert.is_true(sodium.pwhash_str_verify("secret", h))
+    end)
+
+    it("uses defaults when opts omitted", function()
+      local h = sodium.pwhash_str("secret")
+      assert.truthy(h:find("t=2", 1, true))
+      assert.truthy(h:find("m=65536", 1, true))
+    end)
+
+    it("raises on unknown opts key", function()
+      local raised, err = pcall(sodium.pwhash_str, "x", { bogus = 1 })
+      assert.is_false(raised)
+      assert.truthy(tostring(err):find("unknown option", 1, true))
+    end)
+
+    it("raises on non-table opts", function()
+      local raised, err = pcall(sodium.pwhash_str, "x", "nope")
+      assert.is_false(raised)
+      assert.truthy(tostring(err):find("table expected", 1, true))
+    end)
+
+    it("raises on non-string password", function()
+      local raised, err = pcall(sodium.pwhash_str, nil)
       assert.is_false(raised)
       assert.truthy(tostring(err):find("string expected", 1, true))
     end)

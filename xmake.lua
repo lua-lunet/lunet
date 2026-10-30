@@ -6,6 +6,7 @@
 
 set_project("lunet")
 set_version("0.2.0")
+set_xmakever("3.1.2")
 set_languages("c99")
 
 add_rules("mode.debug", "mode.release")
@@ -189,6 +190,45 @@ local core_sources = {
 -- Package Requirements (MUST be at root scope, before any targets)
 -- =============================================================================
 
+-- Homebrew pours zlib, curl, libpq and mysql-client as keg-only: their
+-- .pc files sit outside pkg-config's default search path. configs.configdirs
+-- (xmake >= 3.1.2) wires each pkgconfig:: requirement straight at the keg,
+-- without touching the process-wide environment. Exporting PKG_CONFIG_PATH
+-- by hand remains the fallback for unusual setups.
+local function brew_keg_pkgconfig(keg)
+    if not is_host("macosx") then
+        return nil
+    end
+    -- Build the candidate prefix list incrementally: os.getenv returns nil
+    -- when unset, and a nil inside a table literal would stop ipairs at
+    -- index 1 and silently skip every fallback below it.
+    local prefixes = {}
+    local homebrew_prefix = os.getenv("HOMEBREW_PREFIX")
+    if homebrew_prefix then
+        table.insert(prefixes, homebrew_prefix)
+    end
+    table.insert(prefixes, "/opt/homebrew")
+    table.insert(prefixes, "/usr/local")
+    for _, prefix in ipairs(prefixes) do
+        local dir = prefix .. "/opt/" .. keg .. "/lib/pkgconfig"
+        if os.isdir(dir) then
+            return dir
+        end
+    end
+    return nil
+end
+
+-- Attach configs.configdirs to a pkgconfig:: require's option table when
+-- the probe finds the keg; otherwise the table is returned unchanged.
+local function keg_options(keg, opts)
+    local dir = brew_keg_pkgconfig(keg)
+    if dir then
+        opts.configs = opts.configs or {}
+        opts.configs.configdirs = dir
+    end
+    return opts
+end
+
 -- Core dependencies (required)
 if is_plat("windows") then
     add_requires("vcpkg::luajit", {alias = "luajit"})
@@ -197,7 +237,7 @@ if is_plat("windows") then
 else
     add_requires("pkgconfig::luajit", {alias = "luajit"})
     add_requires("pkgconfig::libuv", {alias = "libuv"})
-    add_requires("pkgconfig::zlib", {alias = "zlib"})
+    add_requires("pkgconfig::zlib", keg_options("zlib", {alias = "zlib"}))
 end
 
 if lunet_easy_memory_enabled() then
@@ -213,15 +253,15 @@ if is_plat("windows") then
     add_requires("vcpkg::libpq", {alias = "pq", optional = true})
 else
     add_requires("pkgconfig::sqlite3", {alias = "sqlite3", optional = true})
-    add_requires("pkgconfig::mysqlclient", {alias = "mysql", optional = true})
-    add_requires("pkgconfig::libpq", {alias = "pq", optional = true})
+    add_requires("pkgconfig::mysqlclient", keg_options("mysql-client", {alias = "mysql", optional = true}))
+    add_requires("pkgconfig::libpq", keg_options("libpq", {alias = "pq", optional = true}))
 end
 
 -- HTTP client dependencies (optional)
 if is_plat("windows") then
     add_requires("vcpkg::curl", {alias = "curl", optional = true})
 else
-    add_requires("pkgconfig::libcurl", {alias = "curl", optional = true})
+    add_requires("pkgconfig::libcurl", keg_options("curl", {alias = "curl", optional = true}))
 end
 
 -- Shared library target for require("lunet")
@@ -769,6 +809,20 @@ task("test")
         os.exec("xmake build lunet-sqlite3")
         os.exec("xmake build lunet-postgres")
         os.exec("xmake build lunet-mysql")
+        -- The Rust cdylibs (paxe, crypto) are built by their own tasks so
+        -- their specs can never silently pend: sodium/security/http-probe
+        -- go pending when liblunet_crypto is absent, paxe when
+        -- liblunet_paxe is. A machine without cargo surfaces red here,
+        -- not a pending suite.
+        os.exec("xmake build-paxe")
+        os.exec("xmake build-crypto")
+        -- lnt_shared and jsonic are the same story on Unix (POSIX-only and
+        -- no .dll suffix handling yet respectively — see the CI workflow),
+        -- so their specs pend the same way when the cdylibs are absent.
+        if not is_host("windows") then
+            os.exec("xmake build-lnt-shared")
+            os.exec("xmake build-jsonic")
+        end
         local mode = get_config("mode") or "release"
         local dirs = os.dirs("build/**/" .. mode .. "/lunet")
         local cpath = os.getenv("LUA_CPATH") or ""
@@ -1337,6 +1391,43 @@ task("test-paxe")
         print("[paxe] cargo test --release ...")
         os.execv("cargo", {"test", "--release"}, {curdir = crate_dir})
         print("[paxe] tests passed (debug + release)")
+    end)
+task_end()
+
+-- =============================================================================
+-- Build:   xmake build-crypto
+-- Standalone libsodium-primitives cdylib (ext/crypto): SHA-256, HMAC,
+-- randombytes, base64, Argon2id password hashing. Own static libsodium
+-- link via its build.rs. Not linked into lunet-run. The toolchain pin
+-- lives beside the crate; cargo must run with the crate dir as cwd.
+task("build-crypto")
+    set_menu {
+        usage = "xmake build-crypto",
+        description = "Build the crypto libsodium-primitives cdylib (ext/crypto)"
+    }
+    on_run(function()
+        local crate_dir = path.join(os.scriptdir(), "ext", "crypto")
+        print("[crypto] cargo build --release ...")
+        os.execv("cargo", {"build", "--release"}, {curdir = crate_dir})
+        print("[crypto] built: " .. path.join(crate_dir, "target", "release"))
+    end)
+task_end()
+
+task("test-crypto")
+    set_menu {
+        usage = "xmake test-crypto",
+        description = "Run the crypto crate's Rust tests (ext/crypto), debug and release profiles"
+    }
+    on_run(function()
+        local crate_dir = path.join(os.scriptdir(), "ext", "crypto")
+        -- Both profiles run: panic = "abort" changes the release profile, so
+        -- debug-passing tests are not proof the release profile passes.
+        -- os.execv raises on non-zero exit, failing the task on any test failure.
+        print("[crypto] cargo test ...")
+        os.execv("cargo", {"test"}, {curdir = crate_dir})
+        print("[crypto] cargo test --release ...")
+        os.execv("cargo", {"test", "--release"}, {curdir = crate_dir})
+        print("[crypto] tests passed (debug + release)")
     end)
 task_end()
 

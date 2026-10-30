@@ -43,9 +43,11 @@ lunet/                              # extension modules
   liblunet_paxe.dylib               #   (macOS)
   lunet_paxe.dll                    #   (Windows)
   paxe.lua                          # PAXE Lua FFI loader
-  sodium.lua                        # lunet.sodium crypto primitives loader
-                                    #   (SHA-256 / HMAC-SHA-256 / randombytes,
-                                    #   shims in the same cdylib)
+  liblunet_crypto.so                # libsodium-primitives cdylib (Linux):
+  liblunet_crypto.dylib             #   SHA-256 / HMAC / randombytes /
+  lunet_crypto.dll                  #   base64 / Argon2id (macOS .dylib,
+  sodium.lua                        #   Windows .dll) + the lunet.sodium
+                                    #   loader
 types/                              # LuaCATS type annotations (---@meta, documentation only)
   lunet.lua                         #   each has a Teal counterpart (*.d.tl)
   lunet/
@@ -60,7 +62,7 @@ types/                              # LuaCATS type annotations (---@meta, docume
     security.lua                    # crypto + JWT HS256 helpers
     signal.lua                      # OS signal handling
     socket.lua                      # TCP socket operations
-    sodium.lua                      # SHA-256 / HMAC-SHA-256 / randombytes
+    sodium.lua                      # SHA-256 / HMAC / random / base64 / pwhash
     sqlite3.lua                     # sqlite3 loader (binary: lunet.sqlite3core)
     udp.lua                         # UDP socket operations
 *.md                                # bundled docs (see "Bundled documentation" below)
@@ -129,7 +131,7 @@ that the corresponding loader checks:
 |------------|------------------------------|
 | lnt_shared | `LUNET_LNT_SHARED_LIB`       |
 | jsonic     | `LUNET_JSONIC_LIB`           |
-| sodium     | `LUNET_SODIUM_LIB` (falls back to `LUNET_PAXE_LIB`) |
+| sodium     | `LUNET_CRYPTO_LIB`                                 |
 | paxe       | `LUNET_PAXE_LIB`             |
 
 ## Using extensions standalone (without lunet-run)
@@ -303,14 +305,14 @@ the caller must free it with `lunet_jsonic_free_bytes`.
 
 ---
 
-## lunet.sodium - crypto primitives (SHA-256 / HMAC-SHA-256 / randombytes)
+## lunet.sodium - crypto primitives (SHA-256 / HMAC / random / base64 / pwhash)
 
 Cross-platform (Linux / macOS / Windows). A minimal libsodium primitive
-surface exposed from the **same cdylib as PAXE** (`liblunet_paxe`), which
-already statically links libsodium - so no second libsodium is ever needed
-in the process. Exactly three symbols are exported (plus the shared
-`lunet_paxe_last_error` used for error messages); the full ABI promise,
-Lua API and security notes are in [`docs/SODIUM.md`](SODIUM.md).
+surface exposed from the standalone crypto cdylib `liblunet_crypto`, which
+statically links its own libsodium. Exported: the seven `lunet_sodium_*`
+primitives plus `lunet_crypto_last_error` (error messages) and
+`lunet_crypto_version`. The full ABI promise, Lua API and security notes
+are in [`docs/SODIUM.md`](SODIUM.md).
 
 ### FFI declarations
 
@@ -320,7 +322,12 @@ ffi.cdef[[
   int lunet_sodium_hmac_sha256(const uint8_t* input, size_t input_len,
                                const uint8_t* key, size_t key_len, uint8_t* out);
   int lunet_sodium_randombytes(uint8_t* out, size_t out_len);
-  const uint8_t* lunet_paxe_last_error(size_t* len);
+  int lunet_sodium_pwhash_str(const uint8_t* passwd, size_t passwd_len,
+                              unsigned long long opslimit, size_t memlimit,
+                              uint8_t* out, size_t out_cap);
+  int lunet_sodium_pwhash_str_verify(const uint8_t* hash, size_t hash_len,
+                                     const uint8_t* passwd, size_t passwd_len);
+  const uint8_t* lunet_crypto_last_error(size_t* len);
 ]]
 ```
 
@@ -341,7 +348,7 @@ is a successful no-op.
 ```lua
 local ffi = require("ffi")
 ffi.cdef[[ /* paste cdef block above */ ]]
-local lib = ffi.load("./lunet/liblunet_paxe.so")  -- or .dylib / lunet_paxe.dll
+local lib = ffi.load("./lunet/liblunet_crypto.so")  -- or .dylib / lunet_crypto.dll
 
 local out = ffi.new("uint8_t[32]")
 assert(lib.lunet_sodium_sha256("abc", 3, out) == 0)
@@ -390,8 +397,7 @@ apt-get install -y libmariadb3       # lunet.mysql (provides libmysqlclient.so o
 apt-get install -y libsqlite3-0      # lunet.sqlite3
 ```
 
-The PAXE extension (`liblunet_paxe`) links libsodium **statically**;
-no `libsodium23` package or unversioned `.so` symlink is needed.
+The PAXE (`liblunet_paxe`) and crypto (`liblunet_crypto`) extensions each link libsodium **statically**; no `libsodium23` package or unversioned `.so` symlink is needed.
 
 **macOS**:
 

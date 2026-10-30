@@ -5,7 +5,7 @@ authenticated-token layer every web app needs: HMAC-SHA-256 sign/verify,
 base64url helpers, and JWT HS256 (`encode` / `decode`).
 
 The virtue is whose crypto it is: every cryptographic byte-level operation is
-libsodium's, reached through the FFI (`liblunet_paxe`, via `lunet.sodium`) - 
+libsodium's, reached through the FFI (`liblunet_crypto`, via `lunet.sodium`) - 
 the wrapper implements no crypto itself. The one composition it does in Lua is
 HMAC-SHA-256 built on `lunet.sodium.sha256` per RFC 2104 (a key-padding step - 
 see "Key handling" below), and claims JSON goes through `lunet.jsonic`.
@@ -25,7 +25,7 @@ The extension declares what it needs, the operator installs it:
 
 | Dependency | When | Why |
 |------------|------|-----|
-| libsodium (via `liblunet_paxe`) | Always - `lunet.sodium` is required at load time | HMAC-SHA-256 and base64 primitives |
+| libsodium (via `liblunet_crypto`) | Always - `lunet.sodium` is required at load time | HMAC-SHA-256 and base64 primitives |
 | `lunet.jsonic` | JWT only - loaded on first use | Claims JSON encode/decode; the loader ships in the archive beside this module (its native decoder is POSIX-only for now) |
 
 In a release archive the loaders sit side by side in `lunet/` and resolve
@@ -39,7 +39,7 @@ local crypto, jwt = security.crypto, security.jwt
 ```
 
 `require("lunet.security")` fails outright when `lunet.sodium` cannot find
-`liblunet_paxe` (build it with `xmake build-paxe`); a missing `lunet.jsonic`
+`liblunet_crypto` (build it with `xmake build-crypto`); a missing `lunet.jsonic`
 only breaks `jwt.*`, on first use, with an error naming the dependency.
 
 ## Lua API (`lunet.security`)
@@ -165,7 +165,7 @@ end
 
 `lunet/security.lua` ships in every release archive beside `sqlite3.lua` - 
 a Lua module with no binary of its own; its crypto is libsodium's, linked
-via `liblunet_paxe`. `lunet/sodium.lua`, `lunet/paxe.lua` and
+via `liblunet_crypto`. `lunet/sodium.lua`, `lunet/paxe.lua` and
 `lunet/jsonic.lua` (the dependencies) ship alongside it; see
 [docs/RELEASE-LAYOUT.md](RELEASE-LAYOUT.md).
 
@@ -178,7 +178,7 @@ externally computed short-secret signature for a fixed JWT signing input), the
 negative pin that subkey-derived tags do not verify, per-byte tamper rejection, base64url RFC 4648 vectors and binary round-trips, JWT
 encode/decode round-trips (including a standard-library token with a short raw
 secret), the `exp` policy, the alg-confusion defence, and every named error
-string. The suite pends cleanly when `liblunet_paxe` (or jsonic's native
+string. The suite pends cleanly when `liblunet_crypto` (or jsonic's native
 decoder) has not been built.
 
 ## References

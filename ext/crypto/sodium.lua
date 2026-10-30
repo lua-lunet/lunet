@@ -1,36 +1,32 @@
 -- lunet.sodium: a MINIMAL libsodium primitive surface, loaded from the
--- SAME cdylib as lunet.paxe through the LuaJIT FFI (the jsonic / paxe
--- loader model). Exactly three primitives: SHA-256, HMAC-SHA-256 (the
--- JWT HS256 primitive) and randombytes  -  see docs/SODIUM.md.
+-- standalone crypto cdylib (liblunet_crypto) through the LuaJIT FFI (the
+-- jsonic loader model). SHA-256, HMAC-SHA-256 (the JWT HS256 primitive),
+-- randombytes, base64 and Argon2id password hashing  -  see
+-- docs/SODIUM.md.
 --
--- WHY THIS EXISTS: liblunet_paxe already statically links libsodium, so
--- every binary-archive consumer carries the bytes for these primitives
--- inside a dylib it already ships. They were previously unreachable (the
--- static sodium symbols are not exported), which forced users to load a
--- SECOND libsodium (homebrew, distro)  -  two sodiums in one process, with
--- dlsym(RTLD_DEFAULT) ambiguity. This module binds through the dylib
+-- WHY THIS EXISTS: without it every consumer ships its own libsodium FFI
+-- boilerplate (or loads a SECOND libsodium  -  homebrew, distro  -  with
+-- dlsym(RTLD_DEFAULT) ambiguity). This module binds through the dylib
 -- HANDLE returned by ffi.load below, never through ffi.C / RTLD_DEFAULT,
 -- so a user-owned libsodium in the same process can never capture the
 -- lookup.
 --
--- ABI PROMISE (deliberately narrow): the three lunet_sodium_* symbols
--- below. No wholesale export of the libsodium namespace  -  the vendored
+-- ABI PROMISE (deliberately narrow): the lunet_sodium_* symbols below.
+-- No wholesale export of the libsodium namespace  -  the vendored
 -- sodium version is not a public ABI promise, and a full export would be
 -- a symbol-collision hazard with user-loaded sodiums. No streaming or
--- incremental variants; no keyring or guarded key memory (that remains
--- PAXE's job  -  lunet.paxe.keystore_set).
+-- incremental variants; no keyring or guarded key memory.
 --
--- ERROR CONVENTION (same shape as lunet.paxe): malformed arguments RAISE
--- a Lua error (they are bugs in the calling script); operational
--- failures (libsodium could not be initialised) return nil, message.
+-- ERROR CONVENTION: malformed arguments RAISE a Lua error (they are bugs
+-- in the calling script); operational failures (libsodium could not be
+-- initialised) return nil, message.
 -- TYPE CHECKS RUN HERE: by the time a value crosses the FFI its Lua type
 -- is invisible to Rust, so this module validates every argument before
--- the call, exactly like ext/paxe/paxe.lua does.
+-- the call.
 --
 -- SECURITY BOUNDARY (docs/SODIUM.md states it too): stateless hashing
 -- crosses no secrets; the HMAC key is ordinary Lua string data and DOES
--- cross the FFI unguarded  -  a documented boundary, the same posture as
--- the paxe keystore notes in docs/PAXE.md.
+-- cross the FFI unguarded  -  a documented boundary.
 
 local ffi = require("ffi")
 
@@ -39,16 +35,22 @@ ffi.cdef[[
   int lunet_sodium_hmac_sha256(const uint8_t* input, size_t input_len,
                                const uint8_t* key, size_t key_len, uint8_t* out);
   int lunet_sodium_randombytes(uint8_t* out, size_t out_len);
+  int lunet_sodium_pwhash_str(const uint8_t* passwd, size_t passwd_len,
+                              unsigned long long opslimit, size_t memlimit,
+                              uint8_t* out, size_t out_cap);
+  int lunet_sodium_pwhash_str_verify(const uint8_t* hash, size_t hash_len,
+                                     const uint8_t* passwd, size_t passwd_len);
   int lunet_sodium_base64_encode(const uint8_t* input, size_t input_len,
                                  int variant, uint8_t* out, size_t out_cap);
   int lunet_sodium_base64_decode(const uint8_t* input, size_t input_len,
                                  int variant, uint8_t* out, size_t out_cap,
                                  size_t* written);
-  const uint8_t* lunet_paxe_last_error(size_t* len);
+  const uint8_t* lunet_crypto_last_error(size_t* len);
 ]]
 
--- Return codes, mirroring src/lib.rs (shared with the paxe ABI).
+-- Return codes, mirroring src/lib.rs (the crypto cdylib's ABI).
 local RC_OK = 0     -- success
+local RC_OK_ABSENT = 1 -- informational: pwhash verification did not match
 local RC_ERR = -1   -- operational failure -> nil, last_error()
 local RC_INVAL = -2 -- malformed argument -> raise last_error()
 
@@ -56,16 +58,16 @@ local RC_INVAL = -2 -- malformed argument -> raise last_error()
 -- crypto_auth_hmacsha256_BYTES are both 32 in every libsodium release).
 local BYTES = 32
 
--- Find the paxe cdylib exactly like ext/paxe/paxe.lua does: environment
--- override first, then the loader's own directory and its cargo output
--- tree. The returned handle is what every symbol below binds through  - 
--- never ffi.C, never a bare name.
+-- Find the crypto cdylib: environment override first, then the
+-- loader's own directory and its cargo output tree. The returned handle
+-- is what every symbol below binds through  -  never ffi.C, never a
+-- bare name.
 local function find_lib()
-  local env = os.getenv("LUNET_SODIUM_LIB") or os.getenv("LUNET_PAXE_LIB")
+  local env = os.getenv("LUNET_CRYPTO_LIB")
   if env and env ~= "" then return env end
   local suffix, prefix = "so", "lib"
   if package.config:sub(1, 1) == "\\" then
-    -- Windows: the cdylib is lunet_paxe.dll (no "lib" prefix)
+    -- Windows: the cdylib is lunet_crypto.dll (no "lib" prefix)
     suffix, prefix = "dll", ""
   else
     local ok_popen, uname = pcall(io.popen, "uname -s 2>/dev/null")
@@ -78,13 +80,13 @@ local function find_lib()
   local script = debug.getinfo(2, "S").source
   local dir = script:match("^@(.+)/[^/]+$") or "."
   for _, p in ipairs({
-    dir .. "/target/release/" .. prefix .. "lunet_paxe." .. suffix,
-    dir .. "/" .. prefix .. "lunet_paxe." .. suffix,
+    dir .. "/target/release/" .. prefix .. "lunet_crypto." .. suffix,
+    dir .. "/" .. prefix .. "lunet_crypto." .. suffix,
   }) do
     local f = io.open(p, "rb")
     if f then f:close(); return p end
   end
-  error("lunet.sodium: cannot find " .. prefix .. "lunet_paxe." .. suffix, 3)
+  error("lunet.sodium: cannot find " .. prefix .. "lunet_crypto." .. suffix, 3)
 end
 
 -- THE dylib handle: every primitive binds through it, so the lookup can
@@ -94,7 +96,7 @@ local C = ffi.load(find_lib())
 local len_box = ffi.new("size_t[1]")
 
 local function last_error()
-  local p = C.lunet_paxe_last_error(len_box)
+  local p = C.lunet_crypto_last_error(len_box)
   if p == nil then return "lunet.sodium: unknown error" end
   return ffi.string(p, tonumber(len_box[0]))
 end
@@ -146,7 +148,7 @@ end
 --- length raises). Returns the raw 32-byte tag as a string.
 ---
 --- SECURITY: the key crosses the FFI as ordinary Lua string data  - 
---- unguarded, unlike PAXE keystore material. See docs/SODIUM.md.
+--- unguarded. See docs/SODIUM.md.
 ---@param data string Data to authenticate
 ---@param key string Exactly 32 bytes
 ---@return string|nil tag 32 raw bytes, nil plus a message on operational failure
@@ -166,9 +168,9 @@ function M.hmac_sha256(data, key)
   return ffi.string(out, BYTES)
 end
 
---- Draw `n` unpredictable bytes from the SAME CSPRNG PAXE uses (never
---- mix two RNGs in one process). `n` is a non-negative integer; 0
---- returns the empty string. Returns the raw bytes as a string.
+--- Draw `n` unpredictable bytes from the cdylib's CSPRNG. `n` is a
+--- non-negative integer; 0 returns the empty string. Returns the raw
+--- bytes as a string.
 ---@param n integer Number of bytes to draw
 ---@return string|nil bytes n raw bytes, nil plus a message on operational failure
 ---@return string|nil error Set only on operational failure
@@ -274,6 +276,61 @@ function M.base64_decode(data, variant)
   if rc == RC_INVAL then error(last_error(), 2) end
   if rc ~= RC_OK then return nil, last_error() end
   return ffi.string(out, tonumber(written[0]))
+end
+
+local PWHASH_DEFAULTS = { opslimit = 2, memlimit = 67108864 }
+
+--- Argon2id password hashing (libsodium crypto_pwhash_str). Hashes
+--- `password` with the interactive limits by default; `opts` may
+--- override `opslimit` and/or `memlimit` (bytes). Unknown opts keys,
+--- wrong types and malformed arguments raise; an operational failure
+--- returns nil plus message. The salt is embedded in the returned
+--- self-describing string.
+---@param password string Password to hash
+---@param opts table|nil Optional overrides: `opslimit` (default 2),
+---   `memlimit` (default 67108864 bytes)
+---@return string|nil hash Self-describing Argon2id hash string
+---@return string|nil error Set only on operational failure
+function M.pwhash_str(password, opts)
+  password = check_string(password, "password")
+  if opts == nil then opts = {} end
+  if type(opts) ~= "table" then
+    error(("bad argument 'opts' (table expected, got %s)"):format(type(opts)), 2)
+  end
+  local opslimit = opts.opslimit
+  if opslimit == nil then opslimit = PWHASH_DEFAULTS.opslimit end
+  local memlimit = opts.memlimit
+  if memlimit == nil then memlimit = PWHASH_DEFAULTS.memlimit end
+  for k, _ in pairs(opts) do
+    if k ~= "opslimit" and k ~= "memlimit" then
+      error(("bad argument 'opts' (unknown option '%s')"):format(k), 2)
+    end
+  end
+  opslimit = check_count(opslimit, "opts.opslimit")
+  memlimit = check_count(memlimit, "opts.memlimit")
+  local need = 128
+  local out = ffi.new("uint8_t[?]", need)
+  local rc = C.lunet_sodium_pwhash_str(password, #password, opslimit,
+    memlimit, out, need)
+  if rc == RC_INVAL then error(last_error(), 2) end
+  if rc ~= RC_OK then return nil, last_error() end
+  return ffi.string(out)
+end
+
+--- Verify `password` against a self-describing Argon2id hash string.
+--- Returns true on match, false on mismatch or malformed hash. Malformed
+--- arguments raise; an operational failure returns nil, message.
+---@param password string Password to verify
+---@param hash string Self-describing hash string
+---@return boolean|nil ok True on match, false on mismatch, nil on operational failure
+---@return string|nil error Set only on operational failure
+function M.pwhash_str_verify(password, hash)
+  password = check_string(password, "password")
+  hash = check_string(hash, "hash")
+  local rc = C.lunet_sodium_pwhash_str_verify(hash, #hash, password, #password)
+  if rc == RC_INVAL then error(last_error(), 2) end
+  if rc == RC_ERR then return nil, last_error() end
+  return rc == RC_OK
 end
 
 return M

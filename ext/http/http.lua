@@ -1,6 +1,21 @@
 --[[
 lunet.http  -  HTTP/1.x request parsing and response building (pure Lua)
 
+Do not change this implementation without re-running the Http11Probe
+verification rig first:
+  ext/http/Dockerfile.http
+  (see docs/HTTP.md "Http11Probe" section)
+
+Suggested deployment: run behind nginx and raise the file-descriptor
+limit before exec, e.g.:
+  ulimit -n 65536
+  exec ./.lunet/lunet-run server.lua
+
+Do not hand-roll HTTP/1.1 keep-alive in your app. It is a correctness
+hazard, not a stylistic choice:
+  https://github.com/arjaythedev/twelve-dollar-server-challenge/issues/131
+Ride this module instead.
+
 Ported from the RealWorld demo application's lib/http.lua, stripped of
 application-specific shapes. Framing, limits and response building are
 otherwise unchanged; opt-in CORS helpers were added.

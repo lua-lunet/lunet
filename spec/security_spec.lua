@@ -24,7 +24,7 @@ describe("security module #native", function()
     return assert(loadfile(spec_dir .. "/../ext/security/security.lua"))()
   end
   package.preload["lunet.sodium"] = function()
-    return assert(loadfile(spec_dir .. "/../ext/paxe/sodium.lua"))()
+    return assert(loadfile(spec_dir .. "/../ext/crypto/sodium.lua"))()
   end
   package.preload["lunet.jsonic"] = function()
     return assert(loadfile(spec_dir .. "/../ext/jsonic/jsonic.lua"))()
@@ -32,7 +32,7 @@ describe("security module #native", function()
 
   local ok, security = pcall(require, "lunet.security")
   if not ok then
-    pending("lunet.security not loadable  -  lunet.sodium needs liblunet_paxe (xmake build-paxe)",
+    pending("lunet.security not loadable  -  lunet.sodium needs liblunet_crypto (xmake build-crypto)",
       function() end)
     return
   end

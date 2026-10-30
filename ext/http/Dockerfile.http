@@ -17,7 +17,7 @@ RUN git clone --depth 1 --branch ${HTTP11PROBE_REF} https://github.com/uNetworki
 RUN dotnet publish src/Http11Probe.Cli -c Release -o /probe
 
 FROM --platform=linux/arm64 debian:bookworm-slim
-ARG LUNET_TAG=v0.14.1
+ARG LUNET_TAG=v0.15.1
 # the probe compares ASCII http bytes; invariant globalization beats installing ICU
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -35,8 +35,8 @@ RUN curl -fsSL "https://github.com/lua-lunet/lunet/releases/download/${LUNET_TAG
     && tar xzf lunet.tar.gz && rm lunet.tar.gz
 COPY ext/http/http.lua ext/http/http_context.lua /opt/lunet/lunet/
 COPY ext/http/router.lua /opt/lunet/lunet/http_router.lua
-COPY ext/http/probe_target.lua /opt/lunet/probe_target.lua
+COPY ext/http/spec/probe_target.lua /opt/lunet/probe_target.lua
 COPY --from=probe /probe /opt/probe
-COPY ext/http/probe_entrypoint.sh /usr/local/bin/probe_entrypoint.sh
+COPY ext/http/spec/probe_entrypoint.sh /usr/local/bin/probe_entrypoint.sh
 RUN chmod +x /usr/local/bin/probe_entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/probe_entrypoint.sh"]

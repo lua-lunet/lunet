@@ -32,7 +32,7 @@ The build is fully offline: the protocol core is vendored in-tree (see above), s
 - `ext/paxe/target/release/liblunet_paxe.so` (Linux), `.dylib` (macOS), `lunet_paxe.dll` (Windows)
 - The loader is `ext/paxe/paxe.lua`; `LUNET_PAXE_LIB` overrides the library path it loads
 - Release archives ship both as `lunet/paxe.lua` + the cdylib beside it, self-contained (libsodium is linked statically)
-- The same cdylib also exports the minimal `lunet_sodium_*` primitive surface (SHA-256, HMAC-SHA-256, randombytes) loaded by `lunet/sodium.lua` - see [`SODIUM.md`](SODIUM.md). It shares only the cdylib with PAXE, never the keystore or counters.
+- The libsodium primitives (SHA-256, HMAC, randombytes, base64, Argon2id) live in a separate cdylib, `liblunet_crypto`, loaded by `lunet/sodium.lua` - see [`SODIUM.md`](SODIUM.md). PAXE's cdylib exports only its own protocol ABI; the two libraries share no state.
 
 ## Wire format, as seen from lunet
 

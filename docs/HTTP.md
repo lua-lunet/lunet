@@ -76,7 +76,7 @@ changes:
 
 ```sh
 docker build -f ext/http/Dockerfile.http -t lunet-http-probe .
-docker run --rm -v "$(pwd)/ext/http:/out" lunet-http-probe
+docker run --rm -v "$(pwd)/ext/http/spec:/out" lunet-http-probe
 ```
 
 The mounted run (manifest mode) writes the run's artifacts into the mounted

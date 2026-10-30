@@ -19,23 +19,23 @@
 describe("http probe expectations", function()
   local spec_dir = debug.getinfo(1, "S").source:match("^@(.+)/[^/]+$") or "spec"
   package.preload["lunet.sodium"] = function()
-    return assert(loadfile(spec_dir .. "/../ext/paxe/sodium.lua"))()
+    return assert(loadfile(spec_dir .. "/../ext/crypto/sodium.lua"))()
   end
 
   local ok, sodium = pcall(require, "lunet.sodium")
   if not ok then
-    pending("lunet.sodium not built (xmake build-paxe)", function() end)
+    pending("lunet.sodium not built (xmake build-crypto)", function() end)
     return
   end
 
-  local manifest = assert(dofile(spec_dir .. "/../ext/http/probe-manifest.lua"))
-  local allowlist = assert(dofile(spec_dir .. "/../ext/http/probe_allowlist.lua"))
+  local manifest = assert(dofile(spec_dir .. "/../ext/http/spec/probe-manifest.lua"))
+  local allowlist = assert(dofile(spec_dir .. "/../ext/http/spec/probe_allowlist.lua"))
 
   local REGENERATE =
     "dev-tree ext/http no longer matches the committed probe manifest; regenerate:\n" ..
     "  docker build -f ext/http/Dockerfile.http -t lunet-http-probe .\n" ..
     "  docker run --rm -v \"$(pwd)/ext/http:/out\" lunet-http-probe\n" ..
-    "then keep ext/http/probe_allowlist.lua in step and commit all three artifacts."
+    "then keep ext/http/spec/probe_allowlist.lua in step and commit all three artifacts."
 
   local function file_digest(path)
     local f = assert(io.open(path, "rb"))
@@ -87,7 +87,7 @@ describe("http probe expectations", function()
         local pinned = allowlist[id]
         assert(pinned ~= nil,
           "unblocked probe outcome for " .. id
-          .. ": add it (with its by-design rationale) to ext/http/probe_allowlist.lua\n" .. REGENERATE)
+          .. ": add it (with its by-design rationale) to ext/http/spec/probe_allowlist.lua\n" .. REGENERATE)
         assert.is_true(pins_match(pinned, recorded),
           "probe outcome drifted for " .. id .. "\n" .. REGENERATE)
       end

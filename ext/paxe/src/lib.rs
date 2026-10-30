@@ -943,6 +943,22 @@ mod sodium_ffi {
             b64_end: *mut *mut c_char,
             variant: c_int,
         ) -> c_int;
+
+        pub fn crypto_pwhash_strbytes() -> usize;
+
+        pub fn crypto_pwhash_str(
+            out: *mut c_char,
+            passwd: *const c_char,
+            passwdlen: c_ulonglong,
+            opslimit: c_ulonglong,
+            memlimit: usize,
+        ) -> c_int;
+
+        pub fn crypto_pwhash_str_verify(
+            str_: *const c_char,
+            passwd: *const c_char,
+            passwdlen: c_ulonglong,
+        ) -> c_int;
     }
 }
 
@@ -1065,6 +1081,99 @@ pub extern "C" fn lunet_sodium_randombytes(out: *mut u8, out_len: usize) -> c_in
     // SAFETY: out non-null checked above; the caller contract guarantees
     // out_len writable bytes.
     unsafe { sodium_ffi::randombytes_buf(out, out_len) };
+    RC_OK
+}
+
+/// Argon2id password hashing: write a NUL-terminated, self-describing
+/// hash string into `out` (room for crypto_pwhash_STRBYTES bytes).
+/// `opslimit` / `memlimit` are libsodium's limits. RC_OK on success;
+/// RC_INVAL for a null `out` or a null password with non-zero length;
+/// RC_ERR on operational failure (libsodium init or hashing failure).
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_sodium_pwhash_str(
+    passwd: *const u8,
+    passwd_len: usize,
+    opslimit: c_ulonglong,
+    memlimit: usize,
+    out: *mut u8,
+    out_cap: usize,
+) -> c_int {
+    if let Err(m) = sodium_ready() {
+        return fail(&m);
+    }
+    let passwd = match buf_in(passwd, passwd_len, "pwhash_str password") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    if out.is_null() {
+        return invalid(format!(
+            "pwhash_str output pointer must not be null ({} bytes required)",
+            sodium_ffi::crypto_pwhash_strbytes()
+        ));
+    }
+    let need = sodium_ffi::crypto_pwhash_strbytes();
+    if out_cap < need {
+        return invalid(format!(
+            "pwhash_str output buffer too small: {need} bytes required, got {out_cap}"
+        ));
+    }
+    let rc = unsafe {
+        sodium_ffi::crypto_pwhash_str(
+            out as *mut c_char,
+            passwd.as_ptr() as *const c_char,
+            passwd.len() as c_ulonglong,
+            opslimit,
+            memlimit,
+        )
+    };
+    if rc != 0 {
+        return fail("crypto_pwhash_str failed (out of memory or invalid limits)");
+    }
+    RC_OK
+}
+
+/// Verify `passwd` against the self-describing hash string `hash`.
+/// RC_OK on match; RC_ERR on mismatch or malformed hash; RC_INVAL for
+/// malformed C-level arguments.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn lunet_sodium_pwhash_str_verify(
+    hash: *const u8,
+    hash_len: usize,
+    passwd: *const u8,
+    passwd_len: usize,
+) -> c_int {
+    if let Err(m) = sodium_ready() {
+        return fail(&m);
+    }
+    let hash = match buf_in(hash, hash_len, "pwhash_str_verify hash") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    let passwd = match buf_in(passwd, passwd_len, "pwhash_str_verify password") {
+        Ok(v) => v,
+        Err(m) => return invalid(m),
+    };
+    // crypto_pwhash_str_verify expects NUL-terminated hash string; our
+    // hash slice is the full buffer including trailing NUL? The Lua side
+    // passes #hash without NUL. libsodium reads until NUL, so append a
+    // local NUL-terminated copy.
+    let mut buf = vec![0u8; hash.len() + 1];
+    buf[..hash.len()].copy_from_slice(hash);
+    let rc = unsafe {
+        sodium_ffi::crypto_pwhash_str_verify(
+            buf.as_ptr() as *const c_char,
+            passwd.as_ptr() as *const c_char,
+            passwd.len() as c_ulonglong,
+        )
+    };
+    if rc != 0 {
+        // Distinguish? libsodium returns -1 for both mismatch and
+        // malformed. Report as verification failure.
+        fail("password verification failed");
+        return RC_ERR;
+    }
     RC_OK
 }
 

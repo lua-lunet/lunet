@@ -2,7 +2,7 @@
 
 `lunet.security` 是一个可选的 Lua 封装，为 lunet 应用提供每个 Web 应用都需要的认证令牌层：HMAC-SHA-256 签名/验证、base64url 辅助函数，以及 JWT HS256（`encode` / `decode`）。
 
-关键在于加密出自谁之手：每一个加密的字节级操作都来自 libsodium，经 FFI（`liblunet_paxe`，通过 `lunet.sodium`）调用 - 封装层自身不实现任何加密。它在 Lua 中做的唯一组合是基于 `lunet.sodium.sha256` 按 RFC 2104 构造 HMAC-SHA-256（一个密钥填充步骤 - 见下文"密钥处理"），claims JSON 则通过 `lunet.jsonic` 完成。
+关键在于加密出自谁之手：每一个加密的字节级操作都来自 libsodium，经 FFI（`liblunet_crypto`，通过 `lunet.sodium`）调用 - 封装层自身不实现任何加密。它在 Lua 中做的唯一组合是基于 `lunet.sodium.sha256` 按 RFC 2104 构造 HMAC-SHA-256（一个密钥填充步骤 - 见下文"密钥处理"），claims JSON 则通过 `lunet.jsonic` 完成。
 
 ## 概览
 
@@ -15,7 +15,7 @@
 
 | 依赖 | 何时 | 原因 |
 |------------|------|-----|
-| libsodium（经 `liblunet_paxe`） | 始终需要 - `lunet.sodium` 在加载时 require | HMAC-SHA-256 与 base64 原语 |
+| libsodium（经 `liblunet_crypto`） | 始终需要 - `lunet.sodium` 在加载时 require | HMAC-SHA-256 与 base64 原语 |
 | `lunet.jsonic` | 仅 JWT - 首次使用时加载 | claims JSON 编解码；其加载器随本模块一起打包在压缩包中（其原生解码器目前仅限 POSIX） |
 
 在发布压缩包中，各加载器并排位于 `lunet/` 目录下，通过运行时的 `lunet/?.lua` 路径条目解析 - 见 [docs/RELEASE-LAYOUT-CN.md](RELEASE-LAYOUT-CN.md)。在仓库内或任何 LuaJIT 程序中，直接加载文件：
@@ -25,7 +25,7 @@ local security = require("lunet.security")
 local crypto, jwt = security.crypto, security.jwt
 ```
 
-当 `lunet.sodium` 找不到 `liblunet_paxe` 时（用 `xmake build-paxe` 构建），`require("lunet.security")` 会直接失败；缺少 `lunet.jsonic` 只会在首次使用时以一个指名依赖的错误打断 `jwt.*`。
+当 `lunet.sodium` 找不到 `liblunet_crypto` 时（用 `xmake build-crypto` 构建），`require("lunet.security")` 会直接失败；缺少 `lunet.jsonic` 只会在首次使用时以一个指名依赖的错误打断 `jwt.*`。
 
 ## Lua API（`lunet.security`）
 
@@ -109,11 +109,11 @@ end
 
 ## 打包
 
-`lunet/security.lua` 与 `sqlite3.lua` 并排随每个发布压缩包发布 - 一个没有自己二进制产物的 Lua 模块；其加密由 libsodium 提供，经 `liblunet_paxe` 链接。`lunet/sodium.lua`、`lunet/paxe.lua` 和 `lunet/jsonic.lua`（依赖项）随其一同发布；见 [docs/RELEASE-LAYOUT-CN.md](RELEASE-LAYOUT-CN.md)。
+`lunet/security.lua` 与 `sqlite3.lua` 并排随每个发布压缩包发布 - 一个没有自己二进制产物的 Lua 模块；其加密由 libsodium 提供，经 `liblunet_crypto` 链接。`lunet/sodium.lua`、`lunet/paxe.lua` 和 `lunet/jsonic.lua`（依赖项）随其一同发布；见 [docs/RELEASE-LAYOUT-CN.md](RELEASE-LAYOUT-CN.md)。
 
 ## 测试
 
-`spec/security_spec.lua` 覆盖：基于原始 secret、由独立实现计算的 HMAC 已知答案向量（RFC 4231 测试用例 1 和 2 逐字走原始密钥路径，用例 5 和 7 走标准的先哈希密钥路径，以及针对固定 JWT 签名输入、外部计算的短 secret 签名）、子密钥派生标签不通过验证的负向钉死、逐字节篡改拒绝、base64url RFC 4648 向量与二进制往返、JWT 编码/解码往返（包括使用短原始 secret 的标准库令牌）、`exp` 策略、alg 混淆防御，以及每个指名错误字符串。当 `liblunet_paxe`（或 jsonic 的原生解码器）尚未构建时，测试套件会干净地 pend。
+`spec/security_spec.lua` 覆盖：基于原始 secret、由独立实现计算的 HMAC 已知答案向量（RFC 4231 测试用例 1 和 2 逐字走原始密钥路径，用例 5 和 7 走标准的先哈希密钥路径，以及针对固定 JWT 签名输入、外部计算的短 secret 签名）、子密钥派生标签不通过验证的负向钉死、逐字节篡改拒绝、base64url RFC 4648 向量与二进制往返、JWT 编码/解码往返（包括使用短原始 secret 的标准库令牌）、`exp` 策略、alg 混淆防御，以及每个指名错误字符串。当 `liblunet_crypto`（或 jsonic 的原生解码器）尚未构建时，测试套件会干净地 pend。
 
 ## 参考
 

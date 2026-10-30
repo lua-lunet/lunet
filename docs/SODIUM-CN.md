@@ -2,7 +2,7 @@
 
 `lunet.sodium` 是一个**极简的 libsodium 原语接口**：一次性 SHA-256、一次性 HMAC-SHA-256（即 JWT HS256 原语）、`randombytes`、libsodium 自带的 base64，以及 Argon2id 密码哈希/验证。只有这几个函数，没有更多。
 
-它存在的原因是：PAXE 的 cdylib（`liblunet_paxe`）已经**静态链接了 libsodium** - 二进制发布包的每个使用者，其随包携带的库里就已经包含了这些普通原语的字节。在此之前这些原语无法触达（静态链接的 sodium 符号并不从 cdylib 导出），脚本被迫加载**第二个** libsodium（macOS 上用 Homebrew，Linux 上用发行版软件包） -  一个进程里出现两份 sodium，还带来 `dlsym(RTLD_DEFAULT)` 的歧义。`lunet.sodium` 让已经在那里的原语变得可用。
+它是一个独立的 cdylib（`liblunet_crypto`），静态链接 libsodium 并只暴露其中窄窄的一片：在此之前，每个使用者要么自带 FFI 样板代码，要么往同一进程加载第二个 libsodium（macOS 上 Homebrew，Linux 上发行版软件包），并收获 `dlsym(RTLD_DEFAULT)` 的歧义。`lunet.sodium` 通过一个显式句柄触达一个库的表面。
 
 本模块通过 LuaJIT FFI 从 **dylib 句柄**（对 cdylib 路径执行 `ffi.load`）加载，绝不经过 `ffi.C` / `RTLD_DEFAULT` - 因此同一进程里用户自行加载的 libsodium 永远无法截获这个查找。它与 `lunet.paxe`、`lunet.jsonic` 使用同一套加载模型，并且同样是纯可选的：没有任何东西被链接进 `lunet-run`。
 
@@ -18,16 +18,15 @@
 | `sodium.pwhash_str(password, opts?)` | Argon2id 密码哈希（默认交互式限制；`opts.opslimit`/`opts.memlimit` 覆盖） | `crypto_pwhash_str` |
 | `sodium.pwhash_str_verify(password, hash)` | Argon2id 密码验证 | `crypto_pwhash_str_verify` |
 
-为什么是这几个：SHA-256 与 HMAC-SHA-256 覆盖了校验和与 JWT HS256 - 从 Lua 里使用 sodium 最常见的原因。`randombytes_buf` 是自然的搭档，因为任何进程都不应混用两个随机数发生器；这里的随机数来自 **PAXE 生成 nonce 与 DEK 所用的同一个 CSPRNG**。Base64 是同一张收据再往上的一层：这个模块的每一个使用者都在用纯 Lua 重写 JWT 场景下的 base64 - 每个请求一次，踩在应用最热的路径上 - 而随包携带的库本来就拥有它；运行时把它暴露出来，这些复制品就该消失。
+为什么是这几个：SHA-256 与 HMAC-SHA-256 覆盖了校验和与 JWT HS256 - 从 Lua 里使用 sodium 最常见的原因。`randombytes_buf` 是自然的搭档，因为任何进程都不应混用两个随机数发生器；这里的随机数来自本 cdylib 所链接的 libsodium 实例。Base64 是同一张收据再往上的一层：这个模块的每一个使用者都在用纯 Lua 重写 JWT 场景下的 base64 - 每个请求一次，踩在应用最热的路径上 - 而随包携带的库本来就拥有它；运行时把它暴露出来，这些复制品就该消失。
 
 ## 依赖与加载
 
-需要 PAXE cdylib：源码检出后执行 `xmake build-paxe`，或使用二进制发布包中的 `lunet/liblunet_paxe.*`（加载器 `lunet/sodium.lua` 与其同目录，并按自身相对路径找到它）。不需要任何 PAXE 配置 - 这些原语与 `lunet.paxe` 只共享 cdylib，不共享状态：无需 `paxe.init()`、无需 `set_local_id()`，也不会触碰 PAXE 的统计计数器。
+需要 crypto cdylib：源码检出后执行 `xmake build-crypto`，或使用二进制发布包中的 `lunet/liblunet_crypto.*`（加载器 `lunet/sodium.lua` 与其同目录，并按自身相对路径找到它）。无需任何配置：模块自行初始化自己的 libsodium 实例（幂等），不与任何其他扩展共享状态。
 
 | 环境变量 | 作用 |
 |----------|------|
-| `LUNET_SODIUM_LIB` | 覆盖本加载器绑定的 cdylib 路径（优先检查） |
-| `LUNET_PAXE_LIB` | 同上，与 `ext/paxe/paxe.lua` 共用（其次检查） |
+| `LUNET_CRYPTO_LIB` | 覆盖本加载器绑定的 cdylib 路径 |
 
 与 PAXE 不同，这里**没有 AES-256-GCM 硬件要求** - 这些是可移植的软件原语，在所有平台上可用，包括 Windows（`lunet.lnt_shared` / `lunet.jsonic` 不随 Windows 包发布）。
 
@@ -110,7 +109,7 @@ local sig = sodium.hmac_sha256(signing_input, secret_32bytes)
 
 ## 独立 FFI（不依赖 lunet-run）
 
-任何 LuaJIT 程序都可以直接加载该 cdylib。完整的导出面是五个符号（外加用于错误消息的共享符号 `lunet_paxe_last_error`）：
+任何 LuaJIT 程序都可以直接加载该 cdylib。完整的导出面是七个 `lunet_sodium_*` 符号，外加用于错误消息的 `lunet_crypto_last_error` 以及 `lunet_crypto_version`：
 
 ```lua
 ffi.cdef[[
@@ -128,7 +127,7 @@ ffi.cdef[[
   int lunet_sodium_base64_decode(const uint8_t* input, size_t input_len,
                                  int variant, uint8_t* out, size_t out_cap,
                                  size_t* written);
-  const uint8_t* lunet_paxe_last_error(size_t* len);
+  const uint8_t* lunet_crypto_last_error(size_t* len);
 ]]
 ```
 
@@ -137,14 +136,14 @@ ffi.cdef[[
 | 码 | 含义 |
 |----|------|
 | `0` | 成功 |
-| `-2` | 畸形参数（在需要字节处传了空指针、密钥长度错误、输出缓冲区小于文档要求、未知 base64 变体） -  消息见 `lunet_paxe_last_error` |
-| `-1` | 操作性失败（libsodium 初始化） -  消息见 `lunet_paxe_last_error` |
+| `-2` | 畸形参数（在需要字节处传了空指针、密钥长度错误、输出缓冲区小于文档要求、未知 base64 变体） -  消息见 `lunet_crypto_last_error` |
+| `-1` | 操作性失败（libsodium 初始化） -  消息见 `lunet_crypto_last_error` |
 
 调用者契约：`out` 缓冲区必须对写入长度有效 - 两个哈希输出为 32 字节，random 为 `out_len` 字节；`base64_encode` 为 `((input_len) / 3) * 4 + 5` 字节（即随包携带的库的 `sodium_base64_encoded_len(bin_len, variant)` 在全部变体上的最大值，含 NUL）；`base64_decode` 为 `((input_len + 3) / 4) * 3` 字节，实际解码的字节数通过 `written` 返回（解码结果是二进制，所以靠长度读取 - 绝不以 NUL 作为哨兵）。长度为 0 的 `lunet_sodium_randombytes` 是成功的空操作。
 
 ## ABI 承诺，以及刻意不做出的承诺
 
-**承诺：** 上面的五个 `lunet_sodium_*` 符号，及其签名与返回码，在每一个随附 PAXE cdylib 的发布中保持不变。
+**承诺：** 上述七个 `lunet_sodium_*` 符号及其签名与返回码，外加 `lunet_crypto_last_error` 与 `lunet_crypto_version`，在每一个随附 crypto cdylib 的发布中保持不变。
 
 **刻意不承诺：**
 
@@ -158,13 +157,13 @@ ffi.cdef[[
 
 - **无状态哈希不跨越任何秘密。** `sha256` 的输入就是脚本要哈希的内容；调用结束后不保留任何东西。
 - **HMAC 密钥材料确实跨越 FFI。** 32 字节密钥是普通的 Lua 字符串数据：它在 Lua 虚拟机中未经保护地传递，与传给 `paxe.keystore_set` 的密钥字符串完全一样（诚实的表述见 `docs/PAXE-CN.md`）。受保护、`mlock`、释放即清零的密钥内存仍然由 PAXE 负责；本接口面向普通原语，不负责密钥保管。请据此派生或加载你的 JWT 秘密。
-- **一个进程只有一个 RNG。** `sodium.random` 与 PAXE 使用同一个 CSPRNG，同时使用两者的进程永远不会混用两个随机源。
+- **每个 cdylib 一份 libsodium 实例。**本 cdylib 初始化自己的 libsodium；同一进程若还加载了 PAXE cdylib，则运行着第二个实例。两者的熵都来自操作系统的 CSPRNG，熵源质量没有差别，但不要把两个库的状态（包括本接口的 `randombytes`）当作同一个发生器。
 - **输出是原始字节。** 编码（hex、base64url）以及任何填充/长度策略由调用者负责。
 
 ## 测试
 
 - `spec/sodium_spec.lua` - Lua 行为套件（在 `xmake test` 中运行）：FIPS 180-4 的 SHA-256 已知答案、独立实现的 HMAC-SHA-256 已知答案、错误约定、随机数形态检查、全部变体的 RFC 4648 base64 向量与二进制往返。
-- `ext/paxe/src/lib.rs`（`ffi_tests` 的 sodium 部分） -  在 C 层直接驱动同样的导出，包括已知答案向量、错误约定以及空指针/错误长度参数的处理。
+- `ext/crypto/src/lib.rs`（`ffi_tests` 模块）- 在 C 层直接驱动同样的导出，包括已知答案向量、空指针/错误长度参数的处理，以及 Argon2id 往返。
 
 ## 参考
 
@@ -173,4 +172,4 @@ ffi.cdef[[
 - [libsodium 文档 - 生成随机数据](https://doc.libsodium.org/generating_random_data)
 - [libsodium 文档 - Base64](https://doc.libsodium.org/helpers/base64)
 - [RFC 8725 - JWT 最佳现行实践](https://www.rfc-editor.org/rfc/rfc8725)（HS256 与密钥长度要求）
-- [`docs/PAXE-CN.md`](PAXE-CN.md) - 同一个 cdylib 的另一个接口
+- [`docs/PAXE-CN.md`](PAXE-CN.md) - UDP 协议扩展，一个独立的 cdylib

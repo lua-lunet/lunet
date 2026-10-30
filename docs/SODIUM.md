@@ -2,7 +2,7 @@
 
 `lunet.sodium` is a **minimal libsodium primitive surface**: one-shot SHA-256, one-shot HMAC-SHA-256 (the JWT HS256 primitive), `randombytes`, base64 encode/decode (the encoding every JWT-shaped consumer needs), and Argon2id password hashing/verification. Seven functions, nothing more.
 
-It exists because the PAXE cdylib (`liblunet_paxe`) already **statically links libsodium** - every consumer of the binary archives carries the bytes for these ordinary primitives inside a library they already ship. Before this module those primitives were unreachable (the static sodium symbols are not exported from the cdylib), which forced scripts to load a **second** libsodium (Homebrew on macOS, a distro package on Linux) - two sodiums in one process, with `dlsym(RTLD_DEFAULT)` ambiguity. `lunet.sodium` reaches the primitives that are already there.
+It exists as a standalone cdylib (`liblunet_crypto`) that links libsodium statically and exposes a narrow slice of it: before this module every consumer shipped its own FFI boilerplate or loaded a second libsodium (Homebrew on macOS, a distro package on Linux) into the same process, with `dlsym(RTLD_DEFAULT)` ambiguity as the reward. `lunet.sodium` reaches one library's surface through one explicit handle.
 
 The module is loaded through the LuaJIT FFI from the **dylib handle** (`ffi.load` of the cdylib path), never through `ffi.C` / `RTLD_DEFAULT` - so a user-owned libsodium loaded into the same process can never capture the lookup. It is the same loading model as `lunet.paxe` and `lunet.jsonic`, and like them it is pure opt-in: nothing is linked into `lunet-run`.
 
@@ -18,16 +18,15 @@ The module is loaded through the LuaJIT FFI from the **dylib handle** (`ffi.load
 | `sodium.pwhash_str(password, opts?)` | Argon2id password hashing (interactive limits by default; `opts.opslimit`/`opts.memlimit` override) | `crypto_pwhash_str` |
 | `sodium.pwhash_str_verify(password, hash)` | Argon2id password verification | `crypto_pwhash_str_verify` |
 
-Why these: SHA-256 and HMAC-SHA-256 cover checksums and JWT HS256 - the most common reason to reach for sodium from Lua. `randombytes_buf` is the natural companion, because nobody should mix two RNGs in one process; this draw uses the **same CSPRNG PAXE uses** for its nonces and DEKs. Base64 is the same receipt one layer up: every consumer of this module re-implements it in pure Lua for the JWT profile, per-request, on the hottest path in their app - the linked library already owns it, so the runtime exposes it and the copies die.
+Why these: SHA-256 and HMAC-SHA-256 cover checksums and JWT HS256 - the most common reason to reach for sodium from Lua. `randombytes_buf` is the natural companion, because nobody should mix two RNGs in one process; this draw comes from the linked library's own libsodium instance. Base64 is the same receipt one layer up: every consumer of this module re-implements it in pure Lua for the JWT profile, per-request, on the hottest path in their app - the linked library already owns it, so the runtime exposes it and the copies die.
 
 ## Requirements and loading
 
-Requires the PAXE cdylib: `xmake build-paxe` from a source checkout, or `lunet/liblunet_paxe.*` from a binary release archive (the loader `lunet/sodium.lua` sits beside it and finds it relative to its own directory). No PAXE configuration is needed - the primitives share only the cdylib with `lunet.paxe`, not its state: no `paxe.init()`, no `set_local_id()`, and the PAXE statistics counters are untouched.
+Requires the crypto cdylib: `xmake build-crypto` from a source checkout, or `lunet/liblunet_crypto.*` from a binary release archive (the loader `lunet/sodium.lua` sits beside it and finds it relative to its own directory). No configuration and no state: the module initialises its own libsodium instance (idempotent) and shares nothing with any other extension.
 
 | Environment variable | Effect |
 |----------------------|--------|
-| `LUNET_SODIUM_LIB` | Override the cdylib path this loader binds (checked first) |
-| `LUNET_PAXE_LIB` | Same, shared with `ext/paxe/paxe.lua` (checked second) |
+| `LUNET_CRYPTO_LIB` | Override the cdylib path this loader binds |
 
 Unlike PAXE there is **no AES-256-GCM hardware requirement** - these are portable software primitives available on every platform, including Windows (where `lunet.lnt_shared` / `lunet.jsonic` are not shipped).
 
@@ -110,7 +109,7 @@ local sig = sodium.hmac_sha256(signing_input, secret_32bytes)
 
 ## Standalone FFI (without lunet-run)
 
-Any LuaJIT program can load the cdylib directly. The complete exported surface is five symbols (plus the shared `lunet_paxe_last_error` used for messages):
+Any LuaJIT program can load the cdylib directly. The complete exported surface is the seven `lunet_sodium_*` symbols plus `lunet_crypto_last_error` (used for messages) and `lunet_crypto_version`:
 
 ```lua
 ffi.cdef[[
@@ -128,7 +127,7 @@ ffi.cdef[[
   int lunet_sodium_base64_decode(const uint8_t* input, size_t input_len,
                                  int variant, uint8_t* out, size_t out_cap,
                                  size_t* written);
-  const uint8_t* lunet_paxe_last_error(size_t* len);
+  const uint8_t* lunet_crypto_last_error(size_t* len);
 ]]
 ```
 
@@ -137,14 +136,14 @@ Return codes:
 | Code | Meaning |
 |------|---------|
 | `0` | Success |
-| `-2` | Malformed argument (null pointer where bytes are required, wrong key length, output buffer smaller than the documented requirement, unknown base64 variant) - message in `lunet_paxe_last_error` |
-| `-1` | Operational failure (libsodium initialisation) - message in `lunet_paxe_last_error` |
+| `-2` | Malformed argument (null pointer where bytes are required, wrong key length, output buffer smaller than the documented requirement, unknown base64 variant) - message in `lunet_crypto_last_error` |
+| `-1` | Operational failure (libsodium initialisation) - message in `lunet_crypto_last_error` |
 
 Caller contract: `out` buffers must be valid for the documented write size - 32 bytes for the two hash outputs, `out_len` for random; for `base64_encode`, `((input_len) / 3) * 4 + 5` bytes (the maximum over all variants of the linked library's `sodium_base64_encoded_len(bin_len, variant)`, NUL included); for `base64_decode`, `((input_len + 3) / 4) * 3` bytes, with the actual number of decoded bytes returned through `written` (the decode result is binary, so length is how you read it - never a NUL sentinel). `lunet_sodium_randombytes` with a zero length is a successful no-op.
 
 ## ABI promise, and what is deliberately NOT promised
 
-**Promised:** the five `lunet_sodium_*` symbols above, with these signatures and return codes, in every release that ships the PAXE cdylib.
+**Promised:** the seven `lunet_sodium_*` symbols above with these signatures and return codes, plus `lunet_crypto_last_error` and `lunet_crypto_version`, in every release that ships the crypto cdylib.
 
 **Not promised, deliberately:**
 
@@ -158,14 +157,14 @@ Why base64 is here despite the rule above: it is not a shadow libsodium growth p
 
 - **Stateless hashing crosses no secrets.** `sha256` input is whatever the script hashes; nothing is retained beyond the call.
 - **HMAC key material does cross the FFI.** The 32-byte key is ordinary Lua string data: it transits the Lua VM unguarded, exactly like the key string passed to `paxe.keystore_set` (see the honest statement in `docs/PAXE.md`). Guarded, `mlock`ed, zeroed-on-drop key memory remains PAXE's job; this surface is for ordinary primitives, not key custody. Derive or load your JWT secrets accordingly.
-- **One RNG per process.** `sodium.random` draws from the same CSPRNG PAXE uses, so a process using both never mixes two random sources.
+- **One libsodium instance per cdylib.** This cdylib initialises its own libsodium; a process that also loads the PAXE cdylib runs a second instance. Both draw their entropy from the operating system CSPRNG, so there is no entropy-quality concern - but do not treat the two libraries' states (and this surface's `randombytes`) as one shared generator.
 - **The hash and random outputs are raw bytes.** Hex formatting and any length/policy shaping remain the caller's job; base64 is provided (two variants, library-native) because that is the one encoding every JWT-shaped consumer needs and re-implements.
 - **Base64 crosses no secrets either.** It is a plain transform with no keying, no state and no hazard beyond the input's own sensitivity: bytes that are secret remain secret while encoded.
 
 ## Tests
 
 - `spec/sodium_spec.lua` - the Lua behavioural suite (runs in `xmake test`): FIPS 180-4 SHA-256 known answers, independently computed HMAC-SHA-256 known answers, error conventions, random shape checks, base64 round-trips and the malformed-input conventions.
-- `ext/paxe/src/lib.rs` (the `ffi_tests` sodium section) - the same exports driven at the C level, including the known-answer vectors and null/wrong-length argument handling.
+- `ext/crypto/src/lib.rs` (`mod ffi_tests`) - the same exports driven at the C level, including the known-answer vectors, null/wrong-length argument handling, and the Argon2id round-trip.
 
 ## References
 
@@ -174,4 +173,4 @@ Why base64 is here despite the rule above: it is not a shadow libsodium growth p
 - [libsodium documentation - Generating random data](https://doc.libsodium.org/generating_random_data)
 - [libsodium documentation - Base64](https://doc.libsodium.org/helpers/base64)
 - [RFC 8725 - Best Current Practices for JWT](https://www.rfc-editor.org/rfc/rfc8725) (HS256 and key-size requirements)
-- [`docs/PAXE.md`](PAXE.md) - the other surface of the same cdylib
+- [`docs/PAXE.md`](PAXE.md) - the UDP protocol extension, a separate cdylib

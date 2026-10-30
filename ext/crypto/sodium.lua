@@ -294,12 +294,25 @@ end
 ---@param memlimit integer|nil Memory limit in bytes (default 67108864)
 ---@return string|nil hash Self-describing Argon2id hash string
 ---@return string|nil error Set only on operational failure
-function M.pwhash_str(password, opslimit, memlimit)
+local PWHASH_DEFAULTS = { opslimit = 2, memlimit = 67108864 }
+
+function M.pwhash_str(password, opts)
   password = check_string(password, "password")
-  if opslimit == nil then opslimit = 2 end
-  if memlimit == nil then memlimit = 67108864 end
-  opslimit = check_count(opslimit, "opslimit")
-  memlimit = check_count(memlimit, "memlimit")
+  if opts == nil then opts = {} end
+  if type(opts) ~= "table" then
+    error(("bad argument 'opts' (table expected, got %s)"):format(type(opts)), 2)
+  end
+  local opslimit = opts.opslimit
+  if opslimit == nil then opslimit = PWHASH_DEFAULTS.opslimit end
+  local memlimit = opts.memlimit
+  if memlimit == nil then memlimit = PWHASH_DEFAULTS.memlimit end
+  for k, _ in pairs(opts) do
+    if k ~= "opslimit" and k ~= "memlimit" then
+      error(("bad argument 'opts' (unknown option '%s')"):format(k), 2)
+    end
+  end
+  opslimit = check_count(opslimit, "opts.opslimit")
+  memlimit = check_count(memlimit, "opts.memlimit")
   local need = 128
   local out = ffi.new("uint8_t[?]", need)
   local rc = C.lunet_sodium_pwhash_str(password, #password, opslimit,

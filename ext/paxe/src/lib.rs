@@ -2456,4 +2456,27 @@ mod ffi_tests {
         assert_eq!(after.rx_total, before.rx_total, "sodium must not touch rx");
         assert_eq!(after.tx_total, before.tx_total, "sodium must not touch tx");
     }
+
+    #[test]
+    fn pwhash_str_round_trips_and_rejects_wrong_password() {
+        // malformed C-level args raise RC_INVAL, not a panic
+        let mut out = [0u8; 128];
+        assert_eq!(lunet_sodium_pwhash_str(std::ptr::null(), 5, 2, 67108864, out.as_mut_ptr(), out.len()), RC_INVAL);
+        assert_eq!(lunet_sodium_pwhash_str(b"x".as_ptr(), 1, 2, 67108864, std::ptr::null_mut(), 128), RC_INVAL);
+
+        // hash + verify round trip
+        let passwd = b"secret";
+        assert_eq!(lunet_sodium_pwhash_str(passwd.as_ptr(), passwd.len(), 2, 67108864, out.as_mut_ptr(), out.len()), RC_OK);
+        let hash_len = out.iter().position(|&b| b == 0).unwrap_or(out.len());
+        assert!(hash_len > 0);
+        assert_eq!(lunet_sodium_pwhash_str_verify(out.as_ptr(), hash_len, passwd.as_ptr(), passwd.len()), RC_OK);
+
+        // wrong password -> mismatch (RC_OK_ABSENT), not RC_ERR
+        let wrong = b"wrong";
+        assert_eq!(lunet_sodium_pwhash_str_verify(out.as_ptr(), hash_len, wrong.as_ptr(), wrong.len()), RC_OK_ABSENT);
+
+        // short output buffer -> RC_INVAL
+        let mut tiny = [0u8; 4];
+        assert_eq!(lunet_sodium_pwhash_str(passwd.as_ptr(), passwd.len(), 2, 67108864, tiny.as_mut_ptr(), tiny.len()), RC_INVAL);
+    }
 }

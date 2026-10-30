@@ -1,6 +1,6 @@
 # Sodium：加密原语扩展模块
 
-`lunet.sodium` 是一个**极简的 libsodium 原语接口**：一次性 SHA-256、一次性 HMAC-SHA-256（即 JWT HS256 原语）、`randombytes`，以及 libsodium 自带的 base64。只有这几个函数，没有更多。
+`lunet.sodium` 是一个**极简的 libsodium 原语接口**：一次性 SHA-256、一次性 HMAC-SHA-256（即 JWT HS256 原语）、`randombytes`、libsodium 自带的 base64，以及 Argon2id 密码哈希/验证。只有这几个函数，没有更多。
 
 它存在的原因是：PAXE 的 cdylib（`liblunet_paxe`）已经**静态链接了 libsodium** - 二进制发布包的每个使用者，其随包携带的库里就已经包含了这些普通原语的字节。在此之前这些原语无法触达（静态链接的 sodium 符号并不从 cdylib 导出），脚本被迫加载**第二个** libsodium（macOS 上用 Homebrew，Linux 上用发行版软件包） -  一个进程里出现两份 sodium，还带来 `dlsym(RTLD_DEFAULT)` 的歧义。`lunet.sodium` 让已经在那里的原语变得可用。
 
@@ -15,6 +15,8 @@
 | `sodium.random(n)` | 不可预测字节（id、盐、nonce） | `randombytes_buf` |
 | `sodium.base64_encode(data, variant)` | JWT header/payload 编码、线上格式 | `sodium_bin2base64` |
 | `sodium.base64_decode(data, variant)` | JWT header/payload 解码、线上格式 | `sodium_base642bin` |
+| `sodium.pwhash_str(password, opts?)` | Argon2id 密码哈希（默认交互式限制；`opts.opslimit`/`opts.memlimit` 覆盖） | `crypto_pwhash_str` |
+| `sodium.pwhash_str_verify(password, hash)` | Argon2id 密码验证 | `crypto_pwhash_str_verify` |
 
 为什么是这几个：SHA-256 与 HMAC-SHA-256 覆盖了校验和与 JWT HS256 - 从 Lua 里使用 sodium 最常见的原因。`randombytes_buf` 是自然的搭档，因为任何进程都不应混用两个随机数发生器；这里的随机数来自 **PAXE 生成 nonce 与 DEK 所用的同一个 CSPRNG**。Base64 是同一张收据再往上的一层：这个模块的每一个使用者都在用纯 Lua 重写 JWT 场景下的 base64 - 每个请求一次，踩在应用最热的路径上 - 而随包携带的库本来就拥有它；运行时把它暴露出来，这些复制品就该消失。
 
@@ -116,6 +118,11 @@ ffi.cdef[[
   int lunet_sodium_hmac_sha256(const uint8_t* input, size_t input_len,
                                const uint8_t* key, size_t key_len, uint8_t* out);
   int lunet_sodium_randombytes(uint8_t* out, size_t out_len);
+  int lunet_sodium_pwhash_str(const uint8_t* passwd, size_t passwd_len,
+                              unsigned long long opslimit, size_t memlimit,
+                              uint8_t* out, size_t out_cap);
+  int lunet_sodium_pwhash_str_verify(const uint8_t* hash, size_t hash_len,
+                                     const uint8_t* passwd, size_t passwd_len);
   int lunet_sodium_base64_encode(const uint8_t* input, size_t input_len,
                                  int variant, uint8_t* out, size_t out_cap);
   int lunet_sodium_base64_decode(const uint8_t* input, size_t input_len,

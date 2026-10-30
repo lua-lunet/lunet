@@ -1109,10 +1109,10 @@ pub extern "C" fn lunet_sodium_pwhash_str(
     if out.is_null() {
         return invalid(format!(
             "pwhash_str output pointer must not be null ({} bytes required)",
-            sodium_ffi::crypto_pwhash_strbytes()
+            unsafe { sodium_ffi::crypto_pwhash_strbytes() }
         ));
     }
-    let need = sodium_ffi::crypto_pwhash_strbytes();
+    let need = unsafe { sodium_ffi::crypto_pwhash_strbytes() };
     if out_cap < need {
         return invalid(format!(
             "pwhash_str output buffer too small: {need} bytes required, got {out_cap}"

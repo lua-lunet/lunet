@@ -78,6 +78,8 @@ local function find_lib()
   local script = debug.getinfo(2, "S").source
   local dir = script:match("^@(.+)/[^/]+$") or "."
   for _, p in ipairs({
+    dir .. "/../paxe/target/release/" .. prefix .. "lunet_paxe." .. suffix,
+    dir .. "/../paxe/" .. prefix .. "lunet_paxe." .. suffix,
     dir .. "/target/release/" .. prefix .. "lunet_paxe." .. suffix,
     dir .. "/" .. prefix .. "lunet_paxe." .. suffix,
   }) do

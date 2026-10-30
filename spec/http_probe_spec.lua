@@ -19,7 +19,7 @@
 describe("http probe expectations", function()
   local spec_dir = debug.getinfo(1, "S").source:match("^@(.+)/[^/]+$") or "spec"
   package.preload["lunet.sodium"] = function()
-    return assert(loadfile(spec_dir .. "/../ext/paxe/sodium.lua"))()
+    return assert(loadfile(spec_dir .. "/../ext/crypto/sodium.lua"))()
   end
 
   local ok, sodium = pcall(require, "lunet.sodium")

@@ -61,7 +61,7 @@ close）由调用方负责；JSON 辅助函数仅在被调用时才惰性地依�
 
 ```sh
 docker build -f ext/http/Dockerfile.http -t lunet-http-probe .
-docker run --rm -v "$(pwd)/ext/http:/out" lunet-http-probe
+docker run --rm -v "$(pwd)/ext/http/spec:/out" lunet-http-probe
 ```
 
 挂载运行（清单模式）会把该次运行的产物写入挂载目录：`probe-results.json`

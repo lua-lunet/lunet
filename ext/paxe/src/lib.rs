@@ -1169,10 +1169,11 @@ pub extern "C" fn lunet_sodium_pwhash_str_verify(
         )
     };
     if rc != 0 {
-        // Distinguish? libsodium returns -1 for both mismatch and
-        // malformed. Report as verification failure.
-        fail("password verification failed");
-        return RC_ERR;
+        // libsodium returns -1 for both mismatch and a malformed hash
+        // string; both are "not a match" to the caller. Mismatch is a
+        // normal result, not an operational failure, so it does not
+        // touch last_error (no decryption-oracle-style reason leaking).
+        return RC_OK_ABSENT;
     }
     RC_OK
 }

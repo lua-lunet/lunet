@@ -1,6 +1,6 @@
 # Sodium: Crypto Primitives Extension Module
 
-`lunet.sodium` is a **minimal libsodium primitive surface**: one-shot SHA-256, one-shot HMAC-SHA-256 (the JWT HS256 primitive), `randombytes`, and base64 encode/decode (the encoding every JWT-shaped consumer needs). Five functions, nothing more.
+`lunet.sodium` is a **minimal libsodium primitive surface**: one-shot SHA-256, one-shot HMAC-SHA-256 (the JWT HS256 primitive), `randombytes`, base64 encode/decode (the encoding every JWT-shaped consumer needs), and Argon2id password hashing/verification. Seven functions, nothing more.
 
 It exists because the PAXE cdylib (`liblunet_paxe`) already **statically links libsodium** - every consumer of the binary archives carries the bytes for these ordinary primitives inside a library they already ship. Before this module those primitives were unreachable (the static sodium symbols are not exported from the cdylib), which forced scripts to load a **second** libsodium (Homebrew on macOS, a distro package on Linux) - two sodiums in one process, with `dlsym(RTLD_DEFAULT)` ambiguity. `lunet.sodium` reaches the primitives that are already there.
 
@@ -15,6 +15,8 @@ The module is loaded through the LuaJIT FFI from the **dylib handle** (`ffi.load
 | `sodium.random(n)` | unpredictable bytes (ids, salts, nonces) | `randombytes_buf` |
 | `sodium.base64_encode(data, variant)` | JWT header/payload encoding, wire formats | `sodium_bin2base64` |
 | `sodium.base64_decode(data, variant)` | JWT header/payload decoding, wire formats | `sodium_base642bin` |
+| `sodium.pwhash_str(password, opslimit?, memlimit?)` | Argon2id password hashing (interactive limits by default) | `crypto_pwhash_str` |
+| `sodium.pwhash_str_verify(password, hash)` | Argon2id password verification | `crypto_pwhash_str_verify` |
 
 Why these: SHA-256 and HMAC-SHA-256 cover checksums and JWT HS256 - the most common reason to reach for sodium from Lua. `randombytes_buf` is the natural companion, because nobody should mix two RNGs in one process; this draw uses the **same CSPRNG PAXE uses** for its nonces and DEKs. Base64 is the same receipt one layer up: every consumer of this module re-implements it in pure Lua for the JWT profile, per-request, on the hottest path in their app - the linked library already owns it, so the runtime exposes it and the copies die.
 
@@ -116,6 +118,11 @@ ffi.cdef[[
   int lunet_sodium_hmac_sha256(const uint8_t* input, size_t input_len,
                                const uint8_t* key, size_t key_len, uint8_t* out);
   int lunet_sodium_randombytes(uint8_t* out, size_t out_len);
+  int lunet_sodium_pwhash_str(const uint8_t* passwd, size_t passwd_len,
+                              unsigned long long opslimit, size_t memlimit,
+                              uint8_t* out, size_t out_cap);
+  int lunet_sodium_pwhash_str_verify(const uint8_t* hash, size_t hash_len,
+                                     const uint8_t* passwd, size_t passwd_len);
   int lunet_sodium_base64_encode(const uint8_t* input, size_t input_len,
                                  int variant, uint8_t* out, size_t out_cap);
   int lunet_sodium_base64_decode(const uint8_t* input, size_t input_len,

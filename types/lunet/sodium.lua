@@ -105,4 +105,19 @@ sodium.BASE64_VARIANT_URLSAFE = nil
 ---@type integer
 sodium.BASE64_VARIANT_URLSAFE_NO_PADDING = nil
 
+---Argon2id password hashing (interactive limits by default).
+---@param password string
+---@param opslimit integer|nil
+---@param memlimit integer|nil
+---@return string|nil hash
+---@return string|nil error
+function sodium.pwhash_str(password, opslimit, memlimit) end
+
+---Verify an Argon2id password hash.
+---@param password string
+---@param hash string
+---@return boolean|nil ok
+---@return string|nil error
+function sodium.pwhash_str_verify(password, hash) end
+
 return sodium

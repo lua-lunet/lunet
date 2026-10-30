@@ -9,4 +9,6 @@ global record sodium
     random: function(n: integer): string, string
     base64_encode: function(data: string, variant: integer): string, string
     base64_decode: function(data: string, variant: integer): string, string
+    pwhash_str: function(password: string, opslimit?: integer, memlimit?: integer): string, string
+    pwhash_str_verify: function(password: string, hash: string): boolean, string
 end

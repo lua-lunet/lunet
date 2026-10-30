@@ -39,6 +39,11 @@ ffi.cdef[[
   int lunet_sodium_hmac_sha256(const uint8_t* input, size_t input_len,
                                const uint8_t* key, size_t key_len, uint8_t* out);
   int lunet_sodium_randombytes(uint8_t* out, size_t out_len);
+  int lunet_sodium_pwhash_str(const uint8_t* passwd, size_t passwd_len,
+                              unsigned long long opslimit, size_t memlimit,
+                              uint8_t* out, size_t out_cap);
+  int lunet_sodium_pwhash_str_verify(const uint8_t* hash, size_t hash_len,
+                                     const uint8_t* passwd, size_t passwd_len);
   int lunet_sodium_base64_encode(const uint8_t* input, size_t input_len,
                                  int variant, uint8_t* out, size_t out_cap);
   int lunet_sodium_base64_decode(const uint8_t* input, size_t input_len,
@@ -49,6 +54,7 @@ ffi.cdef[[
 
 -- Return codes, mirroring src/lib.rs (shared with the paxe ABI).
 local RC_OK = 0     -- success
+local RC_OK_ABSENT = 1 -- informational: pwhash verification did not match
 local RC_ERR = -1   -- operational failure -> nil, last_error()
 local RC_INVAL = -2 -- malformed argument -> raise last_error()
 
@@ -276,6 +282,47 @@ function M.base64_decode(data, variant)
   if rc == RC_INVAL then error(last_error(), 2) end
   if rc ~= RC_OK then return nil, last_error() end
   return ffi.string(out, tonumber(written[0]))
+end
+
+--- Argon2id password hashing (libsodium crypto_pwhash_str). Hashes
+--- `password` with the interactive limits by default (opslimit = 2,
+--- memlimit = 64 MiB); both limits are configurable. The salt is embedded
+--- in the returned self-describing string. Malformed arguments raise; an
+--- operational failure returns nil, message.
+---@param password string Password to hash
+---@param opslimit integer|nil Ops limit (default 2)
+---@param memlimit integer|nil Memory limit in bytes (default 67108864)
+---@return string|nil hash Self-describing Argon2id hash string
+---@return string|nil error Set only on operational failure
+function M.pwhash_str(password, opslimit, memlimit)
+  password = check_string(password, "password")
+  if opslimit == nil then opslimit = 2 end
+  if memlimit == nil then memlimit = 67108864 end
+  opslimit = check_count(opslimit, "opslimit")
+  memlimit = check_count(memlimit, "memlimit")
+  local need = 128
+  local out = ffi.new("uint8_t[?]", need)
+  local rc = C.lunet_sodium_pwhash_str(password, #password, opslimit,
+    memlimit, out, need)
+  if rc == RC_INVAL then error(last_error(), 2) end
+  if rc ~= RC_OK then return nil, last_error() end
+  return ffi.string(out)
+end
+
+--- Verify `password` against a self-describing Argon2id hash string.
+--- Returns true on match, false on mismatch or malformed hash. Malformed
+--- arguments raise; an operational failure returns nil, message.
+---@param password string Password to verify
+---@param hash string Self-describing hash string
+---@return boolean|nil ok True on match, false on mismatch, nil on operational failure
+---@return string|nil error Set only on operational failure
+function M.pwhash_str_verify(password, hash)
+  password = check_string(password, "password")
+  hash = check_string(hash, "hash")
+  local rc = C.lunet_sodium_pwhash_str_verify(hash, #hash, password, #password)
+  if rc == RC_INVAL then error(last_error(), 2) end
+  if rc == RC_ERR then return nil, last_error() end
+  return rc == RC_OK
 end
 
 return M

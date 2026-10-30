@@ -215,6 +215,21 @@ jobs:
       if: runner.os == 'Linux'
       run: echo "PAXE_SODIUM_LIB_DIR=/tmp/libsodium/lib" >> "$GITHUB_ENV"
 
+    # ext/crypto links its own STATIC libsodium through its build.rs
+    # (zero crate dependencies): LUNET_CRYPTO_SODIUM_LIB_DIR is the
+    # priority-1 resolution there, ahead of pkg-config. Linux reuses the
+    # source-built 1.0.22 staged by sodium-src.sh; macOS points at the
+    # Homebrew keg (libsodium is keg-only, so its .pc file is off the
+    # default pkg-config path). Windows resolves via the vcpkg tree that
+    # the paxe build already requires.
+    - name: Set crypto libsodium path (Linux)
+      if: runner.os == 'Linux'
+      run: echo "LUNET_CRYPTO_SODIUM_LIB_DIR=/tmp/libsodium/lib" >> "$GITHUB_ENV"
+
+    - name: Set crypto libsodium path (macOS)
+      if: runner.os == 'macOS'
+      run: echo "LUNET_CRYPTO_SODIUM_LIB_DIR=$(brew --prefix libsodium)/lib" >> "$GITHUB_ENV"
+
     # PAXE (ext/paxe): the C ABI cdylib. The protocol core is vendored
     # byte-exact from the upstream release tag at ext/paxe/paxe-core
     # (see ext/paxe/paxe-core.version), so the Rust build needs no network
@@ -260,19 +275,50 @@ jobs:
         if [ ! -f "$ART" ]; then echo "missing artefact: $ART" >&2; exit 1; fi
         echo "PAXE cdylib OK: $ART"
 
+    # CRYPTO (ext/crypto): the standalone libsodium-primitives cdylib —
+    # SHA-256, HMAC, randombytes, base64 and Argon2id password hashing.
+    # Same fully-offline story as paxe; zero crate dependencies. The crate
+    # pins its own toolchain, so cargo must run with the crate dir as cwd
+    # (rustup resolves rust-toolchain.toml from the cwd).
+    - name: Build crypto Rust crate
+      working-directory: ext/crypto
+      run: cargo build --release
+
+    # The crate's FFI known-answer tests, mirroring the paxe step above:
+    # stop the job on a wrong primitive before a bad cdylib is packaged.
+    - name: Test crypto Rust crate
+      working-directory: ext/crypto
+      run: cargo test
+
+    # Same per-platform cdylib naming rule as paxe (.dll, no "lib"
+    # prefix on Windows).
+    - name: Verify crypto cdylib artefact
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ runner.os }}" in
+          Windows) ART=ext/crypto/target/release/lunet_crypto.dll ;;
+          macOS)   ART=ext/crypto/target/release/liblunet_crypto.dylib ;;
+          *)       ART=ext/crypto/target/release/liblunet_crypto.so ;;
+        esac
+        if [ ! -f "$ART" ]; then echo "missing artefact: $ART" >&2; exit 1; fi
+        echo "crypto cdylib OK: $ART"
+
     # Run the busted suite in CI — it previously ran nowhere, which is why
     # spec rot stayed invisible for months. `xmake test` = check-types ->
-    # build lunet-httpc -> busted, and fails on ANY pending test unless
+    # build the C drivers -> build the Rust cdylibs (build-paxe,
+    # build-crypto) -> busted, and fails on ANY pending test unless
     # LUNET_ALLOW_PENDING=1 (local escape hatch only). The toolchain,
     # libcurl dev headers and a LuaJIT/5.1-tree busted are already installed
     # in this job by contributing/deps/debian.sh --ci (which execs
     # qa-luarocks.sh). One OS job proves the gate; macOS/Windows coverage
     # is a follow-up.
     #
-    # ORDERING IS LOAD-BEARING: this runs AFTER the Rust ext steps above.
-    # spec/paxe_spec.lua goes pending when the PAXE cdylib is absent, and
-    # the no-pending gate turns that into a hard failure — so building the
-    # crate after this step fails the job on a test that never ran.
+    # The gate hard-builds the four Rust cdylibs itself (paxe, crypto,
+    # lnt_shared, jsonic on Unix), so this step does not depend on the
+    # Rust steps above for the suite to pass (cargo rebuilds are no-ops
+    # there); those steps still run first on every leg because the
+    # release archives package the cdylibs.
     - name: Lua test suite
       if: matrix.os == 'ubuntu-latest'
       run: xmake test
@@ -349,9 +395,10 @@ jobs:
         # statically into the cdylib, so the archive stays self-contained.
         cp ext/paxe/paxe.lua "$DIST_DIR/lunet/"
         cp ext/paxe/target/release/liblunet_paxe.so "$DIST_DIR/lunet/"
-        # lunet.sodium: the primitives loader binds the SAME cdylib through
-        # its dylib handle (lunet_sodium_* shims) — no extra artifact.
-        cp ext/paxe/sodium.lua "$DIST_DIR/lunet/"
+        # lunet.sodium: the standalone libsodium-primitives cdylib plus its
+        # Lua loader (own static libsodium link, same self-contained rule).
+        cp ext/crypto/sodium.lua "$DIST_DIR/lunet/"
+        cp ext/crypto/target/release/liblunet_crypto.so "$DIST_DIR/lunet/"
         # sqlite3 Lua loader: the public lunet.sqlite3 surface + the
         # path-keyed handle cache (the binary registers as lunet.sqlite3core).
         cp ext/sqlite3/sqlite3.lua "$DIST_DIR/lunet/"
@@ -402,9 +449,10 @@ jobs:
         # statically into the cdylib, so the archive stays self-contained.
         cp ext/paxe/paxe.lua "$DIST_DIR/lunet/"
         cp ext/paxe/target/release/liblunet_paxe.dylib "$DIST_DIR/lunet/"
-        # lunet.sodium: the primitives loader binds the SAME cdylib through
-        # its dylib handle (lunet_sodium_* shims) — no extra artifact.
-        cp ext/paxe/sodium.lua "$DIST_DIR/lunet/"
+        # lunet.sodium: the standalone libsodium-primitives cdylib plus its
+        # Lua loader (own static libsodium link, same self-contained rule).
+        cp ext/crypto/sodium.lua "$DIST_DIR/lunet/"
+        cp ext/crypto/target/release/liblunet_crypto.dylib "$DIST_DIR/lunet/"
         # sqlite3 Lua loader: the public lunet.sqlite3 surface + the
         # path-keyed handle cache (the binary registers as lunet.sqlite3core).
         cp ext/sqlite3/sqlite3.lua "$DIST_DIR/lunet/"
@@ -481,9 +529,10 @@ jobs:
         # statically into the cdylib, so the archive stays self-contained.
         Copy-Item ext\paxe\paxe.lua (Join-Path $dist "lunet")
         Copy-Item ext\paxe\target\release\lunet_paxe.dll (Join-Path $dist "lunet")
-        # lunet.sodium: the primitives loader binds the SAME cdylib through
-        # its dylib handle (lunet_sodium_* shims) — no extra artifact.
-        Copy-Item ext\paxe\sodium.lua (Join-Path $dist "lunet")
+        # lunet.sodium: the standalone libsodium-primitives cdylib plus its
+        # Lua loader (own static libsodium link, same self-contained rule).
+        Copy-Item ext\crypto\sodium.lua (Join-Path $dist "lunet")
+        Copy-Item ext\crypto\target\release\lunet_crypto.dll (Join-Path $dist "lunet")
         # sqlite3 Lua loader: the public lunet.sqlite3 surface + the
         # path-keyed handle cache (the binary registers as lunet.sqlite3core).
         Copy-Item ext\sqlite3\sqlite3.lua (Join-Path $dist "lunet")

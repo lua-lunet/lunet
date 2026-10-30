@@ -809,6 +809,20 @@ task("test")
         os.exec("xmake build lunet-sqlite3")
         os.exec("xmake build lunet-postgres")
         os.exec("xmake build lunet-mysql")
+        -- The Rust cdylibs (paxe, crypto) are built by their own tasks so
+        -- their specs can never silently pend: sodium/security/http-probe
+        -- go pending when liblunet_crypto is absent, paxe when
+        -- liblunet_paxe is. A machine without cargo surfaces red here,
+        -- not a pending suite.
+        os.exec("xmake build-paxe")
+        os.exec("xmake build-crypto")
+        -- lnt_shared and jsonic are the same story on Unix (POSIX-only and
+        -- no .dll suffix handling yet respectively — see the CI workflow),
+        -- so their specs pend the same way when the cdylibs are absent.
+        if not is_host("windows") then
+            os.exec("xmake build-lnt-shared")
+            os.exec("xmake build-jsonic")
+        end
         local mode = get_config("mode") or "release"
         local dirs = os.dirs("build/**/" .. mode .. "/lunet")
         local cpath = os.getenv("LUA_CPATH") or ""

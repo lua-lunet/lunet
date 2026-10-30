@@ -24,7 +24,7 @@ describe("http probe expectations", function()
 
   local ok, sodium = pcall(require, "lunet.sodium")
   if not ok then
-    pending("lunet.sodium not built (xmake build-paxe)", function() end)
+    pending("lunet.sodium not built (xmake build-crypto)", function() end)
     return
   end
 

@@ -32,7 +32,7 @@ describe("security module #native", function()
 
   local ok, security = pcall(require, "lunet.security")
   if not ok then
-    pending("lunet.security not loadable  -  lunet.sodium needs liblunet_paxe (xmake build-paxe)",
+    pending("lunet.security not loadable  -  lunet.sodium needs liblunet_crypto (xmake build-crypto)",
       function() end)
     return
   end

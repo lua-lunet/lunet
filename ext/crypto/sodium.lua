@@ -278,18 +278,19 @@ function M.base64_decode(data, variant)
   return ffi.string(out, tonumber(written[0]))
 end
 
---- Argon2id password hashing (libsodium crypto_pwhash_str). Hashes
---- `password` with the interactive limits by default (opslimit = 2,
---- memlimit = 64 MiB); both limits are configurable. The salt is embedded
---- in the returned self-describing string. Malformed arguments raise; an
---- operational failure returns nil, message.
----@param password string Password to hash
----@param opslimit integer|nil Ops limit (default 2)
----@param memlimit integer|nil Memory limit in bytes (default 67108864)
----@return string|nil hash Self-describing Argon2id hash string
----@return string|nil error Set only on operational failure
 local PWHASH_DEFAULTS = { opslimit = 2, memlimit = 67108864 }
 
+--- Argon2id password hashing (libsodium crypto_pwhash_str). Hashes
+--- `password` with the interactive limits by default; `opts` may
+--- override `opslimit` and/or `memlimit` (bytes). Unknown opts keys,
+--- wrong types and malformed arguments raise; an operational failure
+--- returns nil plus message. The salt is embedded in the returned
+--- self-describing string.
+---@param password string Password to hash
+---@param opts table|nil Optional overrides: `opslimit` (default 2),
+---   `memlimit` (default 67108864 bytes)
+---@return string|nil hash Self-describing Argon2id hash string
+---@return string|nil error Set only on operational failure
 function M.pwhash_str(password, opts)
   password = check_string(password, "password")
   if opts == nil then opts = {} end

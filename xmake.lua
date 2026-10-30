@@ -1340,6 +1340,43 @@ task("test-paxe")
     end)
 task_end()
 
+-- =============================================================================
+-- Build:   xmake build-crypto
+-- Standalone libsodium-primitives cdylib (ext/crypto): SHA-256, HMAC,
+-- randombytes, base64, Argon2id password hashing. Own static libsodium
+-- link via its build.rs. Not linked into lunet-run. The toolchain pin
+-- lives beside the crate; cargo must run with the crate dir as cwd.
+task("build-crypto")
+    set_menu {
+        usage = "xmake build-crypto",
+        description = "Build the crypto libsodium-primitives cdylib (ext/crypto)"
+    }
+    on_run(function()
+        local crate_dir = path.join(os.scriptdir(), "ext", "crypto")
+        print("[crypto] cargo build --release ...")
+        os.execv("cargo", {"build", "--release"}, {curdir = crate_dir})
+        print("[crypto] built: " .. path.join(crate_dir, "target", "release"))
+    end)
+task_end()
+
+task("test-crypto")
+    set_menu {
+        usage = "xmake test-crypto",
+        description = "Run the crypto crate's Rust tests (ext/crypto), debug and release profiles"
+    }
+    on_run(function()
+        local crate_dir = path.join(os.scriptdir(), "ext", "crypto")
+        -- Both profiles run: panic = "abort" changes the release profile, so
+        -- debug-passing tests are not proof the release profile passes.
+        -- os.execv raises on non-zero exit, failing the task on any test failure.
+        print("[crypto] cargo test ...")
+        os.execv("cargo", {"test"}, {curdir = crate_dir})
+        print("[crypto] cargo test --release ...")
+        os.execv("cargo", {"test", "--release"}, {curdir = crate_dir})
+        print("[crypto] tests passed (debug + release)")
+    end)
+task_end()
+
 -- Re-vendor the pinned paxe-core release into ext/paxe/paxe-core (the tree
 -- is byte-exact `git archive <tag>` output; the manifest beside it records
 -- tag, commit and archive digest). Requires read access to the private

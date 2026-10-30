@@ -16,11 +16,11 @@
 -- (Python's hmac module) against libsodium's FIXED 32-byte HMAC key
 -- size, so a wrong FFI binding fails loudly here.
 --
--- Module resolution mirrors spec/paxe_spec.lua: the FFI loader is the
--- Lua file ext/paxe/sodium.lua, not a C module; package.preload routes
--- require("lunet.sodium") to the dev-tree loader explicitly, and the
--- pending gate fires exactly when the cdylib is absent (the loader
--- raises at load time when it cannot find liblunet_paxe).
+-- Module resolution: the FFI loader is the Lua file ext/crypto/sodium.lua
+-- (not a C module); package.preload routes require("lunet.sodium") to the
+-- dev-tree loader explicitly, and the pending gate fires exactly when the
+-- cdylib is absent (the loader raises at load time when it cannot find
+-- liblunet_crypto).
 
 describe("Sodium Module #native", function()
   local spec_dir = debug.getinfo(1, "S").source:match("^@(.+)/[^/]+$") or "spec"
@@ -30,7 +30,7 @@ describe("Sodium Module #native", function()
 
   local ok, sodium = pcall(require, "lunet.sodium")
   if not ok then
-    pending("lunet.sodium not built (xmake build-paxe)", function() end)
+    pending("lunet.sodium not built (xmake build-crypto)", function() end)
     return
   end
 

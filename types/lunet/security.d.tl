@@ -35,11 +35,15 @@ global record security
         -- scheme word (case-insensitive Bearer or Token, whitespace
         -- tolerant) then decodes. Returns the claims table and nil on
         -- success; on failure nil plus a kind word: "missing" (absent
-        -- or empty header), "scheme" (no known scheme word followed by
-        -- a token), or a decode kind (malformed / sig / exp).
-        -- Malformed arguments (non-string non-nil header, bad secret)
-        -- raise.
-        bearer: function(authorization: string, secret: string): {string: any} | nil, string
+        -- or empty header), "scheme" (scheme word not in the accepted
+        -- set, or no token followed it), or a decode kind (malformed /
+        -- sig / exp).
+        -- `schemes` is required: a string or a non-empty array of
+        -- strings naming the accepted scheme words. There is no default
+        -- set.
+        -- Malformed arguments (non-string non-nil header, bad secret,
+        -- missing or malformed schemes) raise.
+        bearer: function(authorization: string, secret: string, schemes: string | {string}): {string: any} | nil, string
     end
 
     crypto: crypto

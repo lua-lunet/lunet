@@ -111,18 +111,35 @@ runs after the signature check and refuses anything but `HS256` - an
 alg-confusion token (for example a `{"alg":"none"}` header) is rejected as
 `malformed` even when the signature over it is genuinely valid.
 
-### `security.jwt.bearer(authorization, secret) -> claims, kind`
+### `security.jwt.bearer(authorization, secret, schemes) -> claims, kind`
 
 Extract-and-verify for an `Authorization` header: the mechanism, not the
-policy. It matches the scheme word (case-insensitive `Bearer` or `Token`,
-one-or-more separator spaces, trailing whitespace tolerated), then decodes
-the token with `jwt.decode`, mapping every failure to a short kind word so
-each app keeps its own error messages, statuses, and fallback identities:
+policy. `schemes` names the scheme words the caller is willing to accept -
+a single string or a non-empty array of strings - matched case-insensitively
+against the header's scheme word (one-or-more separator spaces, trailing
+whitespace tolerated), then the token is decoded with `jwt.decode`, mapping
+every failure to a short kind word so each app keeps its own error messages,
+statuses, and fallback identities:
+
+```lua
+-- Token-only, as the RealWorld spec mandates:
+local claims, kind = security.jwt.bearer(auth_header, secret, "Token")
+
+-- Or several, when the app genuinely wants both:
+local claims, kind = security.jwt.bearer(auth_header, secret, { "Bearer", "Token" })
+```
+
+`schemes` is required: there is no default accepted set, because picking one
+silently (the RFC 6750 scheme versus a framework's single-word scheme) is a
+policy decision that belongs to the app, not to this helper. Omitting it, or
+passing an empty array, a non-string entry, or a value that is neither a
+string nor an array of strings, raises - those are caller bugs, not attacker
+input.
 
 | `kind` | Meaning |
 |--------|---------|
 | `"missing"` | The header is absent (`nil`) or the empty string |
-| `"scheme"` | A header was present, but no known scheme word followed by a token |
+| `"scheme"` | A header was present, but its scheme word is not in the accepted set, or no token followed it |
 | `"malformed"` | A decode-side check failed: token shape, base64, JSON, `alg` not HS256, or a non-numeric `exp` |
 | `"sig"` | The signature does not match |
 | `"exp"` | The token's `exp` is strictly before the current time |

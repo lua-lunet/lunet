@@ -528,7 +528,12 @@ describe("PAXE Module #native", function()
         end
       end
       assert_one_reason(corrupted, "rx_auth_fail")
-      assert_one_reason(frame:sub(1, #frame - 1), "rx_len_mismatch")
+      -- A standard frame cut below the minimum geometry (prefix + nonce +
+      -- tag) cannot hold a ciphertext, so the length gate rejects it before
+      -- authentication is ever attempted: rx_len_mismatch, not rx_auth_fail.
+      -- Truncating a valid frame by one byte still clears the geometry
+      -- floor and dies at the tag instead.
+      assert_one_reason(frame:sub(1, paxe.OVERHEAD_STANDARD - 1), "rx_len_mismatch")
       assert_one_reason(string.rep("\0", 37), "rx_bad_flags")
       assert_one_reason("1234", "rx_short")
       -- A 37-byte frame carrying the DEK bit: under the 97-byte

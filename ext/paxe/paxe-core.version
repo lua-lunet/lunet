@@ -2,10 +2,10 @@ Vendored paxe-core manifest
 ===========================
 
 source-repo:    git@github.com:lua-lunet/paxe-core.git
-tag:            v0.1.0
-commit:         e61519fd3055ce7e548ba0e7bb7fafb7419986e8
-archive-sha256: 1e5084e8b75a03cad6040f08d0cec7686d780b764c1d5b7b2cb5d5fcaccce8a7
-vendored-at:    2026-08-10
+tag:            v0.3.1
+commit:         a95c06624f17ccbfca6f7d02581b867fd32e37fe
+archive-sha256: 897dd8ec8332c41b56692cb6205be9e57c58812ed16d3c793f26088391c38189
+vendored-at:    2026-10-30
 
 The tree at paxe-core/ is byte-exact `git archive <tag>` output (the digest
 above is the .tar.gz of that archive). Verify or re-vendor with:

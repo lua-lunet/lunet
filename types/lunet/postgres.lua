@@ -15,7 +15,8 @@ local postgres = {}
 --- - sslmode: string? one of "disable"|"allow"|"prefer"|"require"|"verify-ca"|"verify-full";
 ---   unset leaves the libpq default untouched
 --- - pool_size: integer? (default 1) connections behind the returned handle,
----   round-robin; postgres_tx requires the default
+---   round-robin. Transactions need one session: open with pool_size = 1,
+---   or checkout a member for the transaction's lifetime (see checkout).
 ---@return lightuserdata|nil conn The connection handle (a pool of pool_size connections), or nil on error
 ---@return string|nil error Error message if failed
 ---@usage
@@ -27,9 +28,26 @@ local postgres = {}
 function postgres.open(params) end
 
 ---Close a PostgreSQL connection.
----@param conn lightuserdata The connection handle
+---@param conn lightuserdata The connection handle (a pool or a checked-out member)
 ---@return string|nil error Error message if failed
 function postgres.close(conn) end
+
+---Check one member out of the pool exclusively: returns a connection handle
+---bound to a single server session, removed from the pool's round-robin
+---rotation until released. The mechanism for transaction stickiness on a
+---multi-member pool. A member checked out this way is itself a single
+---connection, so prepare and postgres_tx work on it.
+---@param pool lightuserdata The pool handle returned by open
+---@return lightuserdata|nil conn The checked-out member handle, or nil on error
+---@return string|nil error Error message if failed (e.g. pool exhausted)
+function postgres.checkout(pool) end
+
+---Return a checked-out member to the pool's rotation. Idempotent after
+---the pool is closed. A double release, or releasing a handle that was
+---not checked out, fails loudly.
+---@param conn lightuserdata The checked-out member handle
+---@return string|nil error Error message if failed
+function postgres.release(conn) end
 
 ---Execute a SELECT query with optional bound parameters.
 ---

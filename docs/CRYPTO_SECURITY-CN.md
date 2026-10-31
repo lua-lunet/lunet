@@ -67,17 +67,31 @@ local crypto, jwt = security.crypto, security.jwt
 
 签名在任何 JSON 解析**之前**验证，因此令牌主体的任何字节除了 MAC 覆盖的字节外不会影响任何东西。`alg` 检查在签名检查之后运行，且拒绝 `HS256` 之外的任何算法 - alg 混淆令牌（例如 `{"alg":"none"}` 头部）即使在其签名真实有效时也会被拒绝为 `malformed`。
 
-### `security.jwt.bearer(authorization, secret) -> claims, kind`
+### `security.jwt.bearer(authorization, secret, schemes) -> claims, kind`
 
-针对 `Authorization` 头的提取加验证辅助函数：只做机制，不做策略。它匹配
-方案词（不区分大小写的 `Bearer` 或 `Token`，一个或多个分隔空白，容忍尾部
-空白），随后用 `jwt.decode` 解码令牌，把每种失败映射为一个简短的类别词，
-让每个应用保留自己的错误消息、状态码与匿名回退身份：
+针对 `Authorization` 头的提取加验证辅助函数：只做机制，不做策略。`schemes`
+列出调用方愿意接受的方案词 - 单个字符串或非空字符串数组 - 与头中的方案
+词做不区分大小写的匹配（一个或多个分隔空白，容忍尾部空白），随后用
+`jwt.decode` 解码令牌，把每种失败映射为一个简短的类别词，让每个应用保留
+自己的错误消息、状态码与匿名回退身份：
+
+```lua
+-- RealWorld 规范要求的仅 Token：
+local claims, kind = security.jwt.bearer(auth_header, secret, "Token")
+
+-- 或者应用确实需要两者时：
+local claims, kind = security.jwt.bearer(auth_header, secret, { "Bearer", "Token" })
+```
+
+`schemes` 是必填的：没有默认接受集合，因为"静默地选一个"（RFC 6750 的
+方案词 vs 框架的单字方案词）是策略决定，属于应用，不属于这个辅助函数。
+省略它、传空数组、传非字符串元素、或传既非字符串也非字符串数组的值，都会
+抛出错误 - 那是调用方的 bug，不是攻击者输入。
 
 | `kind` | 含义 |
 |--------|------|
 | `"missing"` | 头缺失（`nil`）或为空字符串 |
-| `"scheme"` | 头存在，但没有已知的方案词后跟令牌 |
+| `"scheme"` | 头存在，但其方案词不在接受集合中，或后面没有令牌 |
 | `"malformed"` | 解码侧检查失败：令牌形状、base64、JSON、`alg` 不是 HS256，或 `exp` 不是数字 |
 | `"sig"` | 签名不匹配 |
 | `"exp"` | 令牌的 `exp` 严格早于当前时间 |

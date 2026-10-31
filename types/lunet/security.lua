@@ -144,16 +144,23 @@ function jwt.encode(payload, secret, opts) end
 function jwt.decode(token, secret) end
 
 ---Extract a bearer token from an Authorization header and verify it.
----The mechanism only: matches the scheme word (case-insensitive
----Bearer or Token, one or more separator spaces, trailing whitespace
+---The mechanism only: matches the scheme word against the accepted set
+---(case-insensitive, one or more separator spaces, trailing whitespace
 ---tolerated), then decodes with jwt.decode. Every failure maps to a
 ---short kind word so each app keeps its own error messages and
 ---statuses:
 ---
 ---   * "missing" - the header is absent (nil) or the empty string
----   * "scheme" - a header was present, but no known scheme word
----     followed by a token
+---   * "scheme" - a header was present, but its scheme word is not in
+---     the accepted set, or no token followed it
 ---   * the decode kinds: "malformed", "sig", "exp"
+---
+---`schemes` is required: a string or a non-empty array of strings naming
+---the scheme words the caller accepts. There is no default set, because
+---picking one silently is a policy decision that belongs to the app.
+---Omitting it, or passing an empty array, a non-string entry, or a
+---value that is neither a string nor an array of strings, raises -
+---those are caller bugs, not attacker input.
 ---
 ---If decode ever returns a diagnostic without the module error prefix,
 ---it is passed through unchanged. Malformed arguments (a non-string,
@@ -161,15 +168,16 @@ function jwt.decode(token, secret) end
 ---input.
 ---@param authorization string|nil The Authorization header value; nil means absent
 ---@param secret string Non-empty secret key (as passed to jwt.decode)
+---@param schemes string|string[] Non-empty string or array of accepted scheme words
 ---@return table|nil claims The verified claims table, or nil on failure
 ---@return string|nil kind The failure kind word, or nil on success
 ---@usage
 ---```lua
 ---local security = require("lunet.security")
----local claims, kind = security.jwt.bearer(auth_header, secret)
+---local claims, kind = security.jwt.bearer(auth_header, secret, "Token")
 ---if not claims then return nil, kind end
 ---```
-function jwt.bearer(authorization, secret) end
+function jwt.bearer(authorization, secret, schemes) end
 
 ---@type lunet.security.crypto
 security.crypto = crypto

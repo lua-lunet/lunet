@@ -314,11 +314,6 @@ function jwt.decode(token, secret)
   return claims
 end
 
--- Schemes jwt.bearer accepts, matched case-insensitively: the two the
--- known consumers send (the RFC 6750 scheme and the single-word
--- variant the framework demos use).
-local BEARER_SCHEMES = { bearer = true, token = true }
-
 --- Extract and verify a bearer token from an Authorization header:
 --- match the scheme word (case-insensitive, one or more separator
 --- spaces, trailing whitespace tolerated), then decode the token with
@@ -347,7 +342,7 @@ local BEARER_SCHEMES = { bearer = true, token = true }
 ---local claims, kind = security.jwt.bearer(auth_header, secret)
 ---if not claims then return nil, kind end
 ---```
-function jwt.bearer(authorization, secret)
+function jwt.bearer(authorization, secret, schemes)
   secret = check_string(secret, "secret")
   if authorization == nil then
     return nil, "missing"
@@ -359,8 +354,28 @@ function jwt.bearer(authorization, secret)
   if #authorization == 0 then
     return nil, "missing"
   end
+  -- schemes is required: no default accepted set. A string pins one
+  -- scheme; an array pins exactly those. Malformed input raises.
+  if type(schemes) == "string" then
+    schemes = { schemes }
+  end
+  if type(schemes) ~= "table" then
+    error(("bad argument 'schemes' (string or an array of strings expected, got %s)")
+      :format(type(schemes)), 3)
+  end
+  if #schemes == 0 then
+    error("bad argument 'schemes' (must be a non-empty array of scheme words)", 3)
+  end
+  local accepted = {}
+  for i, scheme in ipairs(schemes) do
+    if type(scheme) ~= "string" then
+      error(("bad argument 'schemes[%d]' (string expected, got %s)")
+        :format(i, type(scheme)), 3)
+    end
+    accepted[scheme:lower()] = true
+  end
   local scheme, token = authorization:match("^(%S+)%s+(%S+)%s*$")
-  if not scheme or not BEARER_SCHEMES[scheme:lower()] then
+  if not scheme or not accepted[scheme:lower()] then
     return nil, "scheme"
   end
   local claims, err = jwt.decode(token, secret)

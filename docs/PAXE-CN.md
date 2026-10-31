@@ -4,7 +4,7 @@ PAXE（Packet Encryption）是 lunet 的数据报加密扩展：为集群提供�
 
 协议核心是 **[paxe-core](https://github.com/lua-lunet/paxe-core)**，一个零依赖的 sans-io Rust crate，按上游发布 tag **逐字节内嵌**（vendored）到 `ext/paxe/paxe-core/`（tag、提交与归档摘要记录在 `ext/paxe/paxe-core.version`；用 `xmake vendor-paxe` 重新内嵌）。lunet 侧的 crate `ext/paxe` 拥有 C ABI 并构建出 `liblunet_paxe` 动态库，`require("lunet.paxe")` 通过加载器 `ext/paxe/paxe.lua` 以 LuaJIT FFI 加载它 - 与 `lunet.jsonic` 的加载模型相同。该扩展是纯可选的：绝不链接进 `lunet-run`。
 
-**规范性的线路格式与安全契约**是 paxe-core 的 [PAXE.md](https://github.com/lua-lunet/paxe-core/blob/v0.1.0/PAXE.md)。本文档是 lunet 集成参考：描述 Lua API 的行为，仅复述 lunet 运维人员会接触到的线路契约部分。若本文档与上游契约不一致，以上游文档为准 - 请报告此类漂移。
+**规范性的线路格式与安全契约**是 paxe-core 的 [PAXE.md](https://github.com/lua-lunet/paxe-core/blob/v0.3.1/PAXE.md)。本文档是 lunet 集成参考：描述 Lua API 的行为，仅复述 lunet 运维人员会接触到的线路契约部分。若本文档与上游契约不一致，以上游文档为准 - 请报告此类漂移。
 
 ## 概览
 
@@ -227,7 +227,7 @@ Prefix(9) ‖ EnvelopeNonce(12) ‖ EncryptedDEK(32) ‖ EnvelopeTag(16) ‖ Bod
 
 ## 参考文献
 
-- paxe-core（协议核心与规范性线路契约）：https://github.com/lua-lunet/paxe-core（[PAXE.md](https://github.com/lua-lunet/paxe-core/blob/v0.1.0/PAXE.md)）
+- paxe-core（协议核心与规范性线路契约）：https://github.com/lua-lunet/paxe-core（[PAXE.md](https://github.com/lua-lunet/paxe-core/blob/v0.3.1/PAXE.md)）
 - libsodium：https://doc.libsodium.org/
 - AES-256-GCM：https://en.wikipedia.org/wiki/Galois/Counter_Mode
 - Lunet 架构：见 README.md 与 AGENTS.md

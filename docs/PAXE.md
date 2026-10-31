@@ -4,7 +4,7 @@ PAXE (Packet Encryption) is lunet's datagram encryption extension: authenticated
 
 The protocol core is **[paxe-core](https://github.com/lua-lunet/paxe-core)**, a zero-dependency sans-io Rust crate **vendored byte-exact** from the upstream release tag into `ext/paxe/paxe-core/` (the tag, commit and archive digest are recorded in `ext/paxe/paxe-core.version`; re-vendor with `xmake vendor-paxe`). The lunet-side crate `ext/paxe` owns the C ABI and builds the `liblunet_paxe` cdylib, which `require("lunet.paxe")` loads through the LuaJIT FFI via the loader `ext/paxe/paxe.lua` - the same loading model as `lunet.jsonic`. The extension is pure opt-in: it is never linked into `lunet-run`.
 
-The **normative wire-format and security contract** is paxe-core's [PAXE.md](https://github.com/lua-lunet/paxe-core/blob/v0.1.0/PAXE.md). This document is the lunet integration reference: it describes what the Lua API does, and restates only the parts of the wire contract a lunet operator touches. Where this document and the upstream contract disagree, the upstream document wins - please report the drift.
+The **normative wire-format and security contract** is paxe-core's [PAXE.md](https://github.com/lua-lunet/paxe-core/blob/v0.3.1/PAXE.md). This document is the lunet integration reference: it describes what the Lua API does, and restates only the parts of the wire contract a lunet operator touches. Where this document and the upstream contract disagree, the upstream document wins - please report the drift.
 
 ## Overview
 
@@ -227,7 +227,7 @@ Keys reach the module as Lua strings, and a Lua string lives inside the Lua VM: 
 
 ## References
 
-- paxe-core (protocol core and normative wire contract): https://github.com/lua-lunet/paxe-core ([PAXE.md](https://github.com/lua-lunet/paxe-core/blob/v0.1.0/PAXE.md))
+- paxe-core (protocol core and normative wire contract): https://github.com/lua-lunet/paxe-core ([PAXE.md](https://github.com/lua-lunet/paxe-core/blob/v0.3.1/PAXE.md))
 - libsodium: https://doc.libsodium.org/
 - AES-256-GCM: https://en.wikipedia.org/wiki/Galois/Counter_Mode
 - Lunet architecture: See README.md and AGENTS.md

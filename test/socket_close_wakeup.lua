@@ -43,7 +43,8 @@ local function wait_until(predicate, timeout_ms)
     -- os.clock() measures CPU time, which barely advances in an event-loop
     -- process that spends most of its time sleeping/yielding. Use os.time()
     -- (wall clock, second resolution) so the watchdog is actually bounded.
-    local deadline = os.time() + (timeout_ms / 1000)
+    -- Round up so sub-second budgets still get at least one wall-clock tick.
+    local deadline = os.time() + math.max(1, math.ceil(timeout_ms / 1000))
     while not predicate() do
         if os.time() >= deadline then
             return false
@@ -51,6 +52,18 @@ local function wait_until(predicate, timeout_ms)
         lunet.sleep(1)
     end
     return true
+end
+
+-- Wait for a single named condition with its own deadline and a message
+-- that names the condition, the expected outcome and the observed state.
+local function wait_for(name, predicate, timeout_ms, detail)
+    local ok = wait_until(predicate, timeout_ms)
+    if not ok then
+        fail(name .. ": timed out after " .. tostring(timeout_ms) .. "ms; expected " ..
+            tostring(detail and detail.expected or "condition true") ..
+            "; observed " .. tostring(detail and detail.observed() or "n/a"))
+    end
+    return ok
 end
 
 -- Case 1: a coroutine parked in socket.accept is woken by socket.close.
@@ -73,7 +86,8 @@ lunet.spawn(function()
     if not wait_until(function()
         return accept_attempted
     end, 250) then
-        fail("acceptor did not reach socket.accept before close")
+        fail("case1 parked-acceptor: acceptor did not reach socket.accept " ..
+            "before close (accept_attempted=" .. tostring(accept_attempted) .. ")")
     end
     socket.close(listener)
     pcall(os.remove, SOCK1)
@@ -177,7 +191,9 @@ lunet.spawn(function()
     if not wait_until(function()
         return write_in_progress or write_woke_done
     end, 1000) then
-        fail("writer did not enter in-progress state before close")
+        fail("case4 parked-writer: writer did not enter in-progress state " ..
+            "before close (write_in_progress=" .. tostring(write_in_progress) ..
+            ", write_woke_done=" .. tostring(write_woke_done) .. ")")
     end
 
     socket.close(client)
@@ -189,30 +205,54 @@ lunet.spawn(function()
 end)
 
 lunet.spawn(function()
-    if not wait_until(function()
-        return woke_with ~= nil
-            and queued_clients_eof
-            and accept_after_close_cb ~= nil
-            and write_woke_done
-            and write_fast_fail ~= nil
-    end, 1000) then
-        fail("timed out waiting for close wakeup assertions")
-    end
+    -- Per-condition deadlines: each wakeup condition gets its own budget and a
+    -- named failure message identifying the condition, expected and observed.
+    wait_for("condition 1 (parked acceptor wake on listener close)",
+        function() return woke_with ~= nil end, 5000,
+        { expected = 'woke_with = "listener closed"',
+          observed = function()
+              return "woke_with=" .. tostring(woke_with)
+          end })
+    wait_for("condition 2 (queued clients observe EOF after listener close)",
+        function() return queued_clients_eof end, 5000,
+        { expected = "queued_clients_eof = true",
+          observed = function()
+              return "queued_clients_eof=" .. tostring(queued_clients_eof)
+          end })
+    wait_for("condition 3 (post-close accept reports listener closed)",
+        function() return accept_after_close_cb ~= nil end, 5000,
+        { expected = 'accept_after_close_cb = "listener closed"',
+          observed = function()
+              return "accept_after_close_cb=" .. tostring(accept_after_close_cb)
+          end })
+    wait_for("condition 4 (parked writer wake on socket close)",
+        function() return write_woke_done end, 5000,
+        { expected = 'write_woke_err = "socket closed"',
+          observed = function()
+              return "write_woke_done=" .. tostring(write_woke_done) ..
+                  ", write_woke_err=" .. tostring(write_woke_err)
+          end })
+    wait_for("condition 5 (write on closed socket fails fast)",
+        function() return write_fast_fail ~= nil end, 5000,
+        { expected = 'write_fast_fail = "socket closed"',
+          observed = function()
+              return "write_fast_fail=" .. tostring(write_fast_fail)
+          end })
 
     if woke_with ~= "listener closed" then
-        fail("parked acceptor was not woken by listener close (got " .. tostring(woke_with) .. ")")
+        fail("condition 1 (parked acceptor wake): expected listener closed, got " .. tostring(woke_with))
     end
     if not queued_clients_eof then
-        fail("queued-clients case did not complete as expected")
+        fail("condition 2 (queued clients EOF): did not complete as expected")
     end
     if accept_after_close_cb ~= "listener closed" then
-        fail("post-close accept did not report listener closed (got " .. tostring(accept_after_close_cb) .. ")")
+        fail("condition 3 (post-close accept): expected listener closed, got " .. tostring(accept_after_close_cb))
     end
     if write_woke_err ~= "socket closed" then
-        fail("parked writer was not woken by socket close (got " .. tostring(write_woke_err) .. ")")
+        fail("condition 4 (parked writer wake): expected socket closed, got " .. tostring(write_woke_err))
     end
     if write_fast_fail ~= "socket closed" then
-        fail("write on closed socket did not fail fast (got " .. tostring(write_fast_fail) .. ")")
+        fail("condition 5 (fast-fail write): expected socket closed, got " .. tostring(write_fast_fail))
     end
 
     if failures > 0 then

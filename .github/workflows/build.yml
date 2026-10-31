@@ -117,16 +117,13 @@ jobs:
           ${{ runner.os }}-vcpkg-
 
     - name: Install xmake
-      shell: bash
-      run: |
-        XMAKE_VER=$(xmake --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "0.0.0")
-        if [ "$XMAKE_VER" != "3.1.2" ]; then
-          echo "xmake $XMAKE_VER found (or none), installing 3.1.2..."
-          curl -fsSL https://xmake.io/shget.text | bash -s v3.1.2
-        fi
-        export PATH="$HOME/.local/bin:$PATH"
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
-        xmake --version
+      uses: jdx/mise-action@v2
+      with:
+        version: latest
+        install: true
+
+    - name: Verify xmake version
+      run: xmake --version
 
     - name: Install Dependencies (Linux)
       if: runner.os == 'Linux'
@@ -817,16 +814,13 @@ jobs:
         ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
 
     - name: Install xmake
-      shell: bash
-      run: |
-        XMAKE_VER=$(xmake --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "0.0.0")
-        if [ "$XMAKE_VER" != "3.1.2" ]; then
-          echo "xmake $XMAKE_VER found (or none), installing 3.1.2..."
-          curl -fsSL https://xmake.io/shget.text | bash -s v3.1.2
-        fi
-        export PATH="$HOME/.local/bin:$PATH"
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
-        xmake --version
+      uses: jdx/mise-action@v2
+      with:
+        version: latest
+        install: true
+
+    - name: Verify xmake version
+      run: xmake --version
 
     - name: Install Dependencies (Linux)
       run: bash contributing/deps/debian.sh --ci
@@ -852,16 +846,13 @@ jobs:
         ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref || github.ref }}
 
     - name: Install xmake
-      shell: bash
-      run: |
-        XMAKE_VER=$(xmake --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "0.0.0")
-        if [ "$XMAKE_VER" != "3.1.2" ]; then
-          echo "xmake $XMAKE_VER found (or none), installing 3.1.2..."
-          curl -fsSL https://xmake.io/shget.text | bash -s v3.1.2
-        fi
-        export PATH="$HOME/.local/bin:$PATH"
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
-        xmake --version
+      uses: jdx/mise-action@v2
+      with:
+        version: latest
+        install: true
+
+    - name: Verify xmake version
+      run: xmake --version
 
     - name: Install Dependencies (Linux)
       if: runner.os == 'Linux'
@@ -908,16 +899,13 @@ jobs:
           ${{ runner.os }}-vcpkg-
 
     - name: Install xmake
-      shell: bash
-      run: |
-        XMAKE_VER=$(xmake --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "0.0.0")
-        if [ "$XMAKE_VER" != "3.1.2" ]; then
-          echo "xmake $XMAKE_VER found (or none), installing 3.1.2..."
-          curl -fsSL https://xmake.io/shget.text | bash -s v3.1.2
-        fi
-        export PATH="$HOME/.local/bin:$PATH"
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
-        xmake --version
+      uses: jdx/mise-action@v2
+      with:
+        version: latest
+        install: true
+
+    - name: Verify xmake version
+      run: xmake --version
 
     - name: Install Dependencies (Linux)
       if: runner.os == 'Linux'
@@ -1037,16 +1025,13 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install xmake
-      shell: bash
-      run: |
-        XMAKE_VER=$(xmake --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "0.0.0")
-        if [ "$XMAKE_VER" != "3.1.2" ]; then
-          echo "xmake $XMAKE_VER found (or none), installing 3.1.2..."
-          curl -fsSL https://xmake.io/shget.text | bash -s v3.1.2
-        fi
-        export PATH="$HOME/.local/bin:$PATH"
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
-        xmake --version
+      uses: jdx/mise-action@v2
+      with:
+        version: latest
+        install: true
+
+    - name: Verify xmake version
+      run: xmake --version
     - name: Install QA deps
       run: |
         bash contributing/deps/debian.sh --ci --qa-only
@@ -1070,16 +1055,13 @@ jobs:
         fetch-depth: 0  # full tag history for per-tag release notes
 
     - name: Install xmake
-      shell: bash
-      run: |
-        XMAKE_VER=$(xmake --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "0.0.0")
-        if [ "$XMAKE_VER" != "3.1.2" ]; then
-          echo "xmake $XMAKE_VER found (or none), installing 3.1.2..."
-          curl -fsSL https://xmake.io/shget.text | bash -s v3.1.2
-        fi
-        export PATH="$HOME/.local/bin:$PATH"
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
-        xmake --version
+      uses: jdx/mise-action@v2
+      with:
+        version: latest
+        install: true
+
+    - name: Verify xmake version
+      run: xmake --version
 
     - name: Download release archives
       uses: actions/download-artifact@v4

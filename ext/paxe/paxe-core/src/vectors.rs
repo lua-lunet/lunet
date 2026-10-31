@@ -22,38 +22,38 @@ const PSK: [u8; KEYBYTES] = [
 ];
 const FROM: u16 = 0x0A0B;
 const TO: u16 = 0x0C0D;
-const CHANNEL: u16 = 0x0E0F;
+const CHANNEL: u32 = 0x0E0F;
 const EPOCH: u8 = 9;
 const NONCE: [u8; NPUBBYTES] = [
     0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xCB,
 ];
 const V2: &[u8] = b"paxe vector v2: standard short payload";
 const V2_FRAME_HEX: &str = concat!(
-    "0a0b0c0d0e0f00264cc0c1c2c3c4c5c6",
+    "0a0b0c0d00000e0f4cc0c1c2c3c4c5c6",
     "c7c8c9cacb11e08e8e015385ddbc7e77",
     "1d411ecffe2a26717d89c5bc800ee4e3",
-    "3262fe2f6d78a58b8a02e2df006dacb1",
-    "c29f486e281c8629c07438"
+    "3262fe2f6d78a58b8a02e23c46700ed4",
+    "190d85d57aa0d74052b6ea"
 );
 const FANOUT_PAYLOAD: &[u8] = b"fixed reusable-DEK vector";
 const FANOUT_DEK: [u8; KEYBYTES] = [0xE0; KEYBYTES];
 const FANOUT_BODY_NONCE: [u8; NPUBBYTES] = [0xD0; NPUBBYTES];
 const FANOUT_ENVELOPE_NONCES: [[u8; NPUBBYTES]; 2] = [[0xB0; NPUBBYTES], [0xB1; NPUBBYTES]];
 const FANOUT_FIRST_FRAME_HEX: &str = concat!(
-    "0a0b0c0d0e0f00194db0b0b0b0b0b0b0b0b0b0b0b0",
+    "0a0b0c0d00000e0f4db0b0b0b0b0b0b0b0b0b0b0b0",
     "c665b11725373b2d9daf03c359fb50ae3cc278c30626f74b0f7b18a58e3adf15",
-    "9a76fa93aa7be62374da6ae0424c00ee",
+    "d75fb9dfb2a29beb0d08bea78e4c207b",
     "d0d0d0d0d0d0d0d0d0d0d0d0",
     "5187e7d3f6791322348227884ecce454c12d780f76a3e7020e",
-    "9eef0b426b666a549efd00e0b39b1498"
+    "4410681f921c4c96cfbd93f92384fdbd"
 );
 const FANOUT_SECOND_FRAME_HEX: &str = concat!(
-    "0a0b0c0e0e0f001945b1b1b1b1b1b1b1b1b1b1b1b1",
+    "0a0b0c0e00000e0f45b1b1b1b1b1b1b1b1b1b1b1b1",
     "73e405815863bcfc7997415ba535082c35316fd14fa1a3011d2102dc8589fa80",
-    "4b0af213316738de2ba30b20407169dd",
+    "852e550a6cc330ee9418d9165e7ae43e",
     "d0d0d0d0d0d0d0d0d0d0d0d0",
     "5187e7d3f6791322348227884ecce454c12d780f76a3e7020e",
-    "9eef0b426b666a549efd00e0b39b1498"
+    "4410681f921c4c96cfbd93f92384fdbd"
 );
 
 fn ep(value: u8) -> Epoch {
@@ -87,6 +87,16 @@ fn standard_known_answer_vector_is_exact() {
     let frame = standard::seal_standard_deterministic(&store(), TO, CHANNEL, ep(EPOCH), V2, NONCE)
         .expect("seal");
     assert_eq!(frame, unhex(V2_FRAME_HEX));
+
+    // The committed vector is not trusted produce-only: the receiver side
+    // must open the exact bytes and recover the exact payload, so a stale
+    // or mistyped vector fails loudly instead of matching a broken seal.
+    let mut receiver = KeyStore::new(TO).expect("store");
+    receiver.install(FROM, ep(EPOCH), &PSK).expect("install");
+    let (header, _flags, plain) = dek::open(&receiver, &frame).expect("open");
+    assert_eq!(header.from_id, FROM);
+    assert_eq!(header.to_id, TO);
+    assert_eq!(plain, V2);
 }
 
 #[test]
@@ -117,4 +127,19 @@ fn reusable_dek_two_recipient_known_answer_vector_is_exact() {
         frames[0].frame.len(),
         FANOUT_PAYLOAD.len() + dek::DEK_OVERHEAD
     );
+
+    // Each recipient's frame must open with that recipient's link key and
+    // recover the shared payload: the committed bytes are proven openable,
+    // not merely reproducible.
+    let mut receiver = KeyStore::new(TO).expect("store");
+    receiver.install(FROM, ep(EPOCH), &PSK).expect("install");
+    let (_, _, plain) = dek::open(&receiver, &frames[0].frame).expect("open frame for TO");
+    assert_eq!(plain, FANOUT_PAYLOAD);
+
+    let mut second = KeyStore::new(0x0C0E).expect("store");
+    second
+        .install(FROM, ep(8), &[0x55; KEYBYTES])
+        .expect("install");
+    let (_, _, plain) = dek::open(&second, &frames[1].frame).expect("open frame for second");
+    assert_eq!(plain, FANOUT_PAYLOAD);
 }

@@ -24,7 +24,6 @@
 
 use paxe::{codec, dek, keystore, sodium, standard, stats};
 
-
 use std::cell::RefCell;
 use std::os::raw::{c_char, c_int};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -560,7 +559,7 @@ pub extern "C" fn lunet_paxe_seal(
                 ))
             }
         };
-        match dek::seal(store, to_id, channel, epoch, payload) {
+        match dek::seal(store, to_id, u32::from(channel), epoch, payload) {
             Ok(frame) => {
                 if frame.len() > out.len() {
                     // paxe.lua supplies payload_len + 37, so a
@@ -1372,7 +1371,12 @@ mod ffi_tests {
                 // one byte.
                 R::LenMismatch => {
                     become_node_b(3);
-                    assert_one_drop(&frame63[..frame63.len() - 1], reason);
+                    // The standard-frame geometry gate: below the
+                    // prefix+nonce+tag floor the frame cannot hold a
+                    // ciphertext, so it is counted here — the prefix
+                    // carries no declared length to disagree any more.
+                    let floor = lunet_paxe_overhead_standard() as usize;
+                    assert_one_drop(&frame63[..floor - 1], reason);
                 }
                 // rx_no_peer: a node with NO key for A under any epoch —
                 // a TOPOLOGY problem, counted separately from NoEpoch.
@@ -1615,6 +1619,107 @@ mod ffi_tests {
         assert_eq!(lunet_paxe_frame_for_us(std::ptr::null(), 9), RC_INVAL);
         let after = stats::snapshot();
         assert_eq!(after.rx_total - before.rx_total, 0);
+    }
+
+    // -------------------------------------------------------------------
+    // Known-answer vectors. The expected bytes and the fixed PSK below
+    // are the vendored core's own wire-format vectors (paxe-core
+    // src/vectors.rs), whose provenance is an independent OpenSSL EVP
+    // helper. Pinning them through THIS crate's C ABI proves the byte
+    // format survives the whole boundary — the wrapper does not just
+    // trust the core's internal seam.
+    // -------------------------------------------------------------------
+
+    const KAT_PSK: [u8; 32] = [
+        0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x07, 0x18, 0x29, 0x3A, 0x4B, 0x5C, 0x6D, 0x7E, 0x8F,
+        0x90, 0x13, 0x24, 0x35, 0x46, 0x57, 0x68, 0x79, 0x8A, 0x9B, 0xAC, 0xBD, 0xCE, 0xDF, 0xE0,
+        0xF1, 0x02,
+    ];
+    const KAT_FROM: u32 = 0x0A0B;
+    const KAT_TO: u32 = 0x0C0D;
+    const KAT_CHANNEL: u32 = 0x0E0F;
+    const KAT_EPOCH: u32 = 9;
+    const KAT_PAYLOAD: &[u8] = b"paxe vector v2: standard short payload";
+    const KAT_FRAME_HEX: &str = concat!(
+        "0a0b0c0d00000e0f4cc0c1c2c3c4c5c6",
+        "c7c8c9cacb11e08e8e015385ddbc7e77",
+        "1d411ecffe2a26717d89c5bc800ee4e3",
+        "3262fe2f6d78a58b8a02e23c46700ed4",
+        "190d85d57aa0d74052b6ea"
+    );
+    const KAT_FANOUT_PAYLOAD: &[u8] = b"fixed reusable-DEK vector";
+    const KAT_FANOUT_FIRST_FRAME_HEX: &str = concat!(
+        "0a0b0c0d00000e0f4db0b0b0b0b0b0b0b0b0b0b0b0",
+        "c665b11725373b2d9daf03c359fb50ae3cc278c30626f74b0f7b18a58e3adf15",
+        "d75fb9dfb2a29beb0d08bea78e4c207b",
+        "d0d0d0d0d0d0d0d0d0d0d0d0",
+        "5187e7d3f6791322348227884ecce454c12d780f76a3e7020e",
+        "4410681f921c4c96cfbd93f92384fdbd"
+    );
+
+    fn unhex(input: &str) -> Vec<u8> {
+        input
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                let high = (pair[0] as char).to_digit(16).expect("hex");
+                let low = (pair[1] as char).to_digit(16).expect("hex");
+                ((high << 4) | low) as u8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn standard_kat_frame_opens_byte_exact_through_the_ffi() {
+        if !gcm() {
+            eprintln!("skipping: AES-GCM hardware path unavailable");
+            return;
+        }
+        assert_eq!(lunet_paxe_init(), RC_OK);
+        assert_eq!(lunet_paxe_set_local_id(KAT_TO), RC_OK);
+        assert_eq!(
+            lunet_paxe_keystore_set(KAT_FROM, KAT_EPOCH, KAT_PSK.as_ptr(), KAT_PSK.len()),
+            RC_OK
+        );
+        let frame = unhex(KAT_FRAME_HEX);
+        let (rc, payload, from, channel, mode) = open(&frame);
+        assert_eq!(rc, RC_OK, "kat open: {}", last_error_string());
+        assert_eq!(payload, KAT_PAYLOAD, "kat payload must be byte-exact");
+        assert_eq!(from, KAT_FROM);
+        assert_eq!(channel, KAT_CHANNEL);
+        assert_eq!(mode, 0, "the vector is a standard frame");
+        lunet_paxe_shutdown();
+    }
+
+    #[test]
+    fn reusable_dek_kat_frame_opens_through_the_ffi() {
+        if !gcm() {
+            eprintln!("skipping: AES-GCM hardware path unavailable");
+            return;
+        }
+        assert_eq!(lunet_paxe_init(), RC_OK);
+        assert_eq!(lunet_paxe_set_local_id(KAT_TO), RC_OK);
+        // The fanout envelope's key slot is the core's internal selection;
+        // installing the SAME PSK under both candidate epochs makes the
+        // open deterministic here regardless of which slot the batch
+        // addressed (the material is what authenticates, the epoch only
+        // picks the slot).
+        assert_eq!(
+            lunet_paxe_keystore_set(KAT_FROM, 8, KAT_PSK.as_ptr(), KAT_PSK.len()),
+            RC_OK
+        );
+        assert_eq!(
+            lunet_paxe_keystore_set(KAT_FROM, KAT_EPOCH, KAT_PSK.as_ptr(), KAT_PSK.len()),
+            RC_OK
+        );
+        let frame = unhex(KAT_FANOUT_FIRST_FRAME_HEX);
+        let (rc, payload, from, channel, mode) = open(&frame);
+        assert_eq!(rc, RC_OK, "kat fanout open: {}", last_error_string());
+        assert_eq!(payload, KAT_FANOUT_PAYLOAD);
+        assert_eq!(from, KAT_FROM);
+        assert_eq!(channel, KAT_CHANNEL);
+        assert_eq!(mode, 1, "the vector is a reusable-DEK frame");
+        lunet_paxe_shutdown();
     }
 
 }

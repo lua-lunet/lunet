@@ -7,11 +7,10 @@
 -- Module resolution mirrors spec/paxe_spec.lua and spec/sodium_spec.lua:
 -- the loader is the Lua file ext/jsonic/jsonic.lua, not a C module;
 -- package.preload routes require("lunet.jsonic") to the dev-tree loader
--- explicitly. Unlike sodium, the native library is lazy-loaded -- the
--- require succeeds without it and the first decode needs it -- so this
--- suite probes the decoder once: the encode half is pure Lua and runs
--- regardless, and the decode/round-trip halves pend when
--- liblunet_jsonic has not been built.
+-- explicitly. The native library is loaded eagerly at require time, so a
+-- missing liblunet_jsonic fails the require itself; the encode half is
+-- pure Lua but only reachable when the library is present. The decode/
+-- round-trip halves pend when liblunet_jsonic has not been built.
 
 describe("jsonic module #native", function()
   local spec_dir = debug.getinfo(1, "S").source:match("^@(.+)/[^/]+$") or "spec"

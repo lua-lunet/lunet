@@ -143,6 +143,34 @@ function jwt.encode(payload, secret, opts) end
 ---```
 function jwt.decode(token, secret) end
 
+---Extract a bearer token from an Authorization header and verify it.
+---The mechanism only: matches the scheme word (case-insensitive
+---Bearer or Token, one or more separator spaces, trailing whitespace
+---tolerated), then decodes with jwt.decode. Every failure maps to a
+---short kind word so each app keeps its own error messages and
+---statuses:
+---
+---   * "missing" - the header is absent (nil) or the empty string
+---   * "scheme" - a header was present, but no known scheme word
+---     followed by a token
+---   * the decode kinds: "malformed", "sig", "exp"
+---
+---If decode ever returns a diagnostic without the module error prefix,
+---it is passed through unchanged. Malformed arguments (a non-string,
+---non-nil header; a bad secret) raise - caller bugs, not attacker
+---input.
+---@param authorization string|nil The Authorization header value; nil means absent
+---@param secret string Non-empty secret key (as passed to jwt.decode)
+---@return table|nil claims The verified claims table, or nil on failure
+---@return string|nil kind The failure kind word, or nil on success
+---@usage
+---```lua
+---local security = require("lunet.security")
+---local claims, kind = security.jwt.bearer(auth_header, secret)
+---if not claims then return nil, kind end
+---```
+function jwt.bearer(authorization, secret) end
+
 ---@type lunet.security.crypto
 security.crypto = crypto
 

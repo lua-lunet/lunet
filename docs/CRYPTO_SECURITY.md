@@ -17,7 +17,8 @@ see "Key handling" below), and claims JSON goes through `lunet.jsonic`.
   `lunet.sodium`.
 - `security.jwt` - HS256 `encode` / `decode` over `security.crypto` +
   `lunet.jsonic`: canonical `{alg="HS256", typ="JWT"}` header, type-checked
-  header and claims, constant-time signature verification, `exp` enforced.
+  header and claims, constant-time signature verification, `exp` enforced -
+  plus `bearer`, the extract-and-verify helper for `Authorization` headers.
 
 ## Requirements and loading
 
@@ -110,6 +111,28 @@ runs after the signature check and refuses anything but `HS256` - an
 alg-confusion token (for example a `{"alg":"none"}` header) is rejected as
 `malformed` even when the signature over it is genuinely valid.
 
+### `security.jwt.bearer(authorization, secret) -> claims, kind`
+
+Extract-and-verify for an `Authorization` header: the mechanism, not the
+policy. It matches the scheme word (case-insensitive `Bearer` or `Token`,
+one-or-more separator spaces, trailing whitespace tolerated), then decodes
+the token with `jwt.decode`, mapping every failure to a short kind word so
+each app keeps its own error messages, statuses, and fallback identities:
+
+| `kind` | Meaning |
+|--------|---------|
+| `"missing"` | The header is absent (`nil`) or the empty string |
+| `"scheme"` | A header was present, but no known scheme word followed by a token |
+| `"malformed"` | A decode-side check failed: token shape, base64, JSON, `alg` not HS256, or a non-numeric `exp` |
+| `"sig"` | The signature does not match |
+| `"exp"` | The token's `exp` is strictly before the current time |
+
+On success it returns the claims table and `nil`. A non-string, non-nil
+header or a bad secret raises - those are caller bugs, not attacker input.
+What the helper deliberately does **not** do: pick an error message, choose
+a response status, or fall back to an anonymous identity. That is policy,
+and policy stays in the app.
+
 ## Key handling
 
 HS256 is RFC 7518: the HMAC-SHA-256 key is the **raw secret octets** - exactly
@@ -151,12 +174,13 @@ local SECRET = os.getenv("JWT_SECRET")  -- keep it out of the source tree
 local token = jwt.encode({ sub = user.id, name = user.name },
                          SECRET, { expires_in = 3600 })
 
--- On every authenticated request (the Authorization: Bearer header):
+-- On every authenticated request: hand the header value straight
+-- over (nil when the framework has no header - "missing" comes back).
 local function auth_user(header)
-  local token = header and header:match("^Bearer%s+(.+)$")
-  if not token then return nil, "missing bearer token" end
-  local claims, err = jwt.decode(token, SECRET)
-  if not claims then return nil, err end  -- malformed / sig / exp
+  local claims, kind = jwt.bearer(header, SECRET)
+  if not claims then
+    return nil, kind  -- missing / scheme / malformed / sig / exp
+  end
   return claims
 end
 ```

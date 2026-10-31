@@ -392,7 +392,7 @@ apt-get install -y libluajit-5.1-2 libuv1 zlib1g
 
 # Per driver you actually use - skip the ones you don't require()
 apt-get install -y libcurl4          # lunet.httpc
-apt-get install -y libpq5            # lunet.postgres
+apt-get install -y libpq5            # lunet.postgres (requires libpq client >= 17)
 apt-get install -y libmariadb3       # lunet.mysql (provides libmysqlclient.so on Debian trixie)
 apt-get install -y libsqlite3-0      # lunet.sqlite3
 ```
@@ -406,7 +406,7 @@ The PAXE (`liblunet_paxe`) and crypto (`liblunet_crypto`) extensions each link l
 brew install luajit libuv
 
 # Per driver you actually use
-brew install libpq          # lunet.postgres
+brew install libpq          # lunet.postgres (requires libpq client >= 17)
 brew install mysql-client   # lunet.mysql
 # sqlite3 uses the system lib - no extra package needed
 ```

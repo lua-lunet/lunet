@@ -66,7 +66,7 @@ describe("security module #native", function()
     for _, fn in ipairs({ "sign", "verify", "b64url_encode", "b64url_decode" }) do
       assert.are.equal("function", type(crypto[fn]), "crypto." .. fn)
     end
-    for _, fn in ipairs({ "encode", "decode" }) do
+    for _, fn in ipairs({ "encode", "decode", "bearer" }) do
       assert.are.equal("function", type(jwt[fn]), "jwt." .. fn)
     end
   end)
@@ -466,6 +466,109 @@ describe("security module #native", function()
         assert.is_false(raised, ("args %s must raise"):format(tostring(c.args[1])))
         assert.truthy(tostring(err):find(c.want),
           "message should match " .. c.want .. ", got: " .. tostring(err))
+      end
+    end)
+  end)
+
+  describe("jwt.bearer", function()
+    local SECRET = K_0B32
+
+    it("extracts and verifies a Bearer token", function()
+      local token = jwt.encode({ sub = "u1", name = "lunet" }, SECRET,
+        { expires_in = 3600 })
+      local claims, kind = jwt.bearer("Bearer " .. token, SECRET)
+      assert.is_nil(kind)
+      assert.are.equal("u1", claims.sub)
+      assert.are.equal("lunet", claims.name)
+    end)
+
+    it("accepts the Token scheme, any case, and whitespace tolerance", function()
+      local token = jwt.encode({ sub = "u1" }, SECRET, { expires_in = 60 })
+      local headers = {
+        "Token " .. token,
+        "token " .. token,
+        "BEARER " .. token,
+        "bearer " .. token,
+        "Bearer   " .. token,   -- run of separator spaces
+        "Bearer\t" .. token,    -- tab separator
+        "Bearer " .. token .. "  ",  -- trailing whitespace
+      }
+      for _, h in ipairs(headers) do
+        local claims, kind = jwt.bearer(h, SECRET)
+        assert.is_nil(kind, "header must verify: " .. h)
+        assert.are.equal("u1", claims.sub)
+      end
+    end)
+
+    it("reports missing for an absent or empty header", function()
+      local claims, kind = jwt.bearer(nil, SECRET)
+      assert.is_nil(claims)
+      assert.equals("missing", kind)
+      claims, kind = jwt.bearer("", SECRET)
+      assert.is_nil(claims)
+      assert.equals("missing", kind)
+    end)
+
+    it("reports scheme when no known scheme word precedes a token", function()
+      local token = jwt.encode({ sub = "u1" }, SECRET, { expires_in = 60 })
+      local cases = {
+        "Basic dXNlcjpwYXNz",  -- a real, different scheme
+        "Bearer",              -- scheme word with no token after it
+        "Bearer   ",           -- scheme word, whitespace only
+        token,                 -- bare token, no scheme word at all
+      }
+      for i, h in ipairs(cases) do
+        local claims, kind = jwt.bearer(h, SECRET)
+        assert.is_nil(claims, "case " .. i .. " must fail")
+        assert.equals("scheme", kind, "case " .. i .. " must be scheme")
+      end
+    end)
+
+    it("maps decode failures to their short kinds", function()
+      -- malformed: the token inside the header is not a token at all.
+      local claims, kind = jwt.bearer("Bearer not-a-token", SECRET)
+      assert.is_nil(claims)
+      assert.equals("malformed", kind)
+
+      -- sig: a valid-shaped token whose payload byte was flipped.
+      local token = jwt.encode({ sub = "u1" }, SECRET, { expires_in = 3600 })
+      local h64, p64, s64 = token:match("^([^.]+)%.([^.]+)%.([^.]+)$")
+      local flipped = p64:sub(1, 1) == "A" and "B" .. p64:sub(2) or "A" .. p64:sub(2)
+      claims, kind = jwt.bearer("Bearer " .. h64 .. "." .. flipped .. "." .. s64, SECRET)
+      assert.is_nil(claims)
+      assert.equals("sig", kind)
+
+      -- exp: a well-signed token whose exp is already past.
+      local expired = jwt.encode({ sub = "u1", exp = os.time() - 1 }, SECRET)
+      claims, kind = jwt.bearer("Bearer " .. expired, SECRET)
+      assert.is_nil(claims)
+      assert.equals("exp", kind)
+
+      -- alg confusion surfaces as malformed through the same path.
+      local none_header = crypto.b64url_encode('{"alg":"none","typ":"JWT"}')
+      local payload_b64 = crypto.b64url_encode('{"sub":"u1"}')
+      local confused = none_header .. "." .. payload_b64 .. "." ..
+        crypto.b64url_encode(crypto.sign(none_header .. "."
+          .. payload_b64, SECRET))
+      claims, kind = jwt.bearer("Bearer " .. confused, SECRET)
+      assert.is_nil(claims)
+      assert.equals("malformed", kind)
+    end)
+
+    it("raises on malformed arguments, returns missing for nil", function()
+      local token = jwt.encode({ sub = "u1" }, SECRET, { expires_in = 60 })
+      local cases = {
+        { args = { "Bearer " .. token, "" }, want = "non%-empty" },
+        { args = { "Bearer " .. token, nil }, want = "string expected" },
+        { args = { "Bearer " .. token, 42 }, want = "string expected" },
+        { args = { 42, SECRET }, want = "string expected" },
+        { args = { true, SECRET }, want = "string expected" },
+      }
+      for i, c in ipairs(cases) do
+        local raised, err = pcall(jwt.bearer, unpack(c.args))
+        assert.is_false(raised, ("case %d must raise: %s"):format(i, tostring(c.args[1])))
+        assert.truthy(tostring(err):find(c.want),
+          ("case %d should match %s, got %s"):format(i, c.want, tostring(err)))
       end
     end)
   end)

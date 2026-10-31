@@ -314,4 +314,64 @@ function jwt.decode(token, secret)
   return claims
 end
 
+-- Schemes jwt.bearer accepts, matched case-insensitively: the two the
+-- known consumers send (the RFC 6750 scheme and the single-word
+-- variant the framework demos use).
+local BEARER_SCHEMES = { bearer = true, token = true }
+
+--- Extract and verify a bearer token from an Authorization header:
+--- match the scheme word (case-insensitive, one or more separator
+--- spaces, trailing whitespace tolerated), then decode the token with
+--- jwt.decode. This is the mechanism only: every failure maps to a
+--- short kind word so each app keeps its own error messages, statuses
+--- and fallback identities.
+---
+--- Returns the claims table and nil on success. On failure returns nil
+--- plus a kind word:
+---
+---   * "missing" - the header is absent (nil) or the empty string
+---   * "scheme" - a header was present, but no known scheme word
+---     followed by a token
+---   * the jwt.decode kinds: "malformed", "sig", "exp"
+---
+--- If decode ever returns a diagnostic that does not carry the module
+--- error prefix, it is passed through unchanged rather than squashed.
+--- Malformed arguments (a non-string, non-nil header; a bad secret)
+--- raise - those are caller bugs, not attacker input.
+---@param authorization string|nil The Authorization header value; nil means absent
+---@param secret string Non-empty secret key (as passed to jwt.decode)
+---@return table|nil claims The verified claims table, or nil on failure
+---@return string|nil kind The failure kind word, or nil on success
+---@usage
+---```lua
+---local claims, kind = security.jwt.bearer(auth_header, secret)
+---if not claims then return nil, kind end
+---```
+function jwt.bearer(authorization, secret)
+  secret = check_string(secret, "secret")
+  if authorization == nil then
+    return nil, "missing"
+  end
+  if type(authorization) ~= "string" then
+    error(("bad argument 'authorization' (string expected, got %s)")
+      :format(type(authorization)), 3)
+  end
+  if #authorization == 0 then
+    return nil, "missing"
+  end
+  local scheme, token = authorization:match("^(%S+)%s+(%S+)%s*$")
+  if not scheme or not BEARER_SCHEMES[scheme:lower()] then
+    return nil, "scheme"
+  end
+  local claims, err = jwt.decode(token, secret)
+  if claims then
+    return claims, nil
+  end
+  local kind = err and err:match("^lunet%.security%.jwt:%s*([%a]+):")
+  if kind then
+    return nil, kind
+  end
+  return nil, err
+end
+
 return M

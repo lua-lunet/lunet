@@ -64,6 +64,125 @@ In qmail terms: the edge is the network-facing guard, and every component
 still assumes its inputs are hostile. Defense in depth is the point of this
 architecture: the edge is the first boundary, not the only one.
 
+## Constrain the process: deployment runbook
+
+The "Constrain the process" bullet above is the policy; this section is the
+mechanics. Apply all three layers on every host.
+
+### Dedicated non-root UID/GID
+
+Create a dedicated account and group for the lunet process; never run it as
+root, and never share the account with another service.
+
+```sh
+groupadd --system lunet
+useradd --system --gid lunet --home-dir /var/lib/lunet --create-home --shell /usr/sbin/nologin lunet
+```
+
+On macOS use `dscl`/`sysadminctl` equivalents; on Windows use a dedicated
+service account with "Log on as a service" rights. Keep the account's UID/GID
+stable across upgrades so socket ownership does not drift.
+
+### Unix socket permissions
+
+Bind lunet to a Unix socket owned by the dedicated account, mode `0660`, in a
+directory owned by the same account with mode `0750`:
+
+```sh
+install -d -o lunet -g lunet -m 0750 /run/lunet
+# lunet creates /run/lunet/lunet.sock with mode 0660, owner lunet:lunet
+```
+
+The edge (nginx, HAProxy, ...) connects as a member of the `lunet` group, or
+runs as the same dedicated account. No other local user can open the socket.
+On startup lunet unlinks a stale socket path only if it owns it; on exit it
+removes the path. Verify with `ls -l /run/lunet/`.
+
+### Syscall filtering (seccomp and equivalents)
+
+Apply the strictest filter the platform offers:
+
+- Linux: seccomp-bpf in `SCMP_ACT_KILL_PROCESS` (or `SECCOMP_RET_TRAP`) mode,
+  allow-listing only the syscalls lunet needs (read, write, epoll_wait,
+  accept4, close, mmap, mprotect, futex, clock_gettime, ...). Build the
+  profile with `scmp_sys_resolver` or a higher-level tool such as
+  `systemd`'s `SystemCallFilter=`, `s6`'s `s6-applyuidgid` plus a seccomp
+  helper, or a custom libseccomp program. Deny `execve`, `ptrace`,
+  `mount`, `reboot`, and network syscalls beyond the already-bound socket.
+- macOS: `sandbox-exec` profile (or the Seatbelt API) restricting file and
+  network access to the socket path and loopback.
+- Windows: Job Objects with restricted tokens and `PROCESS_CREATION_MITIGATION_POLICY`
+  (DEP, ASLR, strict handle checks); run under a low-integrity or
+  AppContainer profile where feasible.
+- FreeBSD/OpenBSD: `capsicum` / `pledge` / `unveil` with the minimal
+  capability set.
+
+The filter is a defense-in-depth layer: it does not replace input validation,
+and input validation does not replace the filter.
+
+### Example units
+
+systemd (`/etc/systemd/system/lunet.service`):
+
+```ini
+[Unit]
+Description=lunet application server
+After=network.target
+
+[Service]
+Type=simple
+User=lunet
+Group=lunet
+RuntimeDirectory=lunet
+RuntimeDirectoryMode=0750
+ExecStart=/usr/local/bin/lunet-run /opt/lunet/app.lua
+Restart=on-failure
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/lunet /var/lib/lunet
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
+```
+
+s6 (`/etc/s6/sv/lunet/run`):
+
+```sh
+#!/bin/execlineb -P
+s6-setuidgid lunet
+/usr/local/bin/lunet-run /opt/lunet/app.lua
+```
+
+launchd (`/Library/LaunchDaemons/de.example.lunet.plist`):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.example.lunet</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/lunet-run</string>
+        <string>/opt/lunet/app.lua</string>
+    </array>
+    <key>UserName</key>
+    <string>lunet</string>
+    <key>GroupName</key>
+    <string>lunet</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+```
+
 ## Transport options: Unix socket or TCP loopback
 
 Both keep lunet off the network; pick by what you want the boundary to

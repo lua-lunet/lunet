@@ -9,6 +9,12 @@ Placeholders are `$1`, `$2`, … Parameters are bound natively via
 `PQexecParams`, so values are never concatenated into SQL. There is
 deliberately no `db.escape`.
 
+**Client library floor: libpq 17 or newer.** The driver is built against
+libpq and will not compile (or load) against libpq 16 or older; a host
+with an older client library fails at build time with a named error
+rather than silently producing an unusable module. Install libpq 17+ (see
+[RELEASE-LAYOUT.md](../docs/RELEASE-LAYOUT.md)).
+
 | Function | Notes |
 |---|---|
 | `open(config)` | `host`, `port`, `user`, `password`, `database`, optional `connect_timeout`, `sslmode`, `pool_size` (default 1) |

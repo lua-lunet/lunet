@@ -145,6 +145,8 @@ host can request it from C with `lunet_runtime_request_stop`. The semantics:
 - after the callback, every remaining handle is closed, the callbacks are
   drained, and `uv_loop_close` runs with its return value checked.
 
+## Creating the post-drain hook
+
 Registered via `lunet.on_stop(fn)` (replaces a previously registered one):
 
 ```lua

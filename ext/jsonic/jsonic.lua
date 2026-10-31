@@ -36,9 +36,8 @@ local function find_lib()
   error("lunet.jsonic: cannot find liblunet_jsonic." .. suffix, 3)
 end
 
-local _lib
+local _lib = ffi.load(find_lib())
 local function lib()
-  if not _lib then _lib = ffi.load(find_lib()) end
   return _lib
 end
 

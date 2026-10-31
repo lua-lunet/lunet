@@ -127,6 +127,9 @@ int lunet_db_query_params(lua_State* L);
 int lunet_db_exec_params(lua_State* L);
 int lunet_db_prepare(lua_State* L);
 #if defined(LUNET_DB_SQLITE3)
+int lunet_db_run_in_transaction(lua_State* L);
+#endif
+#if defined(LUNET_DB_SQLITE3)
 /* The inline read path is a sqlite3 ownership decision (`query_ro` runs on
  * the loop thread); the other drivers keep table metadata on their own
  * query call and do not register it. */
@@ -143,6 +146,7 @@ static int lunet_open_db(lua_State *L) {
                       {"prepare", lunet_db_prepare},
 #if defined(LUNET_DB_SQLITE3)
                       {"query_ro", lunet_db_query_ro},
+                      {"run_in_transaction", lunet_db_run_in_transaction},
 #endif
                       {NULL, NULL}};
   luaL_newlib(L, funcs);

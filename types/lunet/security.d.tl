@@ -30,6 +30,16 @@ global record security
         -- return nil plus a string naming the kind: malformed / sig /
         -- exp. Malformed arguments (bad secret) raise.
         decode: function(token: string, secret: string): {string: any}, string
+
+        -- Extract-and-verify for an Authorization header: matches the
+        -- scheme word (case-insensitive Bearer or Token, whitespace
+        -- tolerant) then decodes. Returns the claims table and nil on
+        -- success; on failure nil plus a kind word: "missing" (absent
+        -- or empty header), "scheme" (no known scheme word followed by
+        -- a token), or a decode kind (malformed / sig / exp).
+        -- Malformed arguments (non-string non-nil header, bad secret)
+        -- raise.
+        bearer: function(authorization: string, secret: string): {string: any} | nil, string
     end
 
     crypto: crypto

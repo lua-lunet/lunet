@@ -365,7 +365,7 @@ apt-get install -y libluajit-5.1-2 libuv1 zlib1g
 
 # 按你实际 require() 的驱动安装 - 不需要的可跳过
 apt-get install -y libcurl4          # lunet.httpc
-apt-get install -y libpq5            # lunet.postgres
+apt-get install -y libpq5            # lunet.postgres (requires libpq client >= 17)
 apt-get install -y libmariadb3       # lunet.mysql（在 Debian trixie 上提供 libmysqlclient.so）
 apt-get install -y libsqlite3-0      # lunet.sqlite3
 ```
@@ -379,7 +379,7 @@ PAXE（`liblunet_paxe`）与 crypto（`liblunet_crypto`）扩展各自静态链�
 brew install luajit libuv
 
 # 按你实际使用的驱动安装
-brew install libpq          # lunet.postgres
+brew install libpq          # lunet.postgres (requires libpq client >= 17)
 brew install mysql-client   # lunet.mysql
 # sqlite3 使用系统库 - 无需额外安装
 ```

@@ -20,7 +20,9 @@ SQL。本项目有意不提供 `db.escape`。
 | `query(conn, sql, ...)` | 返回行表数组 |
 | `exec(conn, sql, ...)` | 返回 `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | 与上述行为一致 |
-| `prepare(conn, sql)` | 可复用的预处理语句；`stmt:query` / `stmt:exec` / `stmt:close`；要求 `pool_size = 1`——见[预处理语句](#预处理语句prepared-statements) |
+| `prepare(conn, sql)` | 可复用的预处理语句；`stmt:query` / `stmt:exec` / `stmt:close`；需要单连接（`pool_size = 1` 或已 checkout 的成员）——见[预处理语句](#预处理语句prepared-statements) |
+| `checkout(pool)` | 从池中独占检出一个成员：返回绑定到单个服务器会话的连接句柄，离开轮转直到 release。事务粘性的机制。 |
+| `release(conn)` | 把已 checkout 的成员归还轮转。池关闭后幂等。 |
 
 ### 打开参数（Open settings）
 
@@ -51,10 +53,55 @@ SQL。本项目有意不提供 `db.escape`。
 一个成员，派发时轮转选取；`close` 关闭全部成员。Postgres 本就服务并发的客户
 端连接，因此更宽的池能并行化真实工作——在这里这是正经特性，不是逃生舱口。
 
-**`postgres_tx` 要求默认 `pool_size = 1`。** 事务属于*连接*；多成员池在构造上
-就违反了这一点——`BEGIN` 与 `COMMIT` 可能落在不同会话上，最终什么也没提交。
+**事务粘性。** 事务属于*连接*，因此 `BEGIN`/`COMMIT` 必须落在同一个
+会话上。多成员池在构造上就违反了这一点——`BEGIN` 和 `COMMIT` 可能轮转到
+不同会话，最终什么也没提交。两种安全方式：
+
+- 用默认的 `pool_size = 1` 打开，并把该句柄交给 `postgres_tx`，如前；
+- 用 `pool_size = N` 打开，为整个事务 `checkout` 一个成员，把该成员
+  交给 `postgres_tx.transaction`，事务结束后 `release`（或交由 GC
+  释放）。`postgres_tx` 本身无需修改——它已持有给它的任何连接。
+
+## 独占 checkout
+
+`checkout(pool)` 返回绑定到单个服务器会话的连接句柄，该成员在检出期间
+离开池的轮转。该句柄上的每次调用（`query`、`exec`、`query_params`、
+`exec_params`、`prepare`）都针对该会话，因此 `BEGIN` … `COMMIT` 序列
+即便在多成员池里也落在同一连接上。
+
+```lua
+local pg = require("lunet.postgres")
+local tx = require("lunet.postgres_tx")
+
+local pool = pg.open({ host = "...", pool_size = 4 })
+local conn = pg.checkout(pool)          -- 一个专用会话
+local ok, err = tx.transaction(conn, function(t)
+    t.exec("DELETE FROM nodes WHERE path = $1", dst)
+    local r = t.exec("UPDATE nodes SET path = $1 WHERE path = $2 AND version = $3",
+                     dst, src, version)
+    if r.affected_rows == 0 then return nil, "version conflict" end
+    return true
+end)
+pg.release(conn)                        -- 归还轮转
+```
+
+规则：
+
+- **一个成员、一个所有者。** 被 checkout 的成员离开轮转；剩余成员继续
+  服务自动提交流量。
+- **耗尽是响亮的，不是等待。** 当所有成员都被 checkout 时，下一次
+  `checkout` 返回 `(nil, err)` —— 驱动不排队、不 yield。背压是应用的
+  策略：休眠并重试，或调整池大小。
+- **关闭后 release 幂等。** 已关闭池上的 `release` 返回 `nil`。对存活
+  句柄的重复 release 会响亮失败。
+- **被丢弃的 checkout 会自行释放。** 如果一个 checkout 的句柄未经显式
+  `release` 就被 GC，其成员在 GC 时回到轮转。该路径绝不会关闭成员 ——
+  成员归池所有，由池关闭时一并关闭。
+- **statement 绑定到它 prepare 所在的成员。** 在 checkout 的 conn 上
+  `prepare` 可行（针对该会话）；在池句柄上 `prepare` 仍要求单成员。
 
 ## 事务
+
 
 使用 `lunet.postgres_tx`（`postgres_tx.lua`，与 `postgres.so` 一同发布）：
 
@@ -106,8 +153,10 @@ stmt:close()                        -- PQclosePrepared，一次 worker 跳转
   `query` / `exec` 完全一致；每次调用就是对其所属连接的一次
   `PQexecPrepared`。
 - **一条语句绑定一个连接。** libpq 的预处理语句名是会话级的，因此在池化
-  句柄上调用 `prepare` 要求 `pool_size = 1`（默认值），否则大声报错——与
-  `postgres_tx` 同一条纪律。
+  句柄上调用 `prepare` 要求 `pool_size = 1`（默认值），否则大声报错。已
+  checkout 的成员本身就是单连接，因此在其上 `prepare` 可行——statement
+  绑定到该会话。与 `postgres_tx` 同一条纪律；现在 `postgres_tx` 可以
+  接收已 checkout 的成员用于多成员池。
 - 连接死掉时语句随之消亡：使用时大声报错（`statement is closed` /
   `connection is closed`）。
 - **忙（busy）纪律：** 一条语句同时只允许一个在途调用。对同一语句的第二个

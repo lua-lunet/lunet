@@ -135,6 +135,11 @@ int lunet_db_run_in_transaction(lua_State* L);
  * query call and do not register it. */
 int lunet_db_query_ro(lua_State* L);
 #endif
+#if defined(LUNET_DB_POSTGRES)
+/* Exclusive member checkout for transaction stickiness. */
+int lunet_db_checkout(lua_State* L);
+int lunet_db_release(lua_State* L);
+#endif
 
 static int lunet_open_db(lua_State *L) {
   luaL_Reg funcs[] = {{"open", lunet_db_open},
@@ -147,6 +152,10 @@ static int lunet_open_db(lua_State *L) {
 #if defined(LUNET_DB_SQLITE3)
                       {"query_ro", lunet_db_query_ro},
                       {"run_in_transaction", lunet_db_run_in_transaction},
+#endif
+#if defined(LUNET_DB_POSTGRES)
+                      {"checkout", lunet_db_checkout},
+                      {"release", lunet_db_release},
 #endif
                       {NULL, NULL}};
   luaL_newlib(L, funcs);

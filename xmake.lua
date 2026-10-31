@@ -11,6 +11,17 @@ set_languages("c99")
 
 add_rules("mode.debug", "mode.release")
 
+-- Release-mode hardening.  Applied to every target: stack protector and
+-- _FORTIFY_SOURCE for all code; PIE is added to the executable targets
+-- below (shared objects must stay PIC).
+if is_mode("release") then
+    if is_plat("windows") then
+        add_cflags("/GS", {force = true})
+    else
+        add_cflags("-fstack-protector-strong", {force = true})
+        add_defines("_FORTIFY_SOURCE=2")
+    end
+end
 -- Run C safety lint automatically before any target build.
 -- This keeps lint enforcement on the standard xmake path (xmake build, xmake run, etc).
 local c_safety_lint_ran = false
@@ -343,7 +354,10 @@ target("lunet-bin")
     add_packages("luajit", "libuv", "zlib")
     lunet_apply_asan_flags("binary")
     lunet_apply_easy_memory()
-
+    if is_mode("release") and not is_plat("windows") then
+        add_cflags("-fPIE", {force = true})
+        add_ldflags("-pie", {force = true})
+    end
     -- Pure-Lua HTTP extension modules (lunet.http / lunet.http_context /
     -- lunet.http_router): copied into the lunet/ module directory beside
     -- the binary so require() resolves them via the runtime's lunet/?.
@@ -459,7 +473,10 @@ target("sdk-api-test")
     add_includedirs("include")
     add_deps("lunet-static")
     add_packages("luajit", "libuv", "zlib")
-    if is_plat("linux") then
+    if is_mode("release") and not is_plat("windows") then
+        add_cflags("-fPIE", {force = true})
+        add_ldflags("-pie", {force = true})
+    end    if is_plat("linux") then
         add_cflags("-pthread")
         add_ldflags("-pthread")
         add_syslinks("pthread", "dl", "m")
@@ -988,6 +1005,11 @@ task("build-release")
         description = "Configure and build release profile (including SDK targets)"
     }
     on_run(function ()
+        if is_host("windows") then
+            print("release hardening flags: /GS")
+        else
+            print("release hardening flags: -fstack-protector-strong -fPIE -pie _FORTIFY_SOURCE=2")
+        end
         os.exec("xmake f -c -m release --lunet_trace=n --lunet_verbose_trace=n -y")
         os.exec("xmake build")
         -- SDK targets are set_default(false); build them explicitly so the
@@ -996,7 +1018,6 @@ task("build-release")
         os.exec("xmake build sdk-api-test")
     end)
 task_end()
-
 task("build-debug")
     set_menu {
         usage = "xmake build-debug",

@@ -36,6 +36,106 @@ lunet 读到的每一个字节，无论部署在哪里，都遵守这条常备�
 
 用 qmail 的话说：边缘层是面向网络的守卫，而每个组件仍假设自己的输入是恶意的。纵深防御正是这套架构的意义：边缘层是第一道边界，不是唯一一道。
 
+## 约束进程：部署运行手册
+
+上文“约束进程”条目是策略；本节是具体操作。在每台主机上三层都要落实。
+
+### 专用非根 UID/GID
+
+为 lunet 进程创建专用账户与组；永远不要以 root 运行，也不要与其他服务共享该账户。
+
+```sh
+groupadd --system lunet
+useradd --system --gid lunet --home-dir /var/lib/lunet --create-home --shell /usr/sbin/nologin lunet
+```
+
+macOS 使用 `dscl`/`sysadminctl` 等效命令；Windows 使用具有“作为服务登录”权限的专用服务账户。升级时保持该账户的 UID/GID 稳定，以免套接字属主漂移。
+
+### Unix 套接字权限
+
+将 lunet 绑定到由专用账户拥有的 Unix 套接字，模式 `0660`，放在同属该账户、模式 `0750` 的目录中：
+
+```sh
+install -d -o lunet -g lunet -m 0750 /run/lunet
+# lunet 创建 /run/lunet/lunet.sock，模式 0660，属主 lunet:lunet
+```
+
+边缘层（nginx、HAProxy 等）以 `lunet` 组成员身份连接，或以同一专用账户运行。其他本地用户无法打开该套接字。启动时 lunet 仅在套接字属己时才移除陈旧路径；退出时移除该路径。用 `ls -l /run/lunet/` 验证。
+
+### 系统调用过滤（seccomp 及等效机制）
+
+平台允许的最大严格度：
+
+- Linux：seccomp-bpf，`SCMP_ACT_KILL_PROCESS`（或 `SECCOMP_RET_TRAP`）模式，仅放行 lunet 所需的系统调用（read、write、epoll_wait、accept4、close、mmap、mprotect、futex、clock_gettime 等）。用 `scmp_sys_resolver` 或更上层的工具构建配置：systemd 的 `SystemCallFilter=`、s6 的 `s6-applyuidgid` 加 seccomp 辅助，或自定义 libseccomp 程序。拒绝 `execve`、`ptrace`、`mount`、`reboot` 以及已绑定套接字之外的网络系统调用。
+- macOS：`sandbox-exec` 配置文件（或 Seatbelt API），将文件与网络访问限制在套接字路径与环回地址。
+- Windows：带受限令牌的作业对象与 `PROCESS_CREATION_MITIGATION_POLICY`（DEP、ASLR、严格句柄检查）；可行时在低完整性或 AppContainer 配置下运行。
+- FreeBSD/OpenBSD：`capsicum` / `pledge` / `unveil`，最小能力集。
+
+过滤是纵深防御的一层：它不替代输入校验，输入校验也不替代过滤。
+
+### 示例单元
+
+systemd（`/etc/systemd/system/lunet.service`）：
+
+```ini
+[Unit]
+Description=lunet application server
+After=network.target
+
+[Service]
+Type=simple
+User=lunet
+Group=lunet
+RuntimeDirectory=lunet
+RuntimeDirectoryMode=0750
+ExecStart=/usr/local/bin/lunet-run /opt/lunet/app.lua
+Restart=on-failure
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/lunet /var/lib/lunet
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
+```
+
+s6（`/etc/s6/sv/lunet/run`）：
+
+```sh
+#!/bin/execlineb -P
+s6-setuidgid lunet
+/usr/local/bin/lunet-run /opt/lunet/app.lua
+```
+
+launchd（`/Library/LaunchDaemons/de.example.lunet.plist`）：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.example.lunet</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/lunet-run</string>
+        <string>/opt/lunet/app.lua</string>
+    </array>
+    <key>UserName</key>
+    <string>lunet</string>
+    <key>GroupName</key>
+    <string>lunet</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+```
+
 ## 传输选项：Unix 套接字或 TCP 环回
 
 两者都让 lunet 不接触网络；按你想让边界强制执行什么来选择：

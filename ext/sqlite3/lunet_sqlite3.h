@@ -11,5 +11,6 @@ int lunet_db_exec(lua_State* L);
 int lunet_db_query_params(lua_State* L);
 int lunet_db_exec_params(lua_State* L);
 int lunet_db_prepare(lua_State* L);
+int lunet_db_run_in_transaction(lua_State* L);
 
 #endif

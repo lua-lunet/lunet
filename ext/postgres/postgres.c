@@ -1,6 +1,15 @@
 #include "lunet_db_postgres.h"
 
 #include <libpq-fe.h>
+#if !defined(PG_VERSION_NUM)
+#  include <pg_config.h>
+#endif
+#if !defined(PG_VERSION_NUM)
+#  error "lunet postgres driver requires libpq client library >= 17 (PG_VERSION_NUM unavailable)"
+#endif
+#if PG_VERSION_NUM < 170000
+#  error "lunet postgres driver requires libpq client library >= 17"
+#endif
 #include <stdlib.h>
 #include <string.h>
 

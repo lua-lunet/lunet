@@ -8,6 +8,11 @@ PostgreSQL 驱动（libpq）。可以直接 `require("lunet.postgres")` 发布�
 占位符为 `$1`、`$2` …… 参数通过 `PQexecParams` 原生绑定，值永远不会被拼接进
 SQL。本项目有意不提供 `db.escape`。
 
+**客户端库下限：libpq 17 或更新。** 驱动基于 libpq 构建，无法针对 libpq 16
+或更旧版本编译（或加载）；客户端库过旧的主机在构建时会以具名错误失败，
+而不是静默产出不可用的模块。请安装 libpq 17+（参见
+[RELEASE-LAYOUT-CN.md](../docs/RELEASE-LAYOUT-CN.md)）。
+
 | 函数 | 说明 |
 |---|---|
 | `open(config)` | `host`、`port`、`user`、`password`、`database`，可选 `connect_timeout`、`sslmode`、`pool_size`（默认 1） |

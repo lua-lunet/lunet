@@ -17,7 +17,6 @@ name: Build
 on:
   push:
     branches: [ main, xmake ]
-    tags: ["v*"]
   pull_request:
     branches: [ main ]
   workflow_dispatch:

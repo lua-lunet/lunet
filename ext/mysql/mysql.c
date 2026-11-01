@@ -37,6 +37,15 @@
 #    error "lunet mysql driver requires mysqlclient >= 8.4"
 #  endif
 #endif
+/* MYSQL_BIND.is_null is `my_bool*` (my_bool = char) in libmariadb and
+ * `bool*` in Oracle libmysqlclient 8.0+. Use a family-aware alias so the
+ * allocation matches the field type exactly on both, avoiding the
+ * incompatible-pointer-types warning on the Oracle side. */
+#ifdef MARIADB_VERSION_ID
+typedef my_bool lunet_mysql_bool;
+#else
+typedef bool lunet_mysql_bool;
+#endif
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1085,8 +1094,8 @@ static void db_query_work_cb(uv_work_t* req) {
   ctx->col_names = lunet_alloc(sizeof(char*) * ctx->ncols);
   ctx->col_types = lunet_alloc(sizeof(int) * ctx->ncols);
   MYSQL_BIND* result_bind = lunet_alloc(sizeof(MYSQL_BIND) * ctx->ncols);
-  // Use char for is_null to match my_bool on older MySQL/MariaDB (char vs bool)
-  char* is_null = lunet_alloc(sizeof(char) * ctx->ncols);
+  // Family-aware bool to match MYSQL_BIND.is_null (my_bool on MariaDB, bool on Oracle)
+  lunet_mysql_bool* is_null = lunet_alloc(sizeof(lunet_mysql_bool) * ctx->ncols);
   unsigned long* length = lunet_alloc(sizeof(unsigned long) * ctx->ncols);
   
   if (!ctx->col_names || !ctx->col_types || !result_bind || !is_null || !length) {

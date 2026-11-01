@@ -176,6 +176,55 @@ option("lunet_embed_scripts")
     set_description("Embed a Lua script tree into lunet-run as compressed data (release mode only)")
 option_end()
 
+option("lunet_ext_httpc")
+    set_default(true)
+    set_values("y", "n")
+    set_showmenu(true)
+    set_description("Build the httpc C extension and run its specs. Disable on machines without the httpc deps.")
+option_end()
+option("lunet_ext_sqlite3")
+    set_default(true)
+    set_values("y", "n")
+    set_showmenu(true)
+    set_description("Build the sqlite3 C extension and run its specs. Disable on machines without sqlite3 dev headers.")
+option_end()
+option("lunet_ext_mysql")
+    set_default(true)
+    set_values("y", "n")
+    set_showmenu(true)
+    set_description("Build the mysql C extension and run its specs. Disable on machines without mysqlclient dev headers.")
+option_end()
+option("lunet_ext_postgres")
+    set_default(true)
+    set_values("y", "n")
+    set_showmenu(true)
+    set_description("Build the postgres C extension and run its specs. Disable on machines without libpq dev headers.")
+option_end()
+option("lunet_ext_paxe")
+    set_default(true)
+    set_values("y", "n")
+    set_showmenu(true)
+    set_description("Build the paxe Rust cdylib and run its specs. Disable on machines without cargo.")
+option_end()
+option("lunet_ext_crypto")
+    set_default(true)
+    set_values("y", "n")
+    set_showmenu(true)
+    set_description("Build the crypto Rust cdylib and run its specs. Disable on machines without cargo.")
+option_end()
+option("lunet_ext_lnt_shared")
+    set_default(true)
+    set_values("y", "n")
+    set_showmenu(true)
+    set_description("Build the lnt_shared Rust cdylib and run its specs. Disable on machines without cargo.")
+option_end()
+option("lunet_ext_jsonic")
+    set_default(true)
+    set_values("y", "n")
+    set_showmenu(true)
+    set_description("Build the jsonic Rust cdylib and run its specs. Disable on machines without cargo.")
+option_end()
+
 option("lunet_embed_scripts_dir")
     set_default("lua")
     set_showmenu(true)
@@ -819,26 +868,49 @@ task("test")
     on_run(function ()
         -- Type checking runs first; type errors abort before busted.
         os.exec("xmake check-types")
+        -- Extension flags, default ON: get_config() is a project-scope API
+        -- that returns nil inside a task's on_run (the "mode" read below only
+        -- works because of its `or "release"` fallback), so read the
+        -- persisted configure state through the config module instead —
+        -- the same interface the luajit_snapshot lookups use. nil means the
+        -- option was never set, which is the default (enabled).
+        import("core.project.config", {alias = "project_config"})
+        project_config.load()
+        local function _ext_enabled(name)
+            local v = project_config.get(name)
+            if v == nil then return true end
+            return v == true or v == "y" or v == "Y" or v == "1"
+        end
+        local LUNET_EXT = {
+            httpc = _ext_enabled("lunet_ext_httpc"),
+            sqlite3 = _ext_enabled("lunet_ext_sqlite3"),
+            mysql = _ext_enabled("lunet_ext_mysql"),
+            postgres = _ext_enabled("lunet_ext_postgres"),
+            paxe = _ext_enabled("lunet_ext_paxe"),
+            crypto = _ext_enabled("lunet_ext_crypto"),
+            lnt_shared = _ext_enabled("lunet_ext_lnt_shared"),
+            jsonic = _ext_enabled("lunet_ext_jsonic"),
+        }
         -- Build the httpc and DB driver C modules up front so their specs
         -- can always run. A platform that cannot build them must surface
         -- red here, not skip.
-        os.exec("xmake build lunet-httpc")
-        os.exec("xmake build lunet-sqlite3")
-        os.exec("xmake build lunet-postgres")
-        os.exec("xmake build lunet-mysql")
+        if LUNET_EXT.httpc then os.exec("xmake build lunet-httpc") end
+        if LUNET_EXT.sqlite3 then os.exec("xmake build lunet-sqlite3") end
+        if LUNET_EXT.mysql then os.exec("xmake build lunet-mysql") end
+        if LUNET_EXT.postgres then os.exec("xmake build lunet-postgres") end
         -- The Rust cdylibs (paxe, crypto) are built by their own tasks so
         -- their specs can never silently pend: sodium/security/http-probe
         -- go pending when liblunet_crypto is absent, paxe when
         -- liblunet_paxe is. A machine without cargo surfaces red here,
         -- not a pending suite.
-        os.exec("xmake build-paxe")
-        os.exec("xmake build-crypto")
+        if LUNET_EXT.paxe then os.exec("xmake build-paxe") end
+        if LUNET_EXT.crypto then os.exec("xmake build-crypto") end
         -- lnt_shared and jsonic are the same story on Unix (POSIX-only and
         -- no .dll suffix handling yet respectively — see the CI workflow),
         -- so their specs pend the same way when the cdylibs are absent.
         if not is_host("windows") then
-            os.exec("xmake build-lnt-shared")
-            os.exec("xmake build-jsonic")
+            if LUNET_EXT.lnt_shared then os.exec("xmake build-lnt-shared") end
+            if LUNET_EXT.jsonic then os.exec("xmake build-jsonic") end
         end
         local mode = get_config("mode") or "release"
         local dirs = os.dirs("build/**/" .. mode .. "/lunet")
@@ -894,11 +966,30 @@ task("test")
         if lr_cpath and #lr_cpath:trim() > 0 then
             cpath = cpath .. ";" .. lr_cpath:trim()
         end
+        -- When an extension flag is off, drop its specs from the run list so
+        -- nothing pends (pending fails the suite unless LUNET_ALLOW_PENDING=1).
+        local skip_specs = {}
+        if not LUNET_EXT.httpc then skip_specs["httpc_spec.lua"] = true end
+        if not LUNET_EXT.sqlite3 then skip_specs["sqlite3_spec.lua"] = true end
+        if not LUNET_EXT.mysql then skip_specs["mysql_spec.lua"] = true end
+        if not LUNET_EXT.postgres then skip_specs["postgres_spec.lua"] = true end
+        if not LUNET_EXT.paxe then skip_specs["paxe_spec.lua"] = true; skip_specs["sodium_spec.lua"] = true end
+        if not LUNET_EXT.crypto then skip_specs["http_probe_spec.lua"] = true; skip_specs["security_spec.lua"] = true; skip_specs["sodium_spec.lua"] = true end
+        if not LUNET_EXT.jsonic then skip_specs["http_spec.lua"] = true; skip_specs["jsonic_boot_spec.lua"] = true; skip_specs["jsonic_spec.lua"] = true; skip_specs["security_spec.lua"] = true end
+        if not LUNET_EXT.lnt_shared then skip_specs["lnt_shared_spec.lua"] = true end
+        local spec_files = {}
+        for _, f in ipairs(os.files("spec/*.lua")) do
+            local base = path.filename(f)
+            if not skip_specs[base] then
+                table.insert(spec_files, "spec/" .. base)
+            end
+        end
+        local spec_args = table.concat(spec_files, " ")
         local logdir = lunet_new_logdir(os)
         local logfile = path.join(logdir, "busted.txt")
         if is_host("windows") then
             os.execv("cmd", {"/C", "set LUA_CPATH=" .. cpath .. "&& " ..
-                             luajit .. " " .. busted_entry .. " spec/"})
+                             luajit .. " " .. busted_entry .. " " .. spec_args})
         else
             -- pipefail keeps busted's own nonzero exit (failures/errors)
             -- visible through the tee capture.
@@ -908,7 +999,7 @@ task("test")
             end
             os.execv("bash", {"-lc", "set -o pipefail; " .. prefix ..
                               lunet_quote(luajit) .. " " .. lunet_quote(busted_entry) ..
-                              " spec/ 2>&1 | tee " .. lunet_quote(logfile)})
+                              " " .. spec_args .. " 2>&1 | tee " .. lunet_quote(logfile)})
         end
         -- Anti-regression guard: pending tests report green and let 93 tests
         -- rot silently for ~6 months. Fail on ANY pending count unless

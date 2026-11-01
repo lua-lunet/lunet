@@ -8,9 +8,13 @@ MySQL 驱动（libmysqlclient）。可以直接 `require("lunet.mysql")` 发布�
 占位符为 `?`。参数通过 `mysql_stmt_bind_param` 原生绑定，值永远不会被拼接进
 SQL。本项目有意不提供 `db.escape`。
 
-驱动在编译期强制客户端库下限：针对 mysqlclient >= 5.7 或 libmariadb >=
-3.0 构建，更旧的客户端会让构建以具名错误失败。该下限覆盖 `mysql_stmt_*`
-API、驱动使用的选项面，以及 `mysql_real_connect` 之后的非重连语义。
+驱动在编译期强制客户端库下限：针对 mysqlclient >= 8.4（Oracle）或
+libmariadb >= 3.4（MariaDB）构建，更旧的客户端会让构建以具名错误失败。
+这些是受支持的 LTS 客户端库（MySQL 8.4 LTS、MariaDB 11.4 LTS）；它们仍与
+更旧的服务器向后兼容，因此提高下限会裁剪遗留的选项面（已移除的
+`MYSQL_OPT_SSL_VERIFY_SERVER_CERT` / `MYSQL_OPT_SSL_ENFORCE` 明文回退），
+而不会切断对更旧服务器的访问。该下限覆盖 `mysql_stmt_*` API、驱动使用的
+选项面，以及 `mysql_real_connect` 之后的非重连语义。
 
 | 函数 | 说明 |
 |---|---|

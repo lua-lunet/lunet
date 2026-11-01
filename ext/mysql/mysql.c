@@ -12,21 +12,25 @@
 
 #include <mysql.h>
 #if !defined(MYSQL_VERSION_ID)
-#  error "lunet mysql driver requires a client library that reports MYSQL_VERSION_ID (mysqlclient >= 5.7 or libmariadb >= 3.0)"
+#  error "lunet mysql driver requires a client library that reports MYSQL_VERSION_ID (mysqlclient >= 8.4 or libmariadb >= 3.4)"
 #endif
 /* The two client libraries share the MAJOR*10000+MINOR*100+PATCH id scheme
- * but not a version history: mysqlclient 5.7 = 50700, libmariadb 3.0 =
- * 30000. libmariadb additionally defines MARIADB_VERSION_ID, which is
- * how the floor is picked. The driver needs the mysql_stmt_* API, the
- * option surface (MYSQL_OPT_CONNECT_TIMEOUT, MYSQL_SET_CHARSET_NAME) and
- * non-reconnecting post-connect semantics — all present on both floors. */
+ * but not a version history: mysqlclient 8.4 = 80400, libmariadb 3.4 =
+ * 30400. libmariadb additionally defines MARIADB_VERSION_ID, which is
+ * how the floor is picked. The floor is the supported LTS client: 8.4
+ * (Oracle) / 3.4 (MariaDB). Both remain backwards compatible with older
+ * servers (libmysqlclient keeps cipher support for prior versions;
+ * Connector/C is compatible with all MariaDB and MySQL servers), so
+ * raising the floor prunes legacy option surface (MYSQL_OPT_SSL_VERIFY_
+ * SERVER_CERT, MYSQL_OPT_SSL_ENFORCE plaintext fallback) without cutting
+ * off older servers. */
 #if defined(MARIADB_VERSION_ID)
-#  if MYSQL_VERSION_ID < 30000
-#    error "lunet mysql driver requires libmariadb >= 3.0"
+#  if MYSQL_VERSION_ID < 30400
+#    error "lunet mysql driver requires libmariadb >= 3.4"
 #  endif
 #else
-#  if MYSQL_VERSION_ID < 50700
-#    error "lunet mysql driver requires mysqlclient >= 5.7"
+#  if MYSQL_VERSION_ID < 80400
+#    error "lunet mysql driver requires mysqlclient >= 8.4"
 #  endif
 #endif
 #include <stdbool.h>

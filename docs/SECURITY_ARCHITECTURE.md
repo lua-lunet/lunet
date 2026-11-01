@@ -125,9 +125,12 @@ and input validation does not replace the filter.
 `xmake build-release` compiles every C target with the following flags (visible
 in the build log as `release hardening flags: ...`):
 
-- Linux / macOS: `-fstack-protector-strong`, `_FORTIFY_SOURCE=2`, and `-fPIE`/`-pie`
+- Linux: `-fstack-protector-strong`, `_FORTIFY_SOURCE=2`, and `-fPIE`/`-pie`
   on the executable targets (shared objects stay PIC). Verify with
-  `readelf -h <binary>` (type `ET_DYN`, PIE) and `nm <binary> | grep stack_chk`.
+  `readelf -h <binary>` (type `ET_DYN`, PIE) and `nm -D <binary> | grep stack_chk`
+  (dynamic table; plain `nm` reads the stripped regular symbol table).
+- macOS: the same flags; verify with `otool -hv <binary> | grep PIE` and
+  `nm <binary> | grep stack_chk`.
 - Windows: `/GS` (stack canaries). PIE/ASLR is provided by the linker default
   `/DYNAMICBASE`; `/GS` is the flag lunet sets explicitly.
 - All platforms: stack canaries are present on every C target in `src/` and the
@@ -142,12 +145,14 @@ nm /path/to/lunet-run | grep stack_chk
 
 # Linux
 readelf -h /path/to/lunet-run | grep 'Type:.*DYN'
-nm /path/to/lunet-run | grep stack_chk
+nm -D /path/to/lunet-run | grep stack_chk
 ```
 
-The flags are applied only in release mode (`is_mode("release")`); debug and
-trace builds are unhardened by design for diagnostics. The docs state only the
-flags the build actually applies — there are no aspirational entries.
+The flags are applied only in release mode (`is_mode("release")`); non-release
+builds do not get these explicit flags. Note that a release build keeps them
+even with `--lunet_trace=y` / `--lunet_verbose_trace=y`, because tracing is
+independent of build mode. The docs state only the flags the build actually
+applies — there are no aspirational entries.
 
 ### Example units
 

@@ -18,7 +18,7 @@ libmariadb >= 3.4（MariaDB）构建，更旧的客户端会让构建以具名�
 
 | 函数 | 说明 |
 |---|---|
-| `open(config)` | `host`、`port`、`user`、`password`、`database`、`charset`，可选 `connect_timeout`、`pool_size`（默认 1） |
+| `open(config)` | `host`、`port`、`user`、`password`、`database`、`charset`，可选 `connect_timeout`、`pool_size`（默认 1），可选 TLS 参数（见 [TLS](#tls)） |
 | `close(conn)` | |
 | `query(conn, sql, ...)` | 返回行表数组 |
 | `exec(conn, sql, ...)` | 返回 `{ affected_rows, last_insert_id }` |
@@ -41,6 +41,10 @@ libmariadb >= 3.4（MariaDB）构建，更旧的客户端会让构建以具名�
 | `password` / `database` | string | 默认 `""` |
 | `charset` | string | 默认 `"utf8mb4"`，通过 `MYSQL_SET_CHARSET_NAME` 生效 |
 | `connect_timeout` | integer | libmysqlclient 连接尝试的等待秒数；不设置则保持库默认值 |
+| `ssl_ca` / `ssl_capath` / `ssl_cert` / `ssl_key` / `ssl_cipher` / `ssl_crl` / `ssl_crlpath` | string | 透传给客户端库的 TLS 材料（`MYSQL_OPT_SSL_CA` 等）；不设置则保持厂商默认值。空字符串视为未设置。 |
+| `tls_version` | string | `"TLSv1.2"` 和/或 `"TLSv1.3"`，逗号分隔（如 `"TLSv1.2,TLSv1.3"`，逗号周围不能有空格）；其他任何值都在打开时大声报错 |
+| `ssl_mode` | string | **仅 Oracle 客户端**：`disabled`、`prefer`、`require`、`verify_ca`、`verify_identity`（→ `MYSQL_OPT_SSL_MODE`）；在 MariaDB 构建上该键大声报错——见 [TLS](#tls) |
+| `ssl_verify_server_cert` | boolean | **仅 MariaDB 客户端**（→ `MYSQL_OPT_SSL_VERIFY_SERVER_CERT`）；在 Oracle 构建上该键大声报错——见 [TLS](#tls) |
 | `pool_size` | integer | 默认 `1`；见下文 |
 
 透传语义：`connect_timeout` 在句柄返回**之前**就已生效——驱动在对池中每一条连接
@@ -51,6 +55,44 @@ libmysqlclient 的行为就与其手册所述完全一致。
 该句柄没有打开后的 pragma 通道——没有作为 API 暴露的 `SET` 逃生舱口，也没有会话
 级旋钮。打开时的设置就是全部约定。（sqlite3 风格的读/写拆分有意不适用于远程
 驱动：服务器自身负责读/写流量的路由。）
+
+### TLS
+
+`mysql.open` 只在打开时接受 TLS 设置——与 postgres 驱动的 `sslmode` 同一条
+约定：打开时的设置就是全部约定，没有打开后的旋钮。每个被接受的键都会在对池中
+每条连接调用 `mysql_real_connect` 之前通过 `mysql_options` 生效，因此这些设置
+管辖的是 TLS 握手本身。未设置的键保持客户端库的默认行为——驱动不发明任何值。
+
+两个客户端家族都接受（除注明外均为普通字符串）：
+
+- `ssl_ca`、`ssl_capath`、`ssl_cert`、`ssl_key`、`ssl_cipher`、`ssl_crl`、
+  `ssl_crlpath` —— 分别透传给 `MYSQL_OPT_SSL_CA`、`MYSQL_OPT_SSL_CAPATH`、
+  `MYSQL_OPT_SSL_CERT`、`MYSQL_OPT_SSL_KEY`、`MYSQL_OPT_SSL_CIPHER`、
+  `MYSQL_OPT_SSL_CRL`、`MYSQL_OPT_SSL_CRLPATH`。
+- `tls_version` —— `"TLSv1.2"`、`"TLSv1.3"`，或两者的逗号组合
+  （`"TLSv1.2,TLSv1.3"`）。原子严格匹配：逗号周围不能有空格。在 Oracle 上映射
+  到 `MYSQL_OPT_TLS_VERSION`，在 MariaDB 上映射到 `MARIADB_OPT_TLS_VERSION`。
+
+家族划分是编译期的，取决于驱动所链接的客户端库：
+
+- **Oracle libmysqlclient 8.0：** `ssl_mode` 接受 `disabled`、`prefer`、
+  `require`、`verify_ca`、`verify_identity`（→ `MYSQL_OPT_SSL_MODE`）。库默认值
+  是 `SSL_MODE_PREFERRED`：服务器支持 TLS 就用 TLS，否则回退明文——用
+  `ssl_mode = "require"` 移除回退。`ssl_verify_server_cert` **不是** 8.0 的
+  选项；设置它会大声报错——请改用 `ssl_mode = "verify_ca"` /
+  `"verify_identity"`。
+- **MariaDB Connector/C 3.4：** `ssl_verify_server_cert`（布尔值 →
+  `MYSQL_OPT_SSL_VERIFY_SERVER_CERT`）。Connector/C 3.4 默认就校验服务器证书
+  （零配置 SSL），因此该键主要用于把校验**关掉**，或显式声明安全姿态。
+  `ssl_mode` 不是 MariaDB 的选项；设置它会大声报错。
+
+校验在打开时大声进行，早于任何连接尝试：类型错误或未在白名单中的值都会抛出
+点名该键的错误。没有任何东西被静默忽略，也不发明任何默认值。
+
+陷阱：不要伸手去碰 `MYSQL_OPT_SSL_ENFORCE`——尽管名字如此，它**并不**强制
+TLS（厂商文档写明连接会回退到未加密）。需要强制 TLS 时用
+`ssl_mode = "require"`（Oracle），或保留 MariaDB 3.4 默认开启的证书校验，并用
+`ssl_ca` 固定信任锚。
 
 ### `pool_size`
 

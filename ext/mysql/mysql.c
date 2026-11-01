@@ -209,7 +209,54 @@ typedef struct {
   char database[256];
   char charset[256];
   int connect_timeout; /* 0 = unset, leave the libmysqlclient default */
+
+  /* TLS passthrough (open-time keys, mirroring the postgres sslmode
+   * design): an empty string means unset and leaves the vendor default
+   * untouched. ssl_mode / ssl_verify_server_cert are -1 when unset and are
+   * family-gated — setting either on the family that lacks the option is a
+   * loud open-time error (see lunet_db_open). */
+  char ssl_ca[512];
+  char ssl_capath[512];
+  char ssl_cert[512];
+  char ssl_key[512];
+  char ssl_cipher[512];
+  char ssl_crl[512];
+  char ssl_crlpath[512];
+  char tls_version[64];
+  int ssl_mode;
+  int ssl_verify_server_cert;
 } db_open_ctx_t;
+
+/* Loud-error path shared by every TLS key: pop the field, release the
+ * library ref, free the open context, raise. The connect_timeout and
+ * pool_size guards in lunet_db_open spell this out inline; here it is one
+ * helper because there are ten keys and every failure is fatal before any
+ * connection exists. */
+static int db_open_tls_fail(lua_State* L, db_open_ctx_t* ctx, const char* msg) {
+  lunet_mysql_library_release();
+  lunet_free_nonnull(ctx);
+  lua_pushstring(L, msg);
+  return lua_error(L);
+}
+
+/* tls_version whitelist: exactly the TLSv1.2 / TLSv1.3 atoms, optionally
+ * comma-separated ("TLSv1.2,TLSv1.3"). Each atom is matched exactly — no
+ * whitespace trimming — so "TLSv1.2, TLSv1.3" fails loudly. */
+static int tls_version_atom_valid(const char* atom, size_t len) {
+  return len == 7 &&
+         (strncmp(atom, "TLSv1.2", len) == 0 || strncmp(atom, "TLSv1.3", len) == 0);
+}
+
+static int tls_version_valid(const char* s) {
+  const char* p = s;
+  for (;;) {
+    const char* comma = strchr(p, ',');
+    size_t len = comma ? (size_t)(comma - p) : strlen(p);
+    if (!tls_version_atom_valid(p, len)) return 0;
+    if (!comma) return 1;
+    p = comma + 1;
+  }
+}
 
 static void db_open_work_cb(uv_work_t* req) {
   db_open_ctx_t* ctx = (db_open_ctx_t*)req->data;
@@ -247,6 +294,46 @@ static void db_open_work_cb(uv_work_t* req) {
       unsigned int timeout = (unsigned int)ctx->connect_timeout;
       mysql_options(ctx->conns[i], MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
     }
+
+    /* TLS passthrough, applied before mysql_real_connect so every option
+     * governs the handshake itself (same doctrine as connect_timeout).
+     * Order: tls_version, then the family-gated mode/verify flag, then the
+     * path/cipher options. Empty keys were left unset at open and stay
+     * untouched here. */
+    if (ctx->tls_version[0] != '\0') {
+#ifdef MARIADB_VERSION_ID
+      mysql_options(ctx->conns[i], MARIADB_OPT_TLS_VERSION, ctx->tls_version);
+#else
+      mysql_options(ctx->conns[i], MYSQL_OPT_TLS_VERSION, ctx->tls_version);
+#endif
+    }
+
+#ifdef MARIADB_VERSION_ID
+    if (ctx->ssl_verify_server_cert >= 0) {
+      my_bool verify = (my_bool)ctx->ssl_verify_server_cert;
+      mysql_options(ctx->conns[i], MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify);
+    }
+#else
+    if (ctx->ssl_mode >= 0) {
+      unsigned int mode = (unsigned int)ctx->ssl_mode;
+      mysql_options(ctx->conns[i], MYSQL_OPT_SSL_MODE, &mode);
+    }
+#endif
+
+    if (ctx->ssl_ca[0] != '\0')
+      mysql_options(ctx->conns[i], MYSQL_OPT_SSL_CA, ctx->ssl_ca);
+    if (ctx->ssl_capath[0] != '\0')
+      mysql_options(ctx->conns[i], MYSQL_OPT_SSL_CAPATH, ctx->ssl_capath);
+    if (ctx->ssl_cert[0] != '\0')
+      mysql_options(ctx->conns[i], MYSQL_OPT_SSL_CERT, ctx->ssl_cert);
+    if (ctx->ssl_key[0] != '\0')
+      mysql_options(ctx->conns[i], MYSQL_OPT_SSL_KEY, ctx->ssl_key);
+    if (ctx->ssl_cipher[0] != '\0')
+      mysql_options(ctx->conns[i], MYSQL_OPT_SSL_CIPHER, ctx->ssl_cipher);
+    if (ctx->ssl_crl[0] != '\0')
+      mysql_options(ctx->conns[i], MYSQL_OPT_SSL_CRL, ctx->ssl_crl);
+    if (ctx->ssl_crlpath[0] != '\0')
+      mysql_options(ctx->conns[i], MYSQL_OPT_SSL_CRLPATH, ctx->ssl_crlpath);
 
     if (!mysql_real_connect(ctx->conns[i], ctx->host, ctx->user, ctx->password,
                             ctx->database, ctx->port, NULL, 0)) {
@@ -605,6 +692,147 @@ int lunet_db_open(lua_State* L) {
       lua_pushstring(L, "db.open: connect_timeout must be a positive integer (seconds)");
       return lua_error(L);
     }
+  }
+  lua_pop(L, 1);
+
+  /* TLS passthrough, read + validated BEFORE pool_size and before any
+   * connection exists: wrong types and non-whitelisted values fail loudly
+   * here, never silently. Empty/absent keys leave the vendor default
+   * untouched (connect_timeout doctrine). */
+  ctx->ssl_mode = -1;
+  ctx->ssl_verify_server_cert = -1;
+
+  /* String path/cipher keys — present only when a string, copied only when
+   * it fits. */
+  const struct {
+    const char* key;
+    char* dest;
+    size_t dest_size;
+  } tls_path_keys[] = {
+      {"ssl_ca", ctx->ssl_ca, sizeof(ctx->ssl_ca)},
+      {"ssl_capath", ctx->ssl_capath, sizeof(ctx->ssl_capath)},
+      {"ssl_cert", ctx->ssl_cert, sizeof(ctx->ssl_cert)},
+      {"ssl_key", ctx->ssl_key, sizeof(ctx->ssl_key)},
+      {"ssl_cipher", ctx->ssl_cipher, sizeof(ctx->ssl_cipher)},
+      {"ssl_crl", ctx->ssl_crl, sizeof(ctx->ssl_crl)},
+      {"ssl_crlpath", ctx->ssl_crlpath, sizeof(ctx->ssl_crlpath)},
+  };
+  for (size_t k = 0; k < sizeof(tls_path_keys) / sizeof(tls_path_keys[0]); k++) {
+    lua_getfield(L, 1, tls_path_keys[k].key);
+    int t = lua_type(L, -1);
+    if (t == LUA_TNIL) {
+      /* unset: leave the vendor default untouched */
+    } else if (t == LUA_TSTRING) {
+      size_t len;
+      const char* s = lua_tolstring(L, -1, &len);
+      if (len >= tls_path_keys[k].dest_size) {
+        lua_pop(L, 1);
+        char msg[128];
+        snprintf(msg, sizeof(msg), "db.open: %s is too long (max %d bytes)",
+                 tls_path_keys[k].key, (int)tls_path_keys[k].dest_size - 1);
+        return db_open_tls_fail(L, ctx, msg);
+      }
+      snprintf(tls_path_keys[k].dest, tls_path_keys[k].dest_size, "%s", s);
+    } else {
+      lua_pop(L, 1);
+      char msg[128];
+      snprintf(msg, sizeof(msg), "db.open: %s must be a string",
+               tls_path_keys[k].key);
+      return db_open_tls_fail(L, ctx, msg);
+    }
+    lua_pop(L, 1);
+  }
+
+  /* tls_version: whitelist exactly TLSv1.2 / TLSv1.3, comma-separated
+   * combinations of those atoms allowed ("TLSv1.2,TLSv1.3"). Applied to
+   * the vendor option named by the compile-time family below. */
+  lua_getfield(L, 1, "tls_version");
+  if (!lua_isnil(L, -1)) {
+    if (lua_type(L, -1) != LUA_TSTRING) {
+      lua_pop(L, 1);
+      return db_open_tls_fail(L, ctx, "db.open: tls_version must be a string");
+    }
+    const char* s = lua_tostring(L, -1);
+    if (strlen(s) >= sizeof(ctx->tls_version)) {
+      lua_pop(L, 1);
+      return db_open_tls_fail(L, ctx,
+                              "db.open: tls_version is too long (max 63 bytes)");
+    }
+    if (!tls_version_valid(s)) {
+      lua_pop(L, 1);
+      return db_open_tls_fail(
+          L, ctx,
+          "db.open: tls_version must be TLSv1.2 and/or TLSv1.3 (comma-separated, no spaces)");
+    }
+    snprintf(ctx->tls_version, sizeof(ctx->tls_version), "%s", s);
+  }
+  lua_pop(L, 1);
+
+  /* ssl_mode: an Oracle libmysqlclient 8.0 option
+   * (MYSQL_OPT_SSL_MODE / SSL_MODE_DISABLED..SSL_MODE_VERIFY_IDENTITY).
+   * It does not exist in MariaDB Connector/C — if set there, fail loudly
+   * naming the fact instead of silently dropping it. */
+  lua_getfield(L, 1, "ssl_mode");
+  if (!lua_isnil(L, -1)) {
+    if (lua_type(L, -1) != LUA_TSTRING) {
+      lua_pop(L, 1);
+      return db_open_tls_fail(L, ctx,
+                              "db.open: ssl_mode must be a string");
+    }
+#ifdef MARIADB_VERSION_ID
+    lua_pop(L, 1);
+    return db_open_tls_fail(
+        L, ctx,
+        "db.open: ssl_mode is not a MariaDB Connector/C option (Oracle libmysqlclient only); use ssl_verify_server_cert instead");
+#else
+    static const struct {
+      const char* name;
+      int value;
+    } ssl_modes[] = {
+        {"disabled", SSL_MODE_DISABLED},
+        {"prefer", SSL_MODE_PREFERRED},
+        {"require", SSL_MODE_REQUIRED},
+        {"verify_ca", SSL_MODE_VERIFY_CA},
+        {"verify_identity", SSL_MODE_VERIFY_IDENTITY},
+    };
+    const char* s = lua_tostring(L, -1);
+    int matched = -1;
+    for (size_t k = 0; k < sizeof(ssl_modes) / sizeof(ssl_modes[0]); k++) {
+      if (strcmp(s, ssl_modes[k].name) == 0) {
+        matched = ssl_modes[k].value;
+        break;
+      }
+    }
+    if (matched < 0) {
+      lua_pop(L, 1);
+      return db_open_tls_fail(
+          L, ctx,
+          "db.open: ssl_mode must be one of disabled, prefer, require, verify_ca, verify_identity");
+    }
+    ctx->ssl_mode = matched;
+#endif
+  }
+  lua_pop(L, 1);
+
+  /* ssl_verify_server_cert: the MariaDB counterpart (my_bool via
+   * MYSQL_OPT_SSL_VERIFY_SERVER_CERT; Connector/C 3.4 verifies by default —
+   * the key is how to turn it OFF). Removed from Oracle libmysqlclient 8.0,
+   * so if set there, fail loudly naming the fact. */
+  lua_getfield(L, 1, "ssl_verify_server_cert");
+  if (!lua_isnil(L, -1)) {
+    if (lua_type(L, -1) != LUA_TBOOLEAN) {
+      lua_pop(L, 1);
+      return db_open_tls_fail(L, ctx,
+                              "db.open: ssl_verify_server_cert must be a boolean");
+    }
+#ifndef MARIADB_VERSION_ID
+    lua_pop(L, 1);
+    return db_open_tls_fail(
+        L, ctx,
+        "db.open: ssl_verify_server_cert is not an Oracle libmysqlclient 8.0 option (removed at the 8.0 floor); use ssl_mode instead");
+#else
+    ctx->ssl_verify_server_cert = lua_toboolean(L, -1) ? 1 : 0;
+#endif
   }
   lua_pop(L, 1);
 

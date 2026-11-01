@@ -13,6 +13,20 @@ local mysql = {}
 --- - charset: The charset to use
 --- - connect_timeout: integer? seconds libmysqlclient waits before the connect
 ---   attempt fails; unset leaves the library default untouched
+--- - ssl_ca / ssl_capath / ssl_cert / ssl_key / ssl_cipher / ssl_crl /
+---   ssl_crlpath: string? TLS material passed through to the client library
+---   (MYSQL_OPT_SSL_CA and friends); unset (or empty) leaves the vendor
+---   default untouched
+--- - tls_version: string? "TLSv1.2" and/or "TLSv1.3", comma-separated (no
+---   spaces); anything else fails loudly at open. MYSQL_OPT_TLS_VERSION on
+---   Oracle, MARIADB_OPT_TLS_VERSION on MariaDB.
+--- - ssl_mode: string? Oracle client only: "disabled", "prefer", "require",
+---   "verify_ca", "verify_identity" (MYSQL_OPT_SSL_MODE). Not a MariaDB
+---   option — setting it on a MariaDB build fails loudly.
+--- - ssl_verify_server_cert: boolean? MariaDB client only
+---   (MYSQL_OPT_SSL_VERIFY_SERVER_CERT); Connector/C 3.4 verifies the server
+---   certificate by default, so the key is how to turn verification off.
+---   Not an Oracle 8.0 option — setting it on an Oracle build fails loudly.
 --- - pool_size: integer? (default 1) connections behind the returned handle,
 ---   round-robin. Transactions need one session: open with pool_size = 1,
 ---   or checkout a member for the transaction's lifetime (see checkout).

@@ -21,7 +21,7 @@ the driver uses, and the non-reconnecting semantics after
 
 | Function | Notes |
 |---|---|
-| `open(config)` | `host`, `port`, `user`, `password`, `database`, `charset`, optional `connect_timeout`, `pool_size` (default 1) |
+| `open(config)` | `host`, `port`, `user`, `password`, `database`, `charset`, optional `connect_timeout`, `pool_size` (default 1), optional TLS keys (see [TLS](#tls)) |
 | `close(conn)` | |
 | `query(conn, sql, ...)` | returns array of row tables |
 | `exec(conn, sql, ...)` | returns `{ affected_rows, last_insert_id }` |
@@ -45,6 +45,10 @@ open time rather than being silently ignored.
 | `password` / `database` | string | defaults `""` |
 | `charset` | string | default `"utf8mb4"`, applied via `MYSQL_SET_CHARSET_NAME` |
 | `connect_timeout` | integer | seconds libmysqlclient waits before the connect attempt fails; unset leaves the library default untouched |
+| `ssl_ca` / `ssl_capath` / `ssl_cert` / `ssl_key` / `ssl_cipher` / `ssl_crl` / `ssl_crlpath` | string | TLS material passed through to the client library (`MYSQL_OPT_SSL_CA` and friends); unset leaves the vendor default untouched. An empty string counts as unset. |
+| `tls_version` | string | `"TLSv1.2"` and/or `"TLSv1.3"`, comma-separated (e.g. `"TLSv1.2,TLSv1.3"`, no spaces); anything else fails loudly at open |
+| `ssl_mode` | string | **Oracle client only**: `disabled`, `prefer`, `require`, `verify_ca`, `verify_identity` (→ `MYSQL_OPT_SSL_MODE`); on a MariaDB build this key fails loudly — see [TLS](#tls) |
+| `ssl_verify_server_cert` | boolean | **MariaDB client only** (→ `MYSQL_OPT_SSL_VERIFY_SERVER_CERT`); on an Oracle build this key fails loudly — see [TLS](#tls) |
 | `pool_size` | integer | default `1`; see below |
 
 Passthrough semantics: `connect_timeout` is applied before the handle returns
@@ -58,6 +62,50 @@ There is no post-open pragma surface on this handle — no `SET` escape hatch
 exposed as an API, no per-session knob. Open-time settings are the entire
 contract. (The sqlite3-style read/write split deliberately does not apply to
 remote drivers: the server routes read/write traffic itself.)
+
+### TLS
+
+`mysql.open` accepts TLS settings at open time only — the same doctrine as the
+postgres driver's `sslmode`: open-time settings are the entire contract, there
+are no post-open knobs. Every accepted key is applied via `mysql_options` on
+each connection in the pool before `mysql_real_connect`, so the settings govern
+the TLS handshake itself. Unset keys leave the client library's default
+behaviour untouched — the driver invents nothing.
+
+Both client families accept (plain strings unless noted):
+
+- `ssl_ca`, `ssl_capath`, `ssl_cert`, `ssl_key`, `ssl_cipher`, `ssl_crl`,
+  `ssl_crlpath` — passed through to `MYSQL_OPT_SSL_CA`,
+  `MYSQL_OPT_SSL_CAPATH`, `MYSQL_OPT_SSL_CERT`, `MYSQL_OPT_SSL_KEY`,
+  `MYSQL_OPT_SSL_CIPHER`, `MYSQL_OPT_SSL_CRL`, `MYSQL_OPT_SSL_CRLPATH`.
+- `tls_version` — `"TLSv1.2"`, `"TLSv1.3"`, or a comma-separated combination
+  (`"TLSv1.2,TLSv1.3"`). Atoms are matched exactly: no whitespace around the
+  comma. On Oracle this maps to `MYSQL_OPT_TLS_VERSION`, on MariaDB to
+  `MARIADB_OPT_TLS_VERSION`.
+
+The family split is compile-time, by which client library the driver was built
+against:
+
+- **Oracle libmysqlclient 8.0:** `ssl_mode` accepts `disabled`, `prefer`,
+  `require`, `verify_ca`, `verify_identity` (→ `MYSQL_OPT_SSL_MODE`). The
+  library default is `SSL_MODE_PREFERRED`: TLS is used when the server supports
+  it, with plaintext fallback otherwise — say `ssl_mode = "require"` to remove
+  the fallback. `ssl_verify_server_cert` is **not** an 8.0 option; setting it
+  fails loudly — use `ssl_mode = "verify_ca"` / `"verify_identity"` instead.
+- **MariaDB Connector/C 3.4:** `ssl_verify_server_cert` (boolean →
+  `MYSQL_OPT_SSL_VERIFY_SERVER_CERT`). Connector/C 3.4 verifies the server
+  certificate by default (zero-configuration SSL), so the key exists mainly to
+  turn verification **off**, or to state the posture explicitly.
+  `ssl_mode` is not a MariaDB option; setting it fails loudly.
+
+Validation is loud and happens at open time, before any connection is attempted:
+a wrong type or a non-whitelisted value raises an error naming the key. Nothing
+is silently ignored, and no default is invented.
+
+Footgun: do not reach for `MYSQL_OPT_SSL_ENFORCE` — despite the name it does
+**not** enforce TLS (the vendor documents that the connection falls back to
+unencrypted). Require TLS with `ssl_mode = "require"` (Oracle) or by leaving
+the MariaDB 3.4 verify-by-default in place, and pin trust with `ssl_ca`.
 
 ### `pool_size`
 

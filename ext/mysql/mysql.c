@@ -25,8 +25,12 @@
  * SERVER_CERT, MYSQL_OPT_SSL_ENFORCE plaintext fallback) without cutting
  * off older servers. */
 #if defined(MARIADB_VERSION_ID)
-#  if MYSQL_VERSION_ID < 30400
-#    error "lunet mysql driver requires libmariadb >= 3.4"
+/* libmariadb reports two different version schemes: MYSQL_VERSION_ID is the
+ * server version (e.g. 101114 for MariaDB 10.11) while MARIADB_PACKAGE_
+ * VERSION_ID is the Connector/C package version (e.g. 30317 for 3.3.17).
+ * The floor is on the package (client library) version, so check that. */
+#  if !defined(MARIADB_PACKAGE_VERSION_ID) || MARIADB_PACKAGE_VERSION_ID < 30400
+#    error "lunet mysql driver requires libmariadb >= 3.4 (MARIADB_PACKAGE_VERSION_ID < 30400)"
 #  endif
 #else
 #  if MYSQL_VERSION_ID < 80400

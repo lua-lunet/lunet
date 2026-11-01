@@ -4,8 +4,6 @@
 
 [English Documentation](README.md)
 
-[![EasyMem](https://img.shields.io/badge/EasyMem-easy__memory-27272d?style=flat&logo=github&logoColor=white)](https://github.com/EasyMem/easy_memory)
-
 > 本项目基于 [夏磊 (Xia Lei)](https://github.com/xialeistudio) 的 [xialeistudio/lunet](https://github.com/xialeistudio/lunet)。详见他的精彩文章：[Lunet：高性能协程网络库的设计与实现](https://www.ddhigh.com/2025/07/12/lunet-high-performance-coroutine-network-library/)。
 
 Lunet 的首页用例是**微型 localhost MCP 服务器** - 运行在 LLM 客户端旁、回环地址上的 Model Context Protocol 工具：空闲时只占个位数 MB 内存，瞬间启动。长篇理念阐述请阅读：**[Lunet 的 Talos、Ethos 与無為](docs/PHILOSOPHY-CN.md)**。

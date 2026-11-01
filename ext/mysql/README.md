@@ -9,6 +9,12 @@ Placeholders are `?`. Parameters are bound natively via
 `mysql_stmt_bind_param`, so values are never concatenated into SQL. There is
 deliberately no `db.escape`.
 
+The driver enforces its client-library floor at compile time: it builds
+against mysqlclient >= 5.7 or libmariadb >= 3.0, and an older client fails
+the build with a named error. The floor covers the `mysql_stmt_*` API, the
+option surface the driver uses, and the non-reconnecting semantics after
+`mysql_real_connect`.
+
 | Function | Notes |
 |---|---|
 | `open(config)` | `host`, `port`, `user`, `password`, `database`, `charset`, optional `connect_timeout`, `pool_size` (default 1) |
@@ -16,7 +22,10 @@ deliberately no `db.escape`.
 | `query(conn, sql, ...)` | returns array of row tables |
 | `exec(conn, sql, ...)` | returns `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | same behaviour as the above |
-| `prepare(conn, sql)` | reusable prepared statement; `stmt:query` / `stmt:exec` / `stmt:close`; requires `pool_size = 1` — see [Prepared statements](#prepared-statements) |
+| `checkout(pool)` | check one member out of the pool exclusively: returns a connection handle bound to a single server session, removed from the round-robin rotation until released. The mechanism for transaction stickiness. |
+| `release(conn)` | return a checked-out member to the rotation. Idempotent after pool close. |
+| `ping(conn)` | liveness probe (`mysql_ping`, one worker hop): on a pool handle probes one member (skipping checked-out members), on a checked-out member probes that session. Returns `ok, err`. No silent reconnect: the driver never sets `MYSQL_OPT_RECONNECT`. |
+| `prepare(conn, sql)` | reusable prepared statement; `stmt:query` / `stmt:exec` / `stmt:close`; requires a single member (`pool_size = 1` or a checked-out member) — see [Prepared statements](#prepared-statements) |
 
 ### Open settings
 
@@ -54,9 +63,53 @@ at dispatch; `close` closes all members. MySQL genuinely serves concurrent
 client connections, so a wider pool parallelises real work — this is a
 feature here, not an escape hatch.
 
-**`mysql_tx` requires the default `pool_size = 1`.** A transaction belongs
-to the *connection*; a multi-member pool violates that by construction —
-`BEGIN` and `COMMIT` can land on different sessions and commit nothing.
+**`mysql_tx` requires one session.** A transaction belongs to the
+*connection*; a multi-member pool violates that by construction — the
+`SET autocommit=0` … `COMMIT` bracket can land on different sessions and
+commit nothing. Either open with `pool_size = 1` (the default), or
+`checkout` a member for the whole transaction (below).
+
+## Exclusive checkout
+
+`checkout(pool)` returns a connection handle bound to a single server
+session, removed from the pool's round-robin rotation for as long as
+it is checked out. Every call on that handle (`query`, `exec`,
+`query_params`, `exec_params`, `prepare`) targets that session, so a
+transaction stays on one connection even when the pool has many members.
+
+```lua
+local mysql = require("lunet.mysql")
+local tx = require("lunet.mysql_tx")
+
+local pool = mysql.open({ host = "...", pool_size = 4 })
+local conn = mysql.checkout(pool)          -- a dedicated session
+local ok, err = tx.transaction(conn, function(t)
+    t.exec("DELETE FROM nodes WHERE path = ?", dst)
+    local r = t.exec("UPDATE nodes SET path=? WHERE path=? AND version=?",
+                     dst, src, version)
+    if r.affected_rows == 0 then return nil, "version conflict" end
+    return true
+end)
+mysql.release(conn)                        -- back in the rotation
+```
+
+Rules:
+
+- **One member, one owner.** A checked-out member is taken out of the
+  rotation; the remaining members keep serving autocommit traffic.
+- **Exhaustion is loud, not a wait.** When every member is checked out,
+  the next `checkout` returns `(nil, err)` — the driver does not queue
+  or yield. Backpressure is app policy: sleep and retry, or size the pool.
+- **Release is idempotent after close.** `release` on a handle whose
+  pool is already closed returns `nil`. A double release on a live
+  handle fails loudly.
+- **A dropped checkout releases itself.** If a checked-out handle is
+  garbage-collected without an explicit `release`, its member goes back
+  into the rotation at GC time. The member is never closed by that path
+  — the pool owns its members and closes them at pool close.
+- **Statements bind to the member they were prepared on.** `prepare` on a
+  checked-out conn works (it targets that session); `prepare` on a pool
+  handle still requires a single member.
 
 ## Transactions
 

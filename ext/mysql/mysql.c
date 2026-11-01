@@ -11,6 +11,24 @@
 #endif
 
 #include <mysql.h>
+#if !defined(MYSQL_VERSION_ID)
+#  error "lunet mysql driver requires a client library that reports MYSQL_VERSION_ID (mysqlclient >= 5.7 or libmariadb >= 3.0)"
+#endif
+/* The two client libraries share the MAJOR*10000+MINOR*100+PATCH id scheme
+ * but not a version history: mysqlclient 5.7 = 50700, libmariadb 3.0 =
+ * 30000. libmariadb additionally defines MARIADB_VERSION_ID, which is
+ * how the floor is picked. The driver needs the mysql_stmt_* API, the
+ * option surface (MYSQL_OPT_CONNECT_TIMEOUT, MYSQL_SET_CHARSET_NAME) and
+ * non-reconnecting post-connect semantics — all present on both floors. */
+#if defined(MARIADB_VERSION_ID)
+#  if MYSQL_VERSION_ID < 30000
+#    error "lunet mysql driver requires libmariadb >= 3.0"
+#  endif
+#else
+#  if MYSQL_VERSION_ID < 50700
+#    error "lunet mysql driver requires mysqlclient >= 5.7"
+#  endif
+#endif
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,8 +78,9 @@ static char* lunet_strdup_local(const char* s) {
 }
 
 typedef struct lunet_mysql_stmt_s lunet_mysql_stmt_t;
+struct lunet_mysql_pool_s;
 
-typedef struct {
+typedef struct lunet_mysql_conn_s {
   MYSQL* conn;
   uv_mutex_t mutex;
   int closed;
@@ -72,6 +91,15 @@ typedef struct {
    * statements with the connection, so a surviving statement userdata must
    * never dereference its MYSQL_STMT* again. */
   lunet_mysql_stmt_t* stmts;
+  /* Exclusive-checkout support: a userdata created by checkout() is a
+   * VIEW over one member of a pool — it never owns the member, never
+   * closes it, and never destroys its mutex; release (or GC) just clears
+   * the member's checked_out flag. A plain member has is_view == 0. */
+  int is_view;
+  int checked_out; /* meaningful on a member: 1 while checked out */
+  struct lunet_mysql_conn_s* member; /* meaningful on a view: the member it is bound to */
+  struct lunet_mysql_pool_s* owner; /* the pool a view belongs to (NULL for members) */
+  int pool_ref; /* strong registry ref pinning the pool userdata while a view lives */
 } lunet_mysql_conn_t;
 
 /* A prepared statement: one connection, one vendor statement. The busy
@@ -107,7 +135,7 @@ static void conn_untrack_stmt(lunet_mysql_conn_t* conn, lunet_mysql_stmt_t* s) {
  * -> one member, picked round-robin at dispatch. Default pool_size is 1 —
  * exactly one connection, as before. The server genuinely serves concurrent
  * client connections, so a wider pool parallelises real work. */
-typedef struct {
+typedef struct lunet_mysql_pool_s {
   lunet_mysql_conn_t** members;
   int n;
   int next; /* round-robin cursor; picked on the loop thread only */
@@ -278,6 +306,9 @@ static void db_open_after_cb(uv_work_t* req, int status) {
         memset(member, 0, sizeof(*member));
         member->conn = ctx->conns[i];
         member->library_ref_held = 1;
+        member->is_view = 0;
+        member->checked_out = 0;
+        member->owner = NULL;
         uv_mutex_init(&member->mutex);
         pool->members[i] = member;
         ctx->conns[i] = NULL;
@@ -306,6 +337,23 @@ static void db_open_after_cb(uv_work_t* req, int status) {
 
 static int conn_gc(lua_State* L) {
   lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)luaL_checkudata(L, 1, LUNET_MYSQL_CONN_MT);
+  if (wrapper->is_view) {
+    /* Release the member back into the rotation if it is still checked
+     * out; the pool owns the member and closes it at pool close. Never
+     * close/free here. Already-released (closed) views are a no-op. */
+    if (!wrapper->closed && wrapper->owner && !wrapper->owner->closed &&
+        wrapper->member && wrapper->member->checked_out) {
+      wrapper->member->checked_out = 0;
+    }
+    if (wrapper->pool_ref) {
+      lunet_valref_release(L, wrapper->pool_ref);
+      wrapper->pool_ref = 0;
+    }
+    wrapper->member = NULL;
+    wrapper->owner = NULL;
+    wrapper->closed = 1;
+    return 0;
+  }
   lunet_mysql_conn_destroy(wrapper);
   return 0;
 }
@@ -618,6 +666,24 @@ int lunet_db_close(lua_State* L) {
     lua_pushstring(L, "db.close requires a valid connection");
     return 1;
   }
+  if (wrapper->is_view) {
+    /* A checked-out member is released, not closed: the pool owns the
+     * member and closes it at pool close. */
+    lunet_mysql_pool_t* owner = (lunet_mysql_pool_t*)wrapper->owner;
+    if (owner && !owner->closed && wrapper->member &&
+        wrapper->member->checked_out) {
+      wrapper->member->checked_out = 0;
+    }
+    if (wrapper->pool_ref) {
+      lunet_valref_release(L, wrapper->pool_ref);
+      wrapper->pool_ref = 0;
+    }
+    wrapper->member = NULL;
+    wrapper->owner = NULL;
+    wrapper->closed = 1;
+    lua_pushnil(L);
+    return 1;
+  }
 
   uv_mutex_lock(&wrapper->mutex);
   lunet_mysql_conn_close(wrapper); /* Keep mutex intact until after unlock. */
@@ -635,11 +701,245 @@ static lunet_mysql_conn_t* pick_statement_target(lua_State* L, int idx) {
   lunet_mysql_pool_t* pool = (lunet_mysql_pool_t*)luaL_testudata(L, idx, LUNET_MYSQL_POOL_MT);
   if (pool) {
     if (!pool->members || pool->n < 1) return NULL;
-    lunet_mysql_conn_t* member = pool->members[pool->next];
-    pool->next = (pool->next + 1) % pool->n;
-    return member; /* closed pools surface "connection is closed" downstream */
+    /* Round-robin, skipping members that are currently checked out. */
+    int start = pool->next;
+    do {
+      lunet_mysql_conn_t* member = pool->members[pool->next];
+      pool->next = (pool->next + 1) % pool->n;
+      if (member && !member->checked_out) {
+        return member;
+      }
+    } while (pool->next != start);
+    /* Every member is checked out: exhaustion, surfaced by the caller. */
+    return NULL;
   }
-  return (lunet_mysql_conn_t*)luaL_testudata(L, idx, LUNET_MYSQL_CONN_MT);
+  lunet_mysql_conn_t* conn = (lunet_mysql_conn_t*)luaL_testudata(L, idx, LUNET_MYSQL_CONN_MT);
+  if (conn && conn->is_view && conn->member) {
+    return conn->member;
+  }
+  return conn;
+}
+
+/* Exclusive checkout: take one member out of the round-robin rotation
+ * for as long as the caller holds the returned conn handle. The member is
+ * never closed by the conn handle (the pool owns it). */
+int lunet_db_checkout(lua_State* L) {
+  if (lunet_ensure_coroutine(L, "db.checkout")) {
+    return lua_error(L);
+  }
+  lunet_mysql_pool_t* pool = (lunet_mysql_pool_t*)luaL_testudata(L, 1, LUNET_MYSQL_POOL_MT);
+  if (!pool) {
+    lua_pushstring(L, "db.checkout requires a connection pool");
+    return lua_error(L);
+  }
+  if (pool->closed || !pool->members || pool->n < 1) {
+    lua_pushnil(L);
+    lua_pushstring(L, "connection is closed");
+    return 2;
+  }
+  /* Find a member that is not checked out. */
+  lunet_mysql_conn_t* member = NULL;
+  for (int i = 0; i < pool->n; i++) {
+    if (pool->members[i] && !pool->members[i]->checked_out) {
+      member = pool->members[i];
+      break;
+    }
+  }
+  if (!member) {
+    lua_pushnil(L);
+    lua_pushstring(L, "pool exhausted: all members are checked out");
+    return 2;
+  }
+  member->checked_out = 1;
+
+  /* Create a conn userdata that is a VIEW over this member. */
+  lunet_mysql_conn_t* view =
+      (lunet_mysql_conn_t*)lua_newuserdata(L, sizeof(lunet_mysql_conn_t));
+  memset(view, 0, sizeof(*view));
+  /* Views carry NO connection/mutex of their own: dispatch resolves them
+   * to their member. Copying the mutex by value is a landmine and copying
+   * the MYSQL* dangles after pool close. */
+  view->closed = 0;
+  view->stmts = NULL;
+  view->is_view = 1;
+  view->checked_out = 0;
+  view->member = member;
+  view->owner = pool;
+  view->pool_ref = 0;
+  luaL_getmetatable(L, LUNET_MYSQL_CONN_MT);
+  lua_setmetatable(L, -2);
+  /* Pin the pool userdata so a view can never outlive its pool: the
+   * pool's members (and its Lua userdata) stay alive as long as any
+   * view is alive. Released in release()/conn_gc()/db.close(). */
+  lua_pushvalue(L, 1);
+  lunet_valref_create_raw(L, view->pool_ref);
+
+  lua_pushnil(L);
+  return 2;
+}
+
+/* Liveness probe: one worker hop, mysql_ping under the member mutex. The
+ * driver never sets MYSQL_OPT_RECONNECT, so a dead session reports dead —
+ * mysql_ping does not silently resurrect it. */
+typedef struct {
+  uv_work_t req;
+  lua_State* waiter_L;
+  int co_ref;
+  lunet_mysql_conn_t* wrapper;
+  char err[256];
+} db_ping_ctx_t;
+
+static void db_ping_work_cb(uv_work_t* req) {
+  db_ping_ctx_t* ctx = (db_ping_ctx_t*)req->data;
+
+  uv_mutex_lock(&ctx->wrapper->mutex);
+  mysql_thread_init();
+  if (ctx->wrapper->closed || !ctx->wrapper->conn) {
+    snprintf(ctx->err, sizeof(ctx->err), "connection is closed");
+    mysql_thread_end();
+    uv_mutex_unlock(&ctx->wrapper->mutex);
+    return;
+  }
+  if (mysql_ping(ctx->wrapper->conn) != 0) {
+    snprintf(ctx->err, sizeof(ctx->err), "%s", mysql_error(ctx->wrapper->conn));
+  }
+  mysql_thread_end();
+  uv_mutex_unlock(&ctx->wrapper->mutex);
+}
+
+static void db_ping_after_cb(uv_work_t* req, int status) {
+  db_ping_ctx_t* ctx = (db_ping_ctx_t*)req->data;
+  lua_State* L = ctx->waiter_L;
+
+  lua_rawgeti(L, LUA_REGISTRYINDEX, ctx->co_ref);
+  lunet_coref_release(L, ctx->co_ref);
+  if (!lua_isthread(L, -1)) {
+    lua_pop(L, 1);
+    fprintf(stderr, "invalid coroutine in db.ping\n");
+    lunet_free_nonnull(ctx);
+    return;
+  }
+  lua_State* co = lua_tothread(L, -1);
+  lua_pop(L, 1);
+
+  if (ctx->err[0] != '\0') {
+    lua_pushboolean(co, 0);
+    lua_pushstring(co, ctx->err);
+  } else {
+    lua_pushboolean(co, 1);
+    lua_pushnil(co);
+  }
+  int rc = lunet_co_resume(co, 2);
+  if (rc != 0 && rc != LUA_YIELD) {
+    const char* err = lua_tostring(co, -1);
+    if (err) fprintf(stderr, "lua_resume error in db.ping: %s\n", err);
+    lua_pop(co, 1);
+  }
+  lunet_free_nonnull(ctx);
+}
+
+int lunet_db_ping(lua_State* L) {
+  if (lunet_ensure_coroutine(L, "db.ping")) {
+    return lua_error(L);
+  }
+  if (lua_gettop(L) < 1) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, "db.ping requires a connection or pool");
+    return 2;
+  }
+  lunet_mysql_conn_t* wrapper = pick_statement_target(L, 1);
+  if (!wrapper) {
+    lunet_mysql_pool_t* _pool = (lunet_mysql_pool_t*)luaL_testudata(L, 1, LUNET_MYSQL_POOL_MT);
+    if (_pool && _pool->members && _pool->n > 0) {
+      int _ex = 1;
+      for (int _i = 0; _i < _pool->n; _i++) {
+        if (_pool->members[_i] && !_pool->members[_i]->checked_out) { _ex = 0; break; }
+      }
+      if (_ex) {
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, "pool exhausted: all members are checked out");
+        return 2;
+      }
+    }
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, "db.ping requires a valid connection");
+    return 2;
+  }
+  if (wrapper->closed || !wrapper->conn) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, "connection is closed");
+    return 2;
+  }
+
+  db_ping_ctx_t* ctx = lunet_alloc(sizeof(db_ping_ctx_t));
+  if (!ctx) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, "out of memory");
+    return 2;
+  }
+  memset(ctx, 0, sizeof(*ctx));
+  ctx->waiter_L = L;
+  ctx->req.data = ctx;
+  ctx->wrapper = wrapper;
+
+  lunet_coref_create(L, ctx->co_ref);
+
+  int ret = uv_queue_work(uv_default_loop(), &ctx->req, db_ping_work_cb,
+                          db_ping_after_cb);
+  if (ret < 0) {
+    lunet_coref_release(L, ctx->co_ref);
+    lunet_free_nonnull(ctx);
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, uv_strerror(ret));
+    return 2;
+  }
+
+  return lua_yield(L, 0);
+}
+
+int lunet_db_release(lua_State* L) {
+  if (lunet_ensure_coroutine(L, "db.release")) {
+    return lua_error(L);
+  }
+  lunet_mysql_conn_t* wrapper = (lunet_mysql_conn_t*)luaL_testudata(L, 1, LUNET_MYSQL_CONN_MT);
+  if (!wrapper || !wrapper->is_view) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.release requires a checked-out connection");
+    return 2;
+  }
+  if (wrapper->closed) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.release: connection was not checked out");
+    return 2;
+  }
+  lunet_mysql_pool_t* owner = (lunet_mysql_pool_t*)wrapper->owner;
+  if (!owner || owner->closed) {
+    /* Pool is gone: releasing is a no-op. */
+    if (wrapper->pool_ref) {
+      lunet_valref_release(L, wrapper->pool_ref);
+      wrapper->pool_ref = 0;
+    }
+    wrapper->member = NULL;
+    wrapper->owner = NULL;
+    wrapper->closed = 1;
+    lua_pushnil(L);
+    return 1;
+  }
+  if (!wrapper->member || !wrapper->member->checked_out) {
+    lua_pushnil(L);
+    lua_pushstring(L, "db.release: connection was not checked out");
+    return 2;
+  }
+  wrapper->member->checked_out = 0;
+  if (wrapper->pool_ref) {
+    lunet_valref_release(L, wrapper->pool_ref);
+    wrapper->pool_ref = 0;
+  }
+  wrapper->member = NULL;
+  wrapper->owner = NULL;
+  wrapper->closed = 1;
+  lua_pushnil(L);
+  return 1;
 }
 
 typedef struct {
@@ -1019,6 +1319,18 @@ int lunet_db_query(lua_State* L) {
 
   lunet_mysql_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
+    lunet_mysql_pool_t* _pool = (lunet_mysql_pool_t*)luaL_testudata(L, 1, LUNET_MYSQL_POOL_MT);
+    if (_pool && _pool->members && _pool->n > 0) {
+      int _ex = 1;
+      for (int _i = 0; _i < _pool->n; _i++) {
+        if (_pool->members[_i] && !_pool->members[_i]->checked_out) { _ex = 0; break; }
+      }
+      if (_ex) {
+        lua_pushnil(L);
+        lua_pushstring(L, "pool exhausted: all members are checked out");
+        return 2;
+      }
+    }
     lua_pushnil(L);
     lua_pushstring(L, "db.query requires a valid connection");
     return 2;
@@ -1253,6 +1565,18 @@ int lunet_db_exec(lua_State* L) {
 
   lunet_mysql_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
+    lunet_mysql_pool_t* _pool = (lunet_mysql_pool_t*)luaL_testudata(L, 1, LUNET_MYSQL_POOL_MT);
+    if (_pool && _pool->members && _pool->n > 0) {
+      int _ex = 1;
+      for (int _i = 0; _i < _pool->n; _i++) {
+        if (_pool->members[_i] && !_pool->members[_i]->checked_out) { _ex = 0; break; }
+      }
+      if (_ex) {
+        lua_pushnil(L);
+        lua_pushstring(L, "pool exhausted: all members are checked out");
+        return 2;
+      }
+    }
     lua_pushnil(L);
     lua_pushstring(L, "db.exec requires a valid connection");
     return 2;
@@ -1333,6 +1657,18 @@ int lunet_db_query_params(lua_State* L) {
   
   lunet_mysql_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
+    lunet_mysql_pool_t* _pool = (lunet_mysql_pool_t*)luaL_testudata(L, 1, LUNET_MYSQL_POOL_MT);
+    if (_pool && _pool->members && _pool->n > 0) {
+      int _ex = 1;
+      for (int _i = 0; _i < _pool->n; _i++) {
+        if (_pool->members[_i] && !_pool->members[_i]->checked_out) { _ex = 0; break; }
+      }
+      if (_ex) {
+        lua_pushnil(L);
+        lua_pushstring(L, "pool exhausted: all members are checked out");
+        return 2;
+      }
+    }
     lua_pushnil(L);
     lua_pushstring(L, "db.query requires a valid connection");
     return 2;
@@ -1403,6 +1739,18 @@ int lunet_db_exec_params(lua_State* L) {
   
   lunet_mysql_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
+    lunet_mysql_pool_t* _pool = (lunet_mysql_pool_t*)luaL_testudata(L, 1, LUNET_MYSQL_POOL_MT);
+    if (_pool && _pool->members && _pool->n > 0) {
+      int _ex = 1;
+      for (int _i = 0; _i < _pool->n; _i++) {
+        if (_pool->members[_i] && !_pool->members[_i]->checked_out) { _ex = 0; break; }
+      }
+      if (_ex) {
+        lua_pushnil(L);
+        lua_pushstring(L, "pool exhausted: all members are checked out");
+        return 2;
+      }
+    }
     lua_pushnil(L);
     lua_pushstring(L, "db.exec requires a valid connection");
     return 2;
@@ -1784,6 +2132,18 @@ int lunet_db_prepare(lua_State* L) {
 
   lunet_mysql_conn_t* wrapper = pick_statement_target(L, 1);
   if (!wrapper) {
+    lunet_mysql_pool_t* _pool = (lunet_mysql_pool_t*)luaL_testudata(L, 1, LUNET_MYSQL_POOL_MT);
+    if (_pool && _pool->members && _pool->n > 0) {
+      int _ex = 1;
+      for (int _i = 0; _i < _pool->n; _i++) {
+        if (_pool->members[_i] && !_pool->members[_i]->checked_out) { _ex = 0; break; }
+      }
+      if (_ex) {
+        lua_pushnil(L);
+        lua_pushstring(L, "pool exhausted: all members are checked out");
+        return 2;
+      }
+    }
     lua_pushnil(L);
     lua_pushstring(L, "db.prepare requires a valid connection");
     return 2;

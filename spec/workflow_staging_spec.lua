@@ -25,10 +25,13 @@ describe("workflow staging paths", function()
 
       -- Scan command lines only: drop full-line comments, whose prose may
       -- legitimately mention paths that are descriptions, not staging ops.
+      -- Normalize Windows backslash paths to forward slashes so both forms
+      -- are checked — the Windows staging lines are how the stale-path rot
+      -- shipped twice, and this guard only matched forward-slash paths.
       local commands = {}
       for ln in body:gmatch("[^\r\n]+") do
         if not ln:match("^%s*#") then
-          table.insert(commands, ln)
+          table.insert(commands, (ln:gsub("\\", "/")))
         end
       end
       body = table.concat(commands, "\n")

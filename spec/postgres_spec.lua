@@ -1,7 +1,7 @@
 describe("postgres module #native", function()
   local ok, pg = pcall(require, "lunet.postgres")
   if not ok then
-    pending("lunet.postgres not built (xmake build lunet-postgres); if the build failed, check the libpq client library floor (libpq >= 17 required) — see ext/postgres/README.md", function() end)
+    pending("lunet.postgres not built (libpq >= 17 required; see ext/postgres/README.md)", function() end)
     return
   end
 

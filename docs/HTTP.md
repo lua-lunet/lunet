@@ -89,6 +89,16 @@ them: the by-design outcomes, one entry per manifest id whose verdict is not
 run whose outcomes drift (a probe version bump, an ext change) fails the
 suite unless the allowlist is updated with the run.
 
+The framing parser is also fuzzed: `spec/http_fuzz_spec.lua` drives the
+seeded, budgeted fuzzer in `ext/http/fuzz.lua` over `http.read_request`
+with a fixed iteration budget and fixed seeds, asserting the envelope
+contract — no crash, no hang, no allocation beyond `MAX_HEADER_BYTES +
+MAX_BODY_BYTES`, and rejection statuses confined to the framing subset
+(400/413/414/431/501/505). The spec runs in the normal busted gate, so
+a raised or over-budget result fails CI. Mutation families are truncate,
+insert, replace, duplicate_line and splice; interesting findings graduate
+into committed spec corpus fixtures.
+
 ## lunet.http - request framing and responses
 
 ```lua

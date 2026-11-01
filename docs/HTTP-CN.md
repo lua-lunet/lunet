@@ -73,6 +73,15 @@ verdict/status 记录），仅此而已。`probe_allowlist.lua` 与它们并列�
 （探针版本升级、ext 变更），除非随该次运行同步更新 allowlist，测试套件
 就会失败。
 
+帧解析器还经过模糊测试：`spec/http_fuzz_spec.lua` 以固定迭代预算与固定
+种子驱动 `ext/http/fuzz.lua` 中的确定性 fuzzer 对 `http.read_request`
+进行测试，断言封装契约——不崩溃、不挂起、不超出
+`MAX_HEADER_BYTES + MAX_BODY_BYTES` 的分配，且拒绝状态码仅限帧解析子集
+（400/413/414/431/501/505）。该规格测试在常规 busted 门禁中运行，
+因此一旦出现抛出或超预算的结果，CI 即失败。变异家族包括 truncate、
+insert、replace、duplicate_line 与 splice；有趣的发现会沉淀为提交的规格
+测试语料夹具。
+
 ## lunet.http - 请求解析与响应构建
 
 ```lua

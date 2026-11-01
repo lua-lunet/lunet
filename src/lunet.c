@@ -135,10 +135,14 @@ int lunet_db_run_in_transaction(lua_State* L);
  * query call and do not register it. */
 int lunet_db_query_ro(lua_State* L);
 #endif
-#if defined(LUNET_DB_POSTGRES)
+#if defined(LUNET_DB_POSTGRES) || defined(LUNET_DB_MYSQL)
 /* Exclusive member checkout for transaction stickiness. */
 int lunet_db_checkout(lua_State* L);
 int lunet_db_release(lua_State* L);
+#endif
+#if defined(LUNET_DB_MYSQL)
+/* Liveness probe (mysql_ping) on one member, on a worker hop. */
+int lunet_db_ping(lua_State* L);
 #endif
 
 static int lunet_open_db(lua_State *L) {
@@ -153,9 +157,12 @@ static int lunet_open_db(lua_State *L) {
                       {"query_ro", lunet_db_query_ro},
                       {"run_in_transaction", lunet_db_run_in_transaction},
 #endif
-#if defined(LUNET_DB_POSTGRES)
+#if defined(LUNET_DB_POSTGRES) || defined(LUNET_DB_MYSQL)
                       {"checkout", lunet_db_checkout},
                       {"release", lunet_db_release},
+#endif
+#if defined(LUNET_DB_MYSQL)
+                      {"ping", lunet_db_ping},
 #endif
                       {NULL, NULL}};
   luaL_newlib(L, funcs);

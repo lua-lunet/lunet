@@ -8,6 +8,10 @@ MySQL 驱动（libmysqlclient）。可以直接 `require("lunet.mysql")` 发布�
 占位符为 `?`。参数通过 `mysql_stmt_bind_param` 原生绑定，值永远不会被拼接进
 SQL。本项目有意不提供 `db.escape`。
 
+驱动在编译期强制客户端库下限：针对 mysqlclient >= 5.7 或 libmariadb >=
+3.0 构建，更旧的客户端会让构建以具名错误失败。该下限覆盖 `mysql_stmt_*`
+API、驱动使用的选项面，以及 `mysql_real_connect` 之后的非重连语义。
+
 | 函数 | 说明 |
 |---|---|
 | `open(config)` | `host`、`port`、`user`、`password`、`database`、`charset`，可选 `connect_timeout`、`pool_size`（默认 1） |
@@ -15,7 +19,10 @@ SQL。本项目有意不提供 `db.escape`。
 | `query(conn, sql, ...)` | 返回行表数组 |
 | `exec(conn, sql, ...)` | 返回 `{ affected_rows, last_insert_id }` |
 | `query_params` / `exec_params` | 与上述行为一致 |
-| `prepare(conn, sql)` | 可复用的预处理语句；`stmt:query` / `stmt:exec` / `stmt:close`；要求 `pool_size = 1`——见[预处理语句](#预处理语句prepared-statements) |
+| `checkout(pool)` | 从池中独占检出一个成员：返回绑定到单个服务器会话的连接句柄，离开轮转直到 release。事务粘性的机制。 |
+| `release(conn)` | 把已 checkout 的成员归还轮转。池关闭后幂等。 |
+| `ping(conn)` | 存活探测（`mysql_ping`，一次 worker 跳转）：已检出句柄探测该会话。返回 `ok, err`。无静默重连：驱动从不设置 `MYSQL_OPT_RECONNECT`。 |
+| `prepare(conn, sql)` | 可复用的预处理语句；`stmt:query` / `stmt:exec` / `stmt:close`；要求单连接（`pool_size = 1` 或已 checkout 的成员）——见[预处理语句](#预处理语句prepared-statements) |
 
 ### 打开参数（Open settings）
 
@@ -47,8 +54,48 @@ libmysqlclient 的行为就与其手册所述完全一致。
 一个成员，派发时轮转选取；`close` 关闭全部成员。MySQL 本就服务并发的客户端
 连接，因此更宽的池能并行化真实工作——在这里这是正经特性，不是逃生舱口。
 
-**`mysql_tx` 要求默认 `pool_size = 1`。** 事务属于*连接*；多成员池在构造上就
-违反了这一点——`BEGIN` 与 `COMMIT` 可能落在不同会话上，最终什么也没提交。
+**`mysql_tx` 要求单一会话。** 事务属于*连接*；多成员池在构造上就
+违反了这一点——`SET autocommit=0` … `COMMIT` 这对括号可能落在不同会话上，
+最终什么也没提交。要么以 `pool_size = 1`（默认值）打开，要么为整个事务
+`checkout` 一个成员（见下文）。
+
+## 独占 checkout（Exclusive checkout）
+
+`checkout(pool)` 返回绑定到单个服务器会话的连接句柄，该成员在检出期间
+离开池的轮转。在该句柄上的每次调用（`query`、`exec`、`query_params`、
+`exec_params`、`prepare`）都指向那个会话，因此即使池有多个成员，事务也
+保持在一条连接上。
+
+```lua
+local mysql = require("lunet.mysql")
+local tx = require("lunet.mysql_tx")
+
+local pool = mysql.open({ host = "...", pool_size = 4 })
+local conn = mysql.checkout(pool)          -- 一个专用会话
+local ok, err = tx.transaction(conn, function(t)
+    t.exec("DELETE FROM nodes WHERE path = ?", dst)
+    local r = t.exec("UPDATE nodes SET path=? WHERE path=? AND version=?",
+                     dst, src, version)
+    if r.affected_rows == 0 then return nil, "version conflict" end
+    return true
+end)
+mysql.release(conn)                        -- 归还轮转
+```
+
+规则：
+
+- **一个成员、一个所有者。** 被 checkout 的成员离开轮转；剩余成员继续
+  服务自动提交流量。
+- **耗尽是大声报错，不是等待。** 当每个成员都被检出时，下一次
+  `checkout` 返回 `(nil, err)`——驱动不排队也不挂起。背压是应用策略：
+  睡眠重试，或加大池。
+- **release 在池关闭后幂等。** 对池已关闭的句柄 `release` 返回 `nil`。
+  对活跃句柄的双重 release 会大声报错。
+- **被丢弃的 checkout 自行归还。** 若检出句柄未经显式 `release` 就被
+  垃圾回收，其成员在 GC 时回到轮转。该路径绝不关闭成员——池拥有其
+  成员，在池关闭时统一关闭。
+- **语句绑定在它预备的成员上。** 在已 checkout 的连接上 `prepare` 可行
+  （它指向那个会话）；在池句柄上 `prepare` 仍要求单成员。
 
 ## 事务
 

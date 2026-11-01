@@ -1,7 +1,7 @@
 describe("mysql module #native", function()
   local ok, mysql = pcall(require, "lunet.mysql")
   if not ok then
-    pending("lunet.mysql not built (mysqlclient >= 8.4 / libmariadb >= 3.4)", function() end)
+    pending("lunet.mysql not built (mysqlclient >= 8.0 / libmariadb >= 3.4)", function() end)
     return
   end
 

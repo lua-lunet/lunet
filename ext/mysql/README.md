@@ -10,13 +10,12 @@ Placeholders are `?`. Parameters are bound natively via
 deliberately no `db.escape`.
 
 The driver enforces its client-library floor at compile time: it builds
-against mysqlclient >= 8.4 (Oracle) or libmariadb >= 3.4 (MariaDB), and an
-older client fails the build with a named error. These are the supported LTS
-client libraries (MySQL 8.4 LTS, MariaDB 11.4 LTS); both remain backwards
-compatible with older servers, so raising the floor prunes legacy option
-surface (the removed `MYSQL_OPT_SSL_VERIFY_SERVER_CERT` /
+against mysqlclient >= 8.0 (Oracle) or libmariadb >= 3.4 (MariaDB), and an
+older client fails the build with a named error. These floors prune legacy
+option surface (the removed `MYSQL_OPT_SSL_VERIFY_SERVER_CERT` /
 `MYSQL_OPT_SSL_ENFORCE` plaintext fallback) without cutting off access to
-older servers. The floor covers the `mysql_stmt_*` API, the option surface
+older servers: both remain backwards compatible with older servers. The floor
+covers the `mysql_stmt_*` API, the option surface
 the driver uses, and the non-reconnecting semantics after
 `mysql_real_connect`.
 

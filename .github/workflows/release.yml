@@ -52,7 +52,7 @@ jobs:
     - name: Install xmake
       uses: xmake-io/github-action-setup-xmake@v1
       with:
-        xmake-version: "3.0.8"
+        xmake-version: "3.1.2"
 
     - name: Install Dependencies (Linux)
       if: runner.os == 'Linux'
@@ -321,7 +321,7 @@ jobs:
     - name: Install xmake
       uses: xmake-io/github-action-setup-xmake@v1
       with:
-        xmake-version: "3.0.8"
+        xmake-version: "3.1.2"
 
     - name: Setup vcpkg (Windows)
       uses: lukka/run-vcpkg@v11
@@ -471,7 +471,7 @@ jobs:
     - name: Setup xmake
       uses: xmake-io/github-action-setup-xmake@v1
       with:
-        xmake-version: "3.0.8"
+        xmake-version: "3.1.2"
 
     - name: Download unix release archives
       uses: actions/download-artifact@v4

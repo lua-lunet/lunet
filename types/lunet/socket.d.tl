@@ -1,6 +1,7 @@
 global type Handle = userdata
 
 global record socket
+    -- protocol: "tcp" or "unix"
     listen: function(protocol: string, host: string, port: integer): Handle, string
     accept: function(listener: Handle): Handle, string
     getpeername: function(client: Handle): string, string

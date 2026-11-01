@@ -134,7 +134,7 @@ local function mkerr(message, poisoned)
 end
 
 ---Run fn inside a transaction on one pinned connection.
----@param conn userdata Connection from lunet.mysql open()
+---@param conn userdata Connection from lunet.mysql open() or checkout(pool)
 ---@param fn function Receives a tx handle; return non-nil to COMMIT
 ---@return any|nil result fn's first result on COMMIT, nil after ROLLBACK
 ---@return any err fn's second result on COMMIT, or the error table

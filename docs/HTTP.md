@@ -91,13 +91,16 @@ suite unless the allowlist is updated with the run.
 
 The framing parser is also fuzzed: `spec/http_fuzz_spec.lua` drives the
 seeded, budgeted fuzzer in `ext/http/fuzz.lua` over `http.read_request`
-with a fixed iteration budget and fixed seeds, asserting the envelope
-contract — no crash, no hang, no allocation beyond `MAX_HEADER_BYTES +
-MAX_BODY_BYTES`, and rejection statuses confined to the framing subset
-(400/413/414/431/501/505). The spec runs in the normal busted gate, so
-a raised or over-budget result fails CI. Mutation families are truncate,
-insert, replace, duplicate_line and splice; interesting findings graduate
-into committed spec corpus fixtures.
+with a fixed iteration budget and fixed seeds, asserting that
+`read_request` raises no exception on the fuzz stream, that every
+rejection status stays within the framing subset (400/413/414/431/501/505),
+and that a given seed replays byte-identical counters. The spec runs in
+the normal busted gate, so a raised result or a status outside the subset
+fails CI. Mutation families are truncate, insert, replace, duplicate_line
+and splice; interesting findings graduate into committed spec corpus
+fixtures. Note: the fuzzer counts delivered bytes and invokes the parser
+without a per-case timeout, so memory and time bounds are not part of the
+verified envelope.
 
 ## lunet.http - request framing and responses
 

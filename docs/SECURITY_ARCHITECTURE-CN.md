@@ -77,7 +77,8 @@ install -d -o lunet -g lunet -m 0750 /run/lunet
 
 `xmake build-release` 为所有 C 目标编译时使用以下标志（构建日志中可见 `release hardening flags: ...`）：
 
-- Linux / macOS：`-fstack-protector-strong`、`_FORTIFY_SOURCE=2`，以及可执行目标上的 `-fPIE`/`-pie`（共享对象保持 PIC）。验证：`readelf -h <binary>`（类型 `ET_DYN`，PIE）与 `nm <binary> | grep stack_chk`。
+- Linux：`-fstack-protector-strong`、`_FORTIFY_SOURCE=2`，以及可执行目标上的 `-fPIE`/`-pie`（共享对象保持 PIC）。验证：`readelf -h <binary>`（类型 `ET_DYN`，PIE）与 `nm -D <binary> | grep stack_chk`（动态表；普通 `nm` 读取的是被剥离的常规符号表）。
+- macOS：相同标志；验证：`otool -hv <binary> | grep PIE` 与 `nm <binary> | grep stack_chk`。
 - Windows：`/GS`（栈 canary）。PIE/ASLR 由链接器默认的 `/DYNAMICBASE` 提供；`/GS` 是 lunet 显式设置的标志。
 - 所有平台：`src/` 与 `ext/` 下的 C 模块每个 C 目标均带有栈 canary。
 
@@ -90,10 +91,10 @@ nm /path/to/lunet-run | grep stack_chk
 
 # Linux
 readelf -h /path/to/lunet-run | grep 'Type:.*DYN'
-nm /path/to/lunet-run | grep stack_chk
+nm -D /path/to/lunet-run | grep stack_chk
 ```
 
-这些标志仅在发布模式（`is_mode("release")`）下应用；调试与 trace 构建默认不加固，以便诊断。文档仅陈述构建实际应用的标志——没有 aspirational 条目。
+这些标志仅在发布模式（`is_mode("release")`）下应用；非发布构建不包含这些显式标志。注意，发布构建即使启用 `--lunet_trace=y` / `--lunet_verbose_trace=y` 也保留这些标志，因为追踪与构建模式相互独立。文档仅陈述构建实际应用的标志——没有 aspirational 条目。
 
 ### 示例单元
 

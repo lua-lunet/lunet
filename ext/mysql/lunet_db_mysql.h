@@ -19,4 +19,11 @@ int lunet_db_exec_params(lua_State* L);   // exec with parameters
 // statement handle with query/exec/close methods.
 int lunet_db_prepare(lua_State* L);
 
+// Exclusive member checkout for transaction stickiness.
+int lunet_db_checkout(lua_State* L);
+int lunet_db_release(lua_State* L);
+
+// Liveness probe: mysql_ping on one member, on a worker hop.
+int lunet_db_ping(lua_State* L);
+
 #endif

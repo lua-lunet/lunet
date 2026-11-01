@@ -1,7 +1,7 @@
 describe("mysql module #native", function()
   local ok, mysql = pcall(require, "lunet.mysql")
   if not ok then
-    pending("lunet.mysql not built (xmake build lunet-mysql)", function() end)
+    pending("lunet.mysql not built (mysqlclient >= 8.0 / libmariadb >= 3.4)", function() end)
     return
   end
 
@@ -61,6 +61,93 @@ describe("mysql module #native", function()
       local resumed, err = open_error({ host = "127.0.0.1", connect_timeout = 0 })
       assert.is_false(resumed)
       assert.matches("connect_timeout", tostring(err))
+    end)
+  end)
+
+  describe("TLS passthrough validation", function()
+    -- Validation fires before any connection attempt, so these need no
+    -- server. Returns everything coroutine.resume produced: on a raised
+    -- validation error (resumed=false, err), on a connect failure
+    -- (resumed=true, nil, connect error).
+    local function open_result(params)
+      local co = coroutine.create(function()
+        return mysql.open(params)
+      end)
+      return coroutine.resume(co)
+    end
+
+    it("rejects a non-string ssl_ca", function()
+      local resumed, err = open_result({ host = "127.0.0.1", ssl_ca = true })
+      assert.is_false(resumed)
+      assert.matches("ssl_ca", tostring(err))
+    end)
+
+    it("rejects a wrong-typed tls_version", function()
+      local resumed, err = open_result({ host = "127.0.0.1", tls_version = 12 })
+      assert.is_false(resumed)
+      assert.matches("tls_version", tostring(err))
+    end)
+
+    it("rejects a non-whitelisted tls_version", function()
+      local resumed, err = open_result({ host = "127.0.0.1", tls_version = "TLSv1.1" })
+      assert.is_false(resumed)
+      assert.matches("tls_version", tostring(err))
+    end)
+
+    it("rejects tls_version with whitespace around the comma", function()
+      local resumed, err = open_result({ host = "127.0.0.1", tls_version = "TLSv1.2, TLSv1.3" })
+      assert.is_false(resumed)
+      assert.matches("tls_version", tostring(err))
+    end)
+
+    it("rejects an empty tls_version", function()
+      local resumed, err = open_result({ host = "127.0.0.1", tls_version = "" })
+      assert.is_false(resumed)
+      assert.matches("tls_version", tostring(err))
+    end)
+
+    it("rejects an invalid ssl_mode value", function()
+      local resumed, err = open_result({ host = "127.0.0.1", ssl_mode = "bogus" })
+      assert.is_false(resumed)
+      assert.matches("ssl_mode", tostring(err))
+    end)
+
+    it("rejects a wrong-typed ssl_mode", function()
+      local resumed, err = open_result({ host = "127.0.0.1", ssl_mode = 3 })
+      assert.is_false(resumed)
+      assert.matches("ssl_mode", tostring(err))
+    end)
+
+    it("rejects a wrong-typed ssl_verify_server_cert", function()
+      local resumed, err = open_result({ host = "127.0.0.1", ssl_verify_server_cert = "yes" })
+      assert.is_false(resumed)
+      assert.matches("ssl_verify_server_cert", tostring(err))
+    end)
+
+    it("family-gates ssl_verify_server_cert", function()
+      -- Oracle 8.0: loud open-time error naming the key. MariaDB: the key
+      -- passes validation and the (doomed, port 1) connect reports instead.
+      local resumed, err, connect_err = open_result({
+        host = "127.0.0.1", port = 1, connect_timeout = 1,
+        ssl_verify_server_cert = true })
+      if not resumed then
+        assert.matches("ssl_verify_server_cert", tostring(err))
+      else
+        assert.not_matches("ssl_verify_server_cert", tostring(connect_err or ""))
+      end
+    end)
+
+    it("family-gates ssl_mode", function()
+      -- MariaDB: loud open-time error naming the key. Oracle: the value
+      -- passes validation and the (doomed, port 1) connect reports instead.
+      local resumed, err, connect_err = open_result({
+        host = "127.0.0.1", port = 1, connect_timeout = 1,
+        ssl_mode = "require" })
+      if not resumed then
+        assert.matches("ssl_mode", tostring(err))
+      else
+        assert.not_matches("ssl_mode", tostring(connect_err or ""))
+      end
     end)
   end)
 

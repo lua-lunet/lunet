@@ -4,7 +4,15 @@ global record mysql
     -- or checkout a member for the transaction's lifetime.
     -- connect_timeout (integer seconds) is optional at runtime: unset
     -- leaves the libmysqlclient default untouched.
-    open: function(params: {host: string, port: integer, user: string, password: string, database: string, charset: string, connect_timeout: integer, pool_size: integer}): userdata, string
+    -- TLS passthrough (open-time only, mirroring the postgres sslmode
+    -- design): ssl_ca/ssl_capath/ssl_cert/ssl_key/ssl_cipher/ssl_crl/
+    -- ssl_crlpath/tls_version are strings, unset leaves the vendor default.
+    -- tls_version whitelists "TLSv1.2" and/or "TLSv1.3", comma-separated.
+    -- ssl_mode ("disabled"/"prefer"/"require"/"verify_ca"/"verify_identity")
+    -- is Oracle-client only; ssl_verify_server_cert (boolean) is
+    -- MariaDB-client only (3.4 verifies by default) — the other family
+    -- fails loudly on each. Validation errors raise before any connect.
+    open: function(params: {host: string, port: integer, user: string, password: string, database: string, charset: string, connect_timeout: integer, ssl_ca: string, ssl_capath: string, ssl_cert: string, ssl_key: string, ssl_cipher: string, ssl_crl: string, ssl_crlpath: string, tls_version: string, ssl_mode: string, ssl_verify_server_cert: boolean, pool_size: integer}): userdata, string
     close: function(conn: userdata): string
 
     -- Exclusive checkout: take one member out of the round-robin rotation

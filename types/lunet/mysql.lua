@@ -42,13 +42,11 @@ function mysql.checkout(pool) end
 ---@return string|nil error Error message if failed
 function mysql.release(conn) end
 
----Liveness probe: mysql_ping on one member, on a worker hop. Liveness is
----not availability: on a pool handle it probes one free member, and when
----every member is checked out it still probes one of them (the pool is
----alive, merely busy). On a checked-out member it probes that session.
----The driver never sets MYSQL_OPT_RECONNECT, so a dead session reports
----dead — no silent reconnect.
----@param conn lightuserdata The pool or checked-out member handle
+---Liveness probe: mysql_ping on one member, on a worker hop. Probes the
+---checked-out member's session. The driver never sets
+---MYSQL_OPT_RECONNECT, so a dead session reports dead — no silent
+---reconnect.
+---@param conn lightuserdata The checked-out member handle
 ---@return boolean ok True when the probed session is alive
 ---@return string|nil error Vendor error message when dead
 function mysql.ping(conn) end

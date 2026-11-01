@@ -24,7 +24,7 @@ option surface the driver uses, and the non-reconnecting semantics after
 | `query_params` / `exec_params` | same behaviour as the above |
 | `checkout(pool)` | check one member out of the pool exclusively: returns a connection handle bound to a single server session, removed from the round-robin rotation until released. The mechanism for transaction stickiness. |
 | `release(conn)` | return a checked-out member to the rotation. Idempotent after pool close. |
-| `ping(conn)` | liveness probe (`mysql_ping`, one worker hop): on a pool handle probes one free member, and when every member is checked out it still probes one of them (liveness is not availability — a busy pool is alive); on a checked-out member probes that session. Returns `ok, err`. No silent reconnect: the driver never sets `MYSQL_OPT_RECONNECT`. |
+| `ping(conn)` | liveness probe (`mysql_ping`, one worker hop): probes the checked-out member's session. Returns `ok, err`. No silent reconnect: the driver never sets `MYSQL_OPT_RECONNECT`. |
 | `prepare(conn, sql)` | reusable prepared statement; `stmt:query` / `stmt:exec` / `stmt:close`; requires a single member (`pool_size = 1` or a checked-out member) — see [Prepared statements](#prepared-statements) |
 
 ### Open settings

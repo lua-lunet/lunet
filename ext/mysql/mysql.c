@@ -844,42 +844,18 @@ int lunet_db_ping(lua_State* L) {
   }
   if (lua_gettop(L) < 1) {
     lua_pushboolean(L, 0);
-    lua_pushstring(L, "db.ping requires a connection or pool");
+    lua_pushstring(L, "db.ping requires a connection");
     return 2;
   }
-  /* Liveness is not availability: a pool ping must not route through the
-   * statement rotation, because members that are merely checked out are
-   * still alive. Resolve the target directly — prefer a free member, fall
-   * back to any member when all are checked out (the pool IS alive then).
-   * Only a pool with no usable member at all fails. */
-  lunet_mysql_conn_t* wrapper = NULL;
-  lunet_mysql_pool_t* pool = (lunet_mysql_pool_t*)luaL_testudata(L, 1, LUNET_MYSQL_POOL_MT);
-  if (pool) {
-    if (!pool->members || pool->n < 1) {
-      lua_pushboolean(L, 0);
-      lua_pushstring(L, "connection is closed");
-      return 2;
-    }
-    lunet_mysql_conn_t* fallback = NULL;
-    for (int i = 0; i < pool->n; i++) {
-      lunet_mysql_conn_t* member = pool->members[i];
-      if (!member) continue;
-      if (!member->checked_out) { wrapper = member; break; }
-      if (!fallback) fallback = member;
-    }
-    if (!wrapper) wrapper = fallback;
-    if (!wrapper) {
-      lua_pushboolean(L, 0);
-      lua_pushstring(L, "db.ping requires a valid connection");
-      return 2;
-    }
-  } else {
-    wrapper = pick_statement_target(L, 1);
-    if (!wrapper) {
-      lua_pushboolean(L, 0);
-      lua_pushstring(L, "db.ping requires a valid connection");
-      return 2;
-    }
+  lunet_mysql_conn_t* wrapper =
+      (lunet_mysql_conn_t*)luaL_testudata(L, 1, LUNET_MYSQL_CONN_MT);
+  if (wrapper && wrapper->is_view && wrapper->member) {
+    wrapper = wrapper->member;
+  }
+  if (!wrapper) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, "db.ping requires a valid connection");
+    return 2;
   }
   if (wrapper->closed || !wrapper->conn) {
     lua_pushboolean(L, 0);

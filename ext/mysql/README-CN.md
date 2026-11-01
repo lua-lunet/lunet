@@ -21,7 +21,7 @@ API、驱动使用的选项面，以及 `mysql_real_connect` 之后的非重连�
 | `query_params` / `exec_params` | 与上述行为一致 |
 | `checkout(pool)` | 从池中独占检出一个成员：返回绑定到单个服务器会话的连接句柄，离开轮转直到 release。事务粘性的机制。 |
 | `release(conn)` | 把已 checkout 的成员归还轮转。池关闭后幂等。 |
-| `ping(conn)` | 存活探测（`mysql_ping`，一次 worker 跳转）：池句柄探测一个空闲成员，当所有成员都被检出时仍会探测其中一个（存活不等于可用——忙的池也是活的）；已检出句柄探测该会话。返回 `ok, err`。无静默重连：驱动从不设置 `MYSQL_OPT_RECONNECT`。 |
+| `ping(conn)` | 存活探测（`mysql_ping`，一次 worker 跳转）：已检出句柄探测该会话。返回 `ok, err`。无静默重连：驱动从不设置 `MYSQL_OPT_RECONNECT`。 |
 | `prepare(conn, sql)` | 可复用的预处理语句；`stmt:query` / `stmt:exec` / `stmt:close`；要求单连接（`pool_size = 1` 或已 checkout 的成员）——见[预处理语句](#预处理语句prepared-statements) |
 
 ### 打开参数（Open settings）

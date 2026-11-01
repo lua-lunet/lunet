@@ -134,7 +134,10 @@ local function test_mysql()
         local rb = db.query(c2, "SELECT CONNECTION_ID() AS p")
         check(ra and rb and ra[1].p ~= rb[1].p, "two checkouts land on different sessions")
 
-        -- ping: liveness through a pool handle and a checked-out member
+        -- ping: liveness through a pool handle and a checked-out member.
+        -- Liveness is not availability: both members are checked out at
+        -- this point, yet the pool ping must still probe one and report
+        -- alive — a busy pool is not a dead pool.
         local pok, _ = db.ping(pool)
         check(pok == true, "ping through the pool reports alive")
         local pok2, _ = db.ping(c1)

@@ -13,8 +13,10 @@ global record mysql
     checkout: function(pool: userdata): userdata, string
     release: function(conn: userdata): string
 
-    -- Liveness probe: mysql_ping on one member, on a worker hop. No
-    -- MYSQL_OPT_RECONNECT, so a dead session reports dead.
+    -- Liveness probe: mysql_ping on one member, on a worker hop. Liveness
+    -- is not availability: a pool ping prefers a free member but still
+    -- probes one when all are checked out. No MYSQL_OPT_RECONNECT, so a
+    -- dead session reports dead.
     ping: function(conn: userdata): boolean, string
     query: function(conn: userdata, query: string): {any}, string
     exec: function(conn: userdata, query: string): {affected_rows: integer, last_insert_id: integer}, string

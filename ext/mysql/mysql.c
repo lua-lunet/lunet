@@ -847,23 +847,39 @@ int lunet_db_ping(lua_State* L) {
     lua_pushstring(L, "db.ping requires a connection or pool");
     return 2;
   }
-  lunet_mysql_conn_t* wrapper = pick_statement_target(L, 1);
-  if (!wrapper) {
-    lunet_mysql_pool_t* _pool = (lunet_mysql_pool_t*)luaL_testudata(L, 1, LUNET_MYSQL_POOL_MT);
-    if (_pool && _pool->members && _pool->n > 0) {
-      int _ex = 1;
-      for (int _i = 0; _i < _pool->n; _i++) {
-        if (_pool->members[_i] && !_pool->members[_i]->checked_out) { _ex = 0; break; }
-      }
-      if (_ex) {
-        lua_pushboolean(L, 0);
-        lua_pushstring(L, "pool exhausted: all members are checked out");
-        return 2;
-      }
+  /* Liveness is not availability: a pool ping must not route through the
+   * statement rotation, because members that are merely checked out are
+   * still alive. Resolve the target directly — prefer a free member, fall
+   * back to any member when all are checked out (the pool IS alive then).
+   * Only a pool with no usable member at all fails. */
+  lunet_mysql_conn_t* wrapper = NULL;
+  lunet_mysql_pool_t* pool = (lunet_mysql_pool_t*)luaL_testudata(L, 1, LUNET_MYSQL_POOL_MT);
+  if (pool) {
+    if (!pool->members || pool->n < 1) {
+      lua_pushboolean(L, 0);
+      lua_pushstring(L, "connection is closed");
+      return 2;
     }
-    lua_pushboolean(L, 0);
-    lua_pushstring(L, "db.ping requires a valid connection");
-    return 2;
+    lunet_mysql_conn_t* fallback = NULL;
+    for (int i = 0; i < pool->n; i++) {
+      lunet_mysql_conn_t* member = pool->members[i];
+      if (!member) continue;
+      if (!member->checked_out) { wrapper = member; break; }
+      if (!fallback) fallback = member;
+    }
+    if (!wrapper) wrapper = fallback;
+    if (!wrapper) {
+      lua_pushboolean(L, 0);
+      lua_pushstring(L, "db.ping requires a valid connection");
+      return 2;
+    }
+  } else {
+    wrapper = pick_statement_target(L, 1);
+    if (!wrapper) {
+      lua_pushboolean(L, 0);
+      lua_pushstring(L, "db.ping requires a valid connection");
+      return 2;
+    }
   }
   if (wrapper->closed || !wrapper->conn) {
     lua_pushboolean(L, 0);

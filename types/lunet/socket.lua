@@ -4,7 +4,7 @@
 local socket = {}
 
 ---Listen for incoming connections
----@param protocol string Protocol type, only "tcp" is supported
+---@param protocol string Protocol type: "tcp" or "unix"
 ---@param host string Host address to bind to (e.g., "127.0.0.1", "0.0.0.0")
 ---@param port integer Port number to listen on (1-65535)
 ---@return lightuserdata|nil listener The listener handle or nil on error

@@ -188,13 +188,18 @@ lunet.spawn(function()
         end
     end)
 
-    if not wait_until(function()
-        return write_in_progress or write_woke_done
-    end, 1000) then
-        fail("case4 parked-writer: writer did not enter in-progress state " ..
-            "before close (write_in_progress=" .. tostring(write_in_progress) ..
-            ", write_woke_done=" .. tostring(write_woke_done) .. ")")
-    end
+    -- Setup wait: the parked writer must reach the in-progress state before we
+    -- close the client. This used a 1000 ms budget polled at os.time() second
+    -- resolution, which is the coarse-polling false-fail the issue calls out;
+    -- use the same per-condition deadline + named message as the assertion
+    -- waits so a miss names its culprit instead of a bare timeout.
+    wait_for("case4 parked-writer: writer entered in-progress state before close",
+        function() return write_in_progress or write_woke_done end, 5000,
+        { expected = "write_in_progress or write_woke_done = true",
+          observed = function()
+              return "write_in_progress=" .. tostring(write_in_progress) ..
+                  ", write_woke_done=" .. tostring(write_woke_done)
+          end })
 
     socket.close(client)
     write_fast_fail = socket.write(client, "late write")

@@ -15,6 +15,11 @@ with an older client library fails at build time with a named error
 rather than silently producing an unusable module. Install libpq 17+ (see
 [RELEASE-LAYOUT.md](../docs/RELEASE-LAYOUT.md)).
 
+The floor is on the **libpq client library** at build/load time, not on the
+PostgreSQL server version: a libpq 17+ client talks to a pg16 server (for
+example Scaleway serverless Postgres) without issue — only the client
+library present when the module is built and loaded must be 17 or newer.
+
 | Function | Notes |
 |---|---|
 | `open(config)` | `host`, `port`, `user`, `password`, `database`, optional `connect_timeout`, `sslmode`, `pool_size` (default 1) |

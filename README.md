@@ -4,8 +4,6 @@ A high-performance coroutine-based networking library for LuaJIT, built on top o
 
 [中文文档](README-CN.md)
 
-[![EasyMem](https://img.shields.io/badge/EasyMem-easy__memory-27272d?style=flat&logo=github&logoColor=white)](https://github.com/EasyMem/easy_memory)
-
 > This project is based on [xialeistudio/lunet](https://github.com/xialeistudio/lunet) by [夏磊 (Xia Lei)](https://github.com/xialeistudio). See also his excellent write-up: [Lunet: Design and Implementation of a High-Performance Coroutine Network Library](https://www.ddhigh.com/en/2025/07/12/lunet-high-performance-coroutine-network-library/).
 
 Lunet's front-page use case is **tiny localhost MCP servers** - Model Context Protocol tools that sit next to an LLM client on loopback, idle in single-digit megabytes of RAM, and start instantly. Long-form motivation: **[The Talos, Ethos and 無為 of Lunet](docs/PHILOSOPHY.md)**.

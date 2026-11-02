@@ -183,6 +183,15 @@ jobs:
         xmake build lunet-postgres
         xmake build lunet-mysql
 
+    - name: Hardening verification (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: xmake verify-hardening
+
+    - name: Hardening verification (Unix)
+      if: runner.os != 'Windows'
+      run: xmake verify-hardening
+
     # Rust ext modules (lnt_shared, jsonic) — built on Unix only:
     # lnt_shared is POSIX-only by design (mmap/clock_gettime), and the
     # jsonic Lua loader has no .dll suffix handling yet.

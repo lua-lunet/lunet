@@ -237,6 +237,13 @@ readelf -h /path/to/lunet-run | grep 'Type:.*DYN'
 nm -D /path/to/lunet-run | grep stack_chk
 ```
 
+CI runs `xmake verify-hardening` on every platform leg after the build: it
+asserts PIE, the stack-protector reference, and the fortified `__*_chk`
+symbols on Linux; PIE and the stack-protector reference on macOS; and
+DYNAMICBASE plus the `/GS` security cookie on Windows - on `lunet-run` and
+every shipped shared module - failing the build if any assertion does not
+hold. The same task runs locally against a release build.
+
 The flags are applied only in release mode (`is_mode("release")`); non-release
 builds do not get these explicit flags. Note that a release build keeps them
 even with `--lunet_trace=y` / `--lunet_verbose_trace=y`, because tracing is

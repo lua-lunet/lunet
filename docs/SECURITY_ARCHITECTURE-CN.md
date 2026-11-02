@@ -134,6 +134,8 @@ readelf -h /path/to/lunet-run | grep 'Type:.*DYN'
 nm -D /path/to/lunet-run | grep stack_chk
 ```
 
+CI 在每个平台构建之后运行 `xmake verify-hardening`：在 Linux 上断言 PIE、栈保护引用与加固的 `__*_chk` 符号；在 macOS 上断言 PIE 与栈保护引用；在 Windows 上断言 DYNAMICBASE 与 `/GS` 安全 cookie - 对 `lunet-run` 与每个发布的共享模块 - 任一断言不成立即构建失败。同一任务也可在本地对发布构建运行。
+
 这些标志仅在发布模式（`is_mode("release")`）下应用；非发布构建不包含这些显式标志。注意，发布构建即使启用 `--lunet_trace=y` / `--lunet_verbose_trace=y` 也保留这些标志，因为追踪与构建模式相互独立。文档仅陈述构建实际应用的标志——没有 aspirational 条目。
 
 ### 示例单元

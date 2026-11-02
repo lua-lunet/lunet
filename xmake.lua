@@ -1154,6 +1154,17 @@ task("check-types")
     end)
 task_end()
 
+task("verify-hardening")
+    set_menu {
+        usage = "xmake verify-hardening",
+        description = "Prove the release hardening flags on the built binaries (PIE, stack protector, fortify /GS)"
+    }
+    on_run(function ()
+        import("core.base.option")
+        os.execv("xmake", {"lua", "bin/verify_hardening.lua"})
+    end)
+task_end()
+
 task("build-release")
     set_menu {
         usage = "xmake build-release",

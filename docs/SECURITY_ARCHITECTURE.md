@@ -82,11 +82,11 @@ One delta worth knowing when you pick an edge: full-request buffering is
 nginx's default (opt-out), but Traefik and Envoy stream request bodies by
 default - on those the buffering must be installed explicitly (a middleware
 or a filter), or the backend's own body cap becomes the live one. The
-worked, tested examples in
-[ext/http/edge/](../ext/http/edge/README.md) make this
-concrete: the same application behind nginx, OpenResty, Traefik, and
-Envoy, each proven by a conformance suite (happy paths, oversize body,
-oversize header section, drip-feed). Turning on request buffering -
+worked, tested examples live with the demo app they front -
+[realworld-lua's specs/edge](https://github.com/lua-lunet/realworld-lua/tree/main/specs/edge) -
+with tagged, hurl-validated configurations for nginx, OpenResty, Traefik,
+and Envoy, each running the complete API conformance suite plus the
+edge-behaviour checks against the same application. Turning on request buffering -
 wherever your edge exposes it - is what protects against pathological
 drip-fed traffic; a sidecar proxy can carry that role where the main
 edge does not.

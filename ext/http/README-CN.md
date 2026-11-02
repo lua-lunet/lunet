@@ -91,19 +91,23 @@ xmake f --lunet_http_request_line_max=8192 --lunet_http_header_max=32768 --lunet
 
 ## 已测试的边缘示例
 
-[ext/http/edge/](edge/README-CN.md) 将同一应用（realworld-lua 演示 v0.18.1）
-放到四种边缘之后 - nginx、OpenResty、Traefik、Envoy - 每种都构建自同一个
-Debian 基础镜像，并由一致性套件验证（正常路径、超大请求体、超大头部区块、
-滴灌）。这些示例所要呈现的关键差异：整请求缓冲是 nginx 的默认行为（可显式
-关闭）；Traefik 与 Envoy 默认流式转发，必须显式安装缓冲，否则 lunet 自己的
-1 MiB 413 就成了实际生效的上限。
+维护中、经 hurl 验证的边缘测试装置随其前置的演示应用一起维护：
+[lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua)
+的 `specs/edge/` 目录 - nginx、OpenResty、Traefik 与 Envoy 的已打标
+签、经测试的配置，每种都对同一应用运行完整的 API 一致性套件以及
+边缘行为检查（超大请求体、超大头部区块、滴灌）。当前打标签的发布
+与运行方法见该仓库的
+[specs/edge/README.md](https://github.com/lua-lunet/realworld-lua/blob/main/specs/edge/README.md)。
+该装置所要呈现的关键差异：整请求缓冲是 nginx 的默认行为（可显式
+关闭）；Traefik 与 Envoy 默认流式转发，必须显式安装缓冲，否则
+lunet 自己的 1 MiB 413 就成了实际生效的上限。
 
-| 边缘 | 缓冲 | 示例 |
+| 边缘 | 缓冲 | 配置 |
 |------|------|------|
-| nginx | 默认（可显式关闭） | [edge/Dockerfile.nginx](edge/Dockerfile.nginx) |
-| OpenResty | 默认（可显式关闭） | [edge/Dockerfile.openresty](edge/Dockerfile.openresty) |
-| Traefik | 需显式开启的中间件 | [edge/Dockerfile.traefik](edge/Dockerfile.traefik) |
-| Envoy | 需显式开启的过滤器 | [edge/Dockerfile.envoy](edge/Dockerfile.envoy) |
+| nginx | 默认（可显式关闭） | realworld-lua `specs/edge/` |
+| OpenResty | 默认（可显式关闭） | realworld-lua `specs/edge/` |
+| Traefik | 需显式开启的中间件 | realworld-lua `specs/edge/` |
+| Envoy | 需显式开启的过滤器 | realworld-lua `specs/edge/` |
 
 ## 路由：约 165 行
 

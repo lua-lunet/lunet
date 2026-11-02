@@ -78,6 +78,19 @@ will not pass through certain hostile sets of fragmented traffic at all;
 malformed framing dies at the edge's own parser. That protection is the
 point of this architecture.
 
+One delta worth knowing when you pick an edge: full-request buffering is
+nginx's default (opt-out), but Traefik and Envoy stream request bodies by
+default - on those the buffering must be installed explicitly (a middleware
+or a filter), or the backend's own body cap becomes the live one. The
+worked, tested examples in
+[ext/http/edge/](../ext/http/edge/README.md) make this
+concrete: the same application behind nginx, OpenResty, Traefik, and
+Envoy, each proven by a conformance suite (happy paths, oversize body,
+oversize header section, drip-feed). Turning on request buffering -
+wherever your edge exposes it - is what protects against pathological
+drip-fed traffic; a sidecar proxy can carry that role where the main
+edge does not.
+
 ## The nginx example
 
 nginx can forward HTTP/1.1 over a Unix domain socket:

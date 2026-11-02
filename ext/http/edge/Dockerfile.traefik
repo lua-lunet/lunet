@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+#
+# Edge example: Traefik v3. Traefik STREAMS request bodies by default and
+# has no body cap until the buffering middleware is attached - the
+# configuration here installs both explicitly (see conf/traefik.yml and
+# conf/traefik-dynamic.yml).
+#
+#   docker build -f ext/http/edge/Dockerfile.traefik -t lunet-edge-traefik ext/http/edge
+#
+FROM lunet-edge-base
+
+ARG TRAEFIK_VERSION=v3.2.1
+# The static binary ships for both amd64 and arm64; the base image is
+# native-arch, so TARGETARCH selects the download.
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    curl -fsSL -o /tmp/traefik.tgz \
+      "https://github.com/traefik/traefik/releases/download/${TRAEFIK_VERSION}/traefik_${TRAEFIK_VERSION}_linux_${arch}.tar.gz"; \
+    tar -xzf /tmp/traefik.tgz -C /usr/local/bin traefik; \
+    rm /tmp/traefik.tgz; \
+    chmod +x /usr/local/bin/traefik
+
+COPY conf/traefik.yml /etc/traefik/traefik.yml
+COPY conf/traefik-dynamic.yml /etc/traefik/dynamic.yml
+
+ENV EDGE_KIND=traefik

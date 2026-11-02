@@ -1,0 +1,36 @@
+# Traefik v3 static configuration for the edge example.
+# Illustration, not a recommendation: read the current Traefik documentation
+# for the release you deploy.
+#
+# The deltas that matter against nginx: Trae​fik streams request bodies by
+# default and has no body cap until the buffering middleware is attached
+# (see dynamic.yml) - the protection nginx gives by default is installed
+# here explicitly.
+
+log:
+  level: WARN
+
+entryPoints:
+  web:
+    address: ":80"
+    transport:
+      respondingTimeouts:
+        # Tightened from the defaults so a dribbling client is cut quickly
+        # (nginx client_header_timeout / client_body_timeout analogue).
+        readTimeout: 10s
+        # Idle keep-alive timeout.
+        idleTimeout: 10s
+    # Traefik's default header section limit is 1 MiB; set 32 KiB so the
+    # edge answers before lunet's MAX_HEADER_BYTES backstop.
+    http:
+      maxHeaderBytes: 32768
+
+# Dynamic configuration loaded from file (see dynamic.yml).
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+
+# The app itself is started by entrypoint-edge.sh; Traefik is the only
+# externally reachable process.
+api:
+  dashboard: false

@@ -1,0 +1,84 @@
+# Envoy edge example configuration.
+# Illustration, not a recommendation: read the current Envoy documentation
+# for the release you deploy.
+#
+# The deltas that matter against nginx: Envoy STREAMS request bodies by
+# default - the buffer filter below is what installs the full-request
+# buffering nginx gives by default. Without it, bodies of any size stream
+# straight through and lunet's own 1 MiB 413 becomes the live cap.
+
+admin:
+  access_log_path: /var/log/envoy-admin.log
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 9901
+
+static_resources:
+  listeners:
+    - name: web
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 80
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: edge
+                # Header section cap: nginx large_client_header_buffers 4 8k
+                # analogue (32 KiB). Envoy's default is 60 KiB; set 32 so the
+                # edge answers (431) before lunet's backstop.
+                max_request_headers_kb: 32
+                # Complete the headers within 10s (nginx
+                # client_header_timeout analogue; Envoy default: disabled).
+                request_timeout: 10s
+                # No read stall longer than 10s (nginx client_body_timeout
+                # analogue; Envoy default: 5 minutes).
+                stream_idle_timeout: 10s
+                http_filters:
+                  # THE opt-in: full-request buffering with a 413 past the
+                  # cap (nginx proxy_request_buffering on +
+                  # client_max_body_size 1m analogue).
+                  - name: envoy.filters.http.buffer
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.buffer.v3.Buffer
+                      max_request_bytes: 1048576
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                route_config:
+                  name: local
+                  virtual_hosts:
+                    - name: app
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: lunet_app
+                            timeout: 0s
+
+  clusters:
+    - name: lunet_app
+      connect_timeout: 1s
+      type: STATIC
+      # HTTP/1.1 with keep-alive to the app (nginx proxy_http_version 1.1
+      # + Connection "" analogue).
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http_protocol_options: {}
+      load_assignment:
+        cluster_name: lunet_app
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      # Loopback TCP inside the container namespace; the edge
+                      # is the only externally reachable process.
+                      address: 127.0.0.1
+                      port_value: 8081

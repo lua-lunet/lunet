@@ -94,6 +94,24 @@ xmake f --lunet_http_request_line_max=8192 --lunet_http_header_max=32768 --lunet
 
 Unset options keep the file's defaults.
 
+## Worked edge examples, tested
+
+[ext/http/edge/](edge/README.md) carries the same application (the
+realworld-lua demo at v0.18.1) behind four edges - nginx, OpenResty,
+Traefik, Envoy - each built from one shared Debian base image and proven
+by a conformance suite (happy paths, oversize body, oversize header
+section, drip-feed). The key delta the examples make concrete: full-request
+buffering is nginx's default (opt-out); Traefik and Envoy stream by
+default and the buffering must be installed explicitly, or lunet's own
+1 MiB 413 becomes the live cap.
+
+| Edge | Buffering | Example |
+|------|-----------|---------|
+| nginx | default (opt-out) | [edge/Dockerfile.nginx](edge/Dockerfile.nginx) |
+| OpenResty | default (opt-out) | [edge/Dockerfile.openresty](edge/Dockerfile.openresty) |
+| Traefik | opt-in middleware | [edge/Dockerfile.traefik](edge/Dockerfile.traefik) |
+| Envoy | opt-in filter | [edge/Dockerfile.envoy](edge/Dockerfile.envoy) |
+
 ## Routing in ~165 lines
 
 `ext/http/router.lua` is sub-200 lines: method+path dispatch with `:params`

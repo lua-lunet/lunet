@@ -43,8 +43,14 @@ close）由调用方负责；JSON 辅助函数仅在被调用时才惰性地依�
   每个请求调用一次 `next_request()`：一个请求未消费的字节就是下一个请求的
   输入。单次 `http.read_request` 保持旧的高严格契约：越过声明请求体的字节
   得到硬性 400
-- `MAX_HEADER_BYTES`（16 KiB）、`MAX_BODY_BYTES`（1 MiB）与
-  `MAX_REQUEST_LINE_BYTES`（8 KiB）保护解析器
+- `MAX_HEADER_BYTES`（32 KiB）、`MAX_BODY_BYTES`（1 MiB）与
+  `MAX_REQUEST_LINE_BYTES`（8 KiB）保护解析器。默认值即 nginx 的默认值：
+  选 nginx 作为基线，并非强制。若前置其他边缘（Envoy、Traefik、HAProxy、
+  Caddy、云负载均衡器或 WAF），请查看你所选边缘服务的设置，并将 lunet 的
+  上限对齐到它，让边缘始终先应答，lunet 永远不是链上最严的一环。若请求头
+  中携带很大的安全令牌（SPNEGO 单字段约 12K，JWT 10-20K，加上边缘自身注入
+  的头），运维可能需要上调请求头上限。覆盖点位于 `ext/http/http_caps.lua`，
+  详见 `ext/http/README.md`
 - 拒绝时携带 RFC 9112 状态码：语法与 Host 违规答 400，非 1.x 大版本答 505，
   不支持的传输编码答 501，超长请求行答 414，超大请求头答 431，超大请求体答
   413，仅方法不对时路由器答 405 并带 Allow 头

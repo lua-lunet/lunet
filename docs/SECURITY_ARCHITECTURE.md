@@ -14,7 +14,9 @@ never touches the hostile network directly.
 flowchart TB
     hostile["Hostile internet"]
     edge["INTERNET-FACING EDGE (your choice)\l
-    Responsibilities:\l
+    nginx · Envoy · OpenResty · Apache httpd · HAProxy · Caddy · Traefik\l
+    AWS ALB/NLB · GCP Load Balancer · Azure App Gateway\l
+    Cloudflare · Fastly · Kong · Kubernetes Ingress\l
     TLS termination (HTTPS, HTTP/2, HTTP/3/QUIC)\l
     Protocol validation and attack mitigation\l
     Rate limiting, WAF, DDoS protection\l
@@ -35,6 +37,80 @@ Software usable in each role:
 | Internet-facing edge | nginx · Envoy · OpenResty · Apache httpd · HAProxy · Caddy · Traefik · Kong |
 | Cloud load balancing / gateway | AWS ALB/NLB · GCP Load Balancer · Azure App Gateway |
 | Managed edge / WAF | Cloudflare · Fastly · Kubernetes Ingress |
+
+## The edge, discussed
+
+> **In the examples we name nginx. OpenResty, Envoy, and many other
+> excellent products exist; we are simply naming a common one for
+> illustration purposes.**
+
+The idea behind the proxy is that it is protocol-aware: it terminates TLS,
+parses the protocol it speaks, checks the request, and forwards a complete,
+well-formed payload. A good edge service can terminate TLS and also adapt
+protocols above HTTP/1.1 - HTTP/2, HTTP/3 - so traffic over the internet
+may be negotiated to the best the client supports, then handed to lunet as
+plain HTTP/1.1 over a local socket. We are deliberately agnostic about
+which product does this: the requirements are the job, not the brand.
+
+The edge also owns the client-facing connections: it manages the
+termination of encryption, and it can hold connection keep-alives open
+over the internet - serving many requests over one connection at the
+client's pace - while lunet sees only the local socket. The connection
+budget that makes that possible (file-descriptor limits, worker
+connection counts, keep-alive timeouts) is the edge's side of the
+contract; the worked settings live in
+[ext/http/README.md](../ext/http/README.md).
+
+Products and defaults change. **Always read the latest documentation** of
+whichever edge you deploy to understand what it currently does.
+
+The reason this matters is fragmentation. nginx buffers a client request
+before forwarding it. Per its documentation, with `proxy_request_buffering`
+on (the default), "the entire request body is read from the client before
+sending the request to a proxied server"; the request line and header
+fields are parsed at the edge (a request line past one buffer answers 414,
+an oversized field answers 400), and a client that does not transmit the
+entire header within `client_header_timeout` is cut off with 408. An
+attacker sending single bytes - dribbling a request one fragment at a time
+to hold connections open and stress the backend - is absorbed by the edge:
+its timeouts end the connection, and lunet never sees the drip. The edge
+will not pass through certain hostile sets of fragmented traffic at all;
+malformed framing dies at the edge's own parser. That protection is the
+point of this architecture.
+
+## The nginx example
+
+nginx can forward HTTP/1.1 over a Unix domain socket:
+
+```nginx
+location / {
+    proxy_pass http://unix:/run/lunet/lunet.sock;
+    proxy_http_version 1.1;   # the default since 1.29.7 - stated to be version-proof
+    proxy_set_header Connection "";
+}
+```
+
+The socket's filesystem permissions are the access control: the socket is
+owned by a dedicated lunet account (mode `0660`) and the nginx workers
+connect as a member of that group - the deployment runbook below carries
+the exact setup. Locked down this way, nginx is the only process bound to
+the network, and lunet does not bind a network interface at all: the Unix
+domain socket is the only thing lunet listens to HTTP/1.1 over.
+
+To be explicit, and repeated on purpose: **this is not a recommendation
+that nginx is the best edge proxy.** It is one worked example of an edge
+that lets lunet stay off the network entirely, fronted by software for
+which you can get mainstream software updates and security fixes. The full
+annotated settings block - caps aligned to lunet's, the dribble timeouts,
+request buffering stated on purpose - lives in
+[ext/http/README.md](../ext/http/README.md).
+
+> In the opinion of the author, running a very common edge software product
+> that ships with major Linux distros and gets many years of security
+> updates is far better than installing a custom product that might have
+> some more features where you are not going to get automated software
+> updates; and for that reason your author continues to use a conservative
+> choice of edge server. YMMV.
 
 ## Where validation lives in this architecture
 

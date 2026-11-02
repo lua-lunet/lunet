@@ -18,7 +18,16 @@ which `spec/http_probe_spec.lua` asserts.
 
 ## Suggested deployment
 
-Run behind nginx and raise the file-descriptor limit before exec:
+> **nginx here is for illustration.** We are simply naming a common one;
+> OpenResty, Envoy, Caddy, Traefik, HAProxy, and many other excellent
+> products exist. This is not a recommendation that nginx is the best edge
+> proxy - it is one worked example of an edge that lets lunet stay off the
+> network entirely. See
+> [docs/SECURITY_ARCHITECTURE.md](../../docs/SECURITY_ARCHITECTURE.md) for
+> the design discussion, and always read the latest documentation of
+> whichever edge you deploy.
+
+Run behind the edge and raise the file-descriptor limit before exec:
 
 `start.sh`:
 ```sh
@@ -29,12 +38,61 @@ exec ./.lunet/lunet-run server.lua
 
 nginx (excerpt):
 ```nginx
+# events {} context - fan-out:
 worker_connections 65536;
+
+# http {} / server {} context - caps and timeouts:
 keepalive_timeout 65;
-keepalive_requests 1000;
-proxy_http_version 1.1;
-proxy_set_header Connection "";
+keepalive_requests 1000;            # nginx default since 1.19.10 - stated to pin it
+large_client_header_buffers 4 8k;   # nginx default, stated explicitly: 32 KiB header
+                                    # section = MAX_HEADER_BYTES default
+client_max_body_size 1m;            # nginx default, stated explicitly: = MAX_BODY_BYTES
+                                    # default; oversize answers 413 here
+client_header_timeout 10s;          # an incomplete header answers 408 here (default 60s)
+client_body_timeout 10s;            # a stalled body answers 408 here (default 60s)
+ignore_invalid_headers off;         # malformed header names answer 400, not a silent drop
+merge_slashes off;                  # //path is rejected, not normalized
+
+# server {} -> location - the proxy to lunet over the Unix socket:
+location / {
+    proxy_pass http://unix:/run/lunet/lunet.sock;
+    proxy_http_version 1.1;         # default 1.1 since 1.29.7; 1.0 before - stated to be version-proof
+    proxy_request_buffering on;     # the default, stated on purpose: the entire request body is
+                                    # read from the client before anything reaches lunet
+    proxy_set_header Connection ""; # upstream keep-alive
+}
 ```
+
+## Caps and edge alignment
+
+The parser caps ship as nginx's defaults, in `ext/http/http_caps.lua`:
+
+| Cap | Default | nginx directive |
+|-----|---------|-----------------|
+| `MAX_REQUEST_LINE_BYTES` | 8 KiB | one `large_client_header_buffers` buffer |
+| `MAX_HEADER_BYTES` | 32 KiB | `large_client_header_buffers 4 8k` |
+| `MAX_BODY_BYTES` | 1 MiB | `client_max_body_size 1m` |
+
+nginx was chosen as the baseline, not as a mandate. If you front lunet
+with a different edge - Envoy, Traefik, HAProxy, Caddy, a cloud load
+balancer or a WAF - check your chosen edge service's settings and align
+lunet's caps to them: the edge must always answer first, so lunet is
+never the strictest link in the chain and never the visible 431/413 for
+a request the edge accepted.
+
+Operators may need to raise the header cap for very large security
+tokens in headers: a SPNEGO auth header can reach ~12K for a single
+field, JWTs run 10-20K, and the edge injects its own headers
+(`X-Forwarded-For` and friends) on top of whatever the client sent.
+
+To override, edit `ext/http/http_caps.lua` (pure Lua, ships beside
+`http.lua`, no rebuild needed) or set the build options:
+
+```sh
+xmake f --lunet_http_request_line_max=8192 --lunet_http_header_max=32768 --lunet_http_body_max=1048576
+```
+
+Unset options keep the file's defaults.
 
 ## Routing in ~165 lines
 

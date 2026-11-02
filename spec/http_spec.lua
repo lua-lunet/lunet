@@ -1083,4 +1083,53 @@ describe("http extension modules", function()
       assert.are.truthy(good.response_body():find('"value":1', 1, true))
     end)
   end)
+
+  describe("build-time cap overrides", function()
+    local http_source = spec_dir .. "/../ext/http/http.lua"
+
+    it("adopts values from a lunet.http_caps override module", function()
+      package.preload["lunet.http_caps"] = function()
+        return { request_line_max = 4096, header_max = 65536, body_max = 2048 }
+      end
+      -- A staged build-tree lunet/http_caps.lua may already be cached from
+      -- the file-scope require above; package.loaded beats package.preload,
+      -- so drop the cache or the override is shadowed.
+      package.loaded["lunet.http_caps"] = nil
+      package.loaded["lunet.http"] = nil
+      local overridden = require("lunet.http")
+      assert.are.equal(4096, overridden.MAX_REQUEST_LINE_BYTES)
+      assert.are.equal(65536, overridden.MAX_HEADER_BYTES)
+      assert.are.equal(2048, overridden.MAX_BODY_BYTES)
+      package.preload["lunet.http_caps"] = nil
+      package.loaded["lunet.http_caps"] = nil
+      package.loaded["lunet.http"] = nil
+    end)
+
+    it("falls back to the inline defaults when no caps module resolves", function()
+      package.loaded["lunet.http_caps"] = nil
+      local saved_path = package.path
+      package.path = ""
+      local loaded, fresh = pcall(assert(loadfile(http_source)))
+      package.path = saved_path
+      assert.is_true(loaded)
+      assert.are.equal(8 * 1024, fresh.MAX_REQUEST_LINE_BYTES)
+      assert.are.equal(32 * 1024, fresh.MAX_HEADER_BYTES)
+      assert.are.equal(1024 * 1024, fresh.MAX_BODY_BYTES)
+    end)
+
+    it("ignores non-positive and non-numeric override values", function()
+      package.preload["lunet.http_caps"] = function()
+        return { request_line_max = -1, header_max = "huge", body_max = 0 }
+      end
+      package.loaded["lunet.http_caps"] = nil
+      package.loaded["lunet.http"] = nil
+      local overridden = require("lunet.http")
+      assert.are.equal(8 * 1024, overridden.MAX_REQUEST_LINE_BYTES)
+      assert.are.equal(32 * 1024, overridden.MAX_HEADER_BYTES)
+      assert.are.equal(1024 * 1024, overridden.MAX_BODY_BYTES)
+      package.preload["lunet.http_caps"] = nil
+      package.loaded["lunet.http_caps"] = nil
+      package.loaded["lunet.http"] = nil
+    end)
+  end)
 end)

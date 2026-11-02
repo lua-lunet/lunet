@@ -1,6 +1,6 @@
 return {
   modules = {
-    ["http.lua"] = "0963f74082bb87bf8359efe0f802004e0723a985fb10154742d522c70466852d",
+    ["http.lua"] = "4f2f24e5d3c42e7cf41fcb082642149a9cd164bb6962cbbde665c6d94125c25f",
     ["http_context.lua"] = "a71b45e8f6cf852a24c9491d1f3cadab82a943cca02478df4680e1eaaa07d195",
     ["router.lua"] = "d676eae76e6bc4b4a46c29da35c5b144e6fd8700cb113f131d41f8d8a213f332",
   },

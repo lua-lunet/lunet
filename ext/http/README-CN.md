@@ -18,7 +18,14 @@ docker run --rm -v "$(pwd)/ext/http/spec:/out" lunet-http-probe
 
 ## 推荐部署方式
 
-在 nginx 后面运行，并在 exec 之前提高文件描述符上限：
+> **这里的 nginx 仅为说明之用。** 我们只是举一个常见的产品；OpenResty、
+> Envoy、Caddy、Traefik、HAProxy 以及许多其他优秀产品同样存在。这不是在
+> 推荐 nginx 是最好的边缘代理 - 它只是一个可落地的示例：一个让 lunet 完全
+> 远离网络的边缘。设计讨论见
+> [docs/SECURITY_ARCHITECTURE-CN.md](../../docs/SECURITY_ARCHITECTURE-CN.md)，
+> 并请始终阅读你所部署边缘的最新文档。
+
+在边缘代理后面运行，并在 exec 之前提高文件描述符上限：
 
 `start.sh`：
 ```sh
@@ -29,12 +36,58 @@ exec ./.lunet/lunet-run server.lua
 
 nginx（摘录）：
 ```nginx
+# events {} 上下文 - 扇出：
 worker_connections 65536;
+
+# http {} / server {} 上下文 - 上限与超时：
 keepalive_timeout 65;
-keepalive_requests 1000;
-proxy_http_version 1.1;
-proxy_set_header Connection "";
+keepalive_requests 1000;            # nginx 默认（自 1.19.10 起）- 写明以固化
+large_client_header_buffers 4 8k;   # nginx 默认值，有意写明：32 KiB 头部总量
+                                    # = MAX_HEADER_BYTES 默认值
+client_max_body_size 1m;            # nginx 默认值，有意写明：= MAX_BODY_BYTES
+                                    # 默认值；超限在边缘答 413
+client_header_timeout 10s;          # 未传完的请求头在此答 408（默认 60s）
+client_body_timeout 10s;            # 停滞的请求体在此答 408（默认 60s）
+ignore_invalid_headers off;         # 畸形头名答 400，而非静默丢弃
+merge_slashes off;                  # //path 被拒绝，而非归一化
+
+# server {} -> location - 经 Unix 套接字代理到 lunet：
+location / {
+    proxy_pass http://unix:/run/lunet/lunet.sock;
+    proxy_http_version 1.1;         # 自 1.29.7 起默认 1.1；此前为 1.0 - 写明以免版本歧义
+    proxy_request_buffering on;     # 默认值，有意写明：在到达 lunet 之前，先从客户端
+                                    # 读入完整的请求体
+    proxy_set_header Connection ""; # 上游 keep-alive
+}
 ```
+
+## 上限与边缘对齐
+
+解析器上限默认取 nginx 的默认值，位于 `ext/http/http_caps.lua`：
+
+| 上限 | 默认值 | nginx 指令 |
+|------|--------|------------|
+| `MAX_REQUEST_LINE_BYTES` | 8 KiB | 单个 `large_client_header_buffers` 缓冲区 |
+| `MAX_HEADER_BYTES` | 32 KiB | `large_client_header_buffers 4 8k` |
+| `MAX_BODY_BYTES` | 1 MiB | `client_max_body_size 1m` |
+
+选 nginx 作为基线，并非强制。若前置其他边缘（Envoy、Traefik、HAProxy、
+Caddy、云负载均衡器或 WAF），请查看你所选边缘服务的设置，并将 lunet 的
+上限对齐到它：边缘必须始终先应答，lunet 永远不是链上最严的一环，也不会
+对边缘已接受的请求答出可见的 431/413。
+
+若请求头中携带很大的安全令牌，运维可能需要上调请求头上限：SPNEGO 认证头
+单字段可达约 12K，JWT 为 10-20K，边缘还会在客户端请求头之上注入自己的头
+（`X-Forwarded-For` 等）。
+
+覆盖方式：直接编辑 `ext/http/http_caps.lua`（纯 Lua，与 `http.lua` 一同
+发布，无需重新构建），或在构建时设置选项：
+
+```sh
+xmake f --lunet_http_request_line_max=8192 --lunet_http_header_max=32768 --lunet_http_body_max=1048576
+```
+
+未设置的选项保持文件中的默认值。
 
 ## 路由：约 165 行
 

@@ -1,0 +1,46 @@
+name: Fuzz nightly
+
+# The budgeted gate (spec/http_fuzz_spec.lua, fixed seeds, budget 400)
+# runs on every push. This nightly leg explores: an unseeded (wall-clock)
+# seed with a large budget, run through the ASan + easy-memory
+# instrumented runtime so oversize allocation and RSS misbehaviour count
+# as findings alongside the parser contract. The printed seed replays any
+# failure deterministically.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: ">=3.1.2"
+
+      - name: Install dependencies
+        run: bash contributing/deps/debian.sh --ci
+
+      - name: Configure (ASan + easy-memory instrumented)
+        run: xmake f -c -m debug --asan=y --easy_memory=y -y
+
+      - name: Build
+        run: xmake build lunet-bin
+
+      - name: Fuzz (unseeded, large budget)
+        run: |
+          LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
+          SEED=$(( $(date +%s) % 4294967295 + 1 ))
+          echo "Nightly fuzz seed: $SEED (replay with LUNET_FUZZ_SEED=$SEED)"
+          LUNET_FUZZ_SEED=$SEED LUNET_FUZZ_BUDGET=50000 \
+            ASAN_OPTIONS=detect_leaks=0 \
+            "$LUNET_BIN" bin/fuzz-nightly.lua

@@ -207,7 +207,7 @@ jobs:
         # Pure-Lua HTTP extension modules: lunet.http (framing + responses
         # + opt-in CORS), lunet.http_context (per-request context) and
         # lunet.http_router (routes + middleware).
-        cp ext/http/http.lua ext/http/http_context.lua "$DIST_DIR/lunet/"
+        cp ext/http/http.lua ext/http/http_context.lua ext/http/http_caps.lua "$DIST_DIR/lunet/"
         cp ext/http/router.lua "$DIST_DIR/lunet/http_router.lua"
         # lunet.security: pure-Lua crypto + JWT HS256 over lunet.sodium
         # and lunet.jsonic (no binary of its own).
@@ -261,7 +261,7 @@ jobs:
         # Pure-Lua HTTP extension modules: lunet.http (framing + responses
         # + opt-in CORS), lunet.http_context (per-request context) and
         # lunet.http_router (routes + middleware).
-        cp ext/http/http.lua ext/http/http_context.lua "$DIST_DIR/lunet/"
+        cp ext/http/http.lua ext/http/http_context.lua ext/http/http_caps.lua "$DIST_DIR/lunet/"
         cp ext/http/router.lua "$DIST_DIR/lunet/http_router.lua"
         # lunet.security: pure-Lua crypto + JWT HS256 over lunet.sodium
         # and lunet.jsonic (no binary of its own).

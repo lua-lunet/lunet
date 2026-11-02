@@ -38,8 +38,14 @@ Framing subset (deliberately small and explicit):
     input. The one-shot read_request keeps the older strict contract
     (bytes past the declared body are a 400)
 
-Limits guard the parser: MAX_HEADER_BYTES (16 KiB) and MAX_BODY_BYTES
-(1 MiB). Oversize headers fail with 431, oversize bodies with 413.
+Limits guard the parser: MAX_HEADER_BYTES (32 KiB) and MAX_BODY_BYTES
+(1 MiB). Oversize headers fail with 431, oversize bodies with 413. The
+defaults are nginx's defaults: nginx was chosen as the baseline, not as
+a mandate. Front lunet with a different edge (Envoy, Traefik, HAProxy,
+Caddy, a cloud load balancer or WAF) and check your chosen edge
+service's settings, aligning these caps to them so the edge always
+answers first. A deployment overrides the caps via lunet/http_caps.lua
+(shipped beside this file) or the xmake lunet_http_* build options.
 
 CORS is opt-in and stateless (default off, no magic): pass a cors config
 table ({ origin, methods, headers, max_age, credentials }) as the last
@@ -84,9 +90,32 @@ local http = {}
 -- persistent=false to the response builders for a "Connection: close"
 -- response. Serve the requests buffered on the wire sequentially through
 -- a http.new_connection wrapper.
-http.MAX_HEADER_BYTES = 16 * 1024
-http.MAX_BODY_BYTES = 1024 * 1024
+-- Parser caps. The inline values are nginx's defaults (nginx is the
+-- baseline, not a mandate: front a different edge and align these to its
+-- settings, so the edge always answers first and lunet is never the
+-- strictest link). A deployment overrides them via lunet/http_caps.lua
+-- (shipped beside this file, editable without a rebuild) or the xmake
+-- lunet_http_* build options; where that module is absent (dev-tree
+-- consumers, stripped installs) these inline defaults apply. Values from
+-- the override must be positive numbers; anything else is ignored and
+-- the default stands.
 http.MAX_REQUEST_LINE_BYTES = 8 * 1024
+http.MAX_HEADER_BYTES = 32 * 1024
+http.MAX_BODY_BYTES = 1024 * 1024
+do
+    local ok, caps = pcall(require, "lunet.http_caps")
+    if ok and type(caps) == "table" then
+        if type(caps.request_line_max) == "number" and caps.request_line_max > 0 then
+            http.MAX_REQUEST_LINE_BYTES = caps.request_line_max
+        end
+        if type(caps.header_max) == "number" and caps.header_max > 0 then
+            http.MAX_HEADER_BYTES = caps.header_max
+        end
+        if type(caps.body_max) == "number" and caps.body_max > 0 then
+            http.MAX_BODY_BYTES = caps.body_max
+        end
+    end
+end
 
 local function request_error(message, status)
     return nil, message, status or 400

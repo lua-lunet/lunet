@@ -53,8 +53,17 @@ The parser deliberately supports a small, explicit HTTP/1 subset:
   request: the bytes a request does not consume are the next request's
   input. The one-shot `http.read_request` keeps the older strict
   contract: bytes past the declared body are a hard 400
-- `MAX_HEADER_BYTES` (16 KiB), `MAX_BODY_BYTES` (1 MiB) and
-  `MAX_REQUEST_LINE_BYTES` (8 KiB) guard the parser
+- `MAX_HEADER_BYTES` (32 KiB), `MAX_BODY_BYTES` (1 MiB) and
+  `MAX_REQUEST_LINE_BYTES` (8 KiB) guard the parser. The defaults are
+  nginx's defaults: nginx was chosen as the baseline, not as a mandate.
+  Front lunet with a different edge (Envoy, Traefik, HAProxy, Caddy, a
+  cloud load balancer or WAF) and check your chosen edge service's
+  settings, aligning lunet's caps to them so the edge always answers
+  first and lunet is never the strictest link. Operators may need to
+  raise the header cap for very large security tokens in headers
+  (SPNEGO ~12K per field, JWTs 10-20K, plus the headers the edge itself
+  injects). The override lives in `ext/http/http_caps.lua`; see
+  `ext/http/README.md`
 - rejections carry the RFC 9112 status: grammar and Host violations
   answer 400, a non-1.x major version answers 505, an unsupported
   transfer coding answers 501, a request line past its cap answers 414,

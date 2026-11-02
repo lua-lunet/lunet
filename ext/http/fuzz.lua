@@ -32,8 +32,6 @@ local http = require("lunet.http")
 
 local fuzz = {}
 
-local CRLF = "\r\n"
-
 local JUNK = "\x00\x01\x1f\x7f\xff \t\r\n%\xff-f"
 
 local seeds = {
@@ -92,7 +90,8 @@ function fuzz.cap_boundary_fixtures()
     t.line_at = "GET /" .. string.rep("a", R - #("GET /") - #(" HTTP/1.1")) .. " HTTP/1.1\r\nHost: h\r\n\r\n"
     t.line_past = "GET /" .. string.rep("a", R - #("GET /") - #(" HTTP/1.1") + 1) .. " HTTP/1.1\r\nHost: h\r\n\r\n"
     t.body_at = "POST /echo HTTP/1.1\r\nHost: h\r\nContent-Length: " .. tostring(B) .. "\r\n\r\n" .. string.rep("b", B)
-    t.body_past = "POST /echo HTTP/1.1\r\nHost: h\r\nContent-Length: " .. tostring(B + 1) .. "\r\n\r\n" .. string.rep("b", B + 1)
+    t.body_past = "POST /echo HTTP/1.1\r\nHost: h\r\nContent-Length: "
+        .. tostring(B + 1) .. "\r\n\r\n" .. string.rep("b", B + 1)
     return t
 end
 

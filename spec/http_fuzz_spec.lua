@@ -210,7 +210,6 @@ describe("http frame fuzzer", function()
     -- disagreement is the finding.
     local function parser_class(bytes)
       local index = 1
-      local ceiling = http.MAX_HEADER_BYTES + http.MAX_BODY_BYTES + #bytes + 2
       local next_chunk = function()
         local chunk = bytes:sub(index, index + 4095)
         index = index + 4096

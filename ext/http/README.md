@@ -96,21 +96,24 @@ Unset options keep the file's defaults.
 
 ## Worked edge examples, tested
 
-[ext/http/edge/](edge/README.md) carries the same application (the
-realworld-lua demo at v0.18.1) behind four edges - nginx, OpenResty,
-Traefik, Envoy - each built from one shared Debian base image and proven
-by a conformance suite (happy paths, oversize body, oversize header
-section, drip-feed). The key delta the examples make concrete: full-request
-buffering is nginx's default (opt-out); Traefik and Envoy stream by
-default and the buffering must be installed explicitly, or lunet's own
-1 MiB 413 becomes the live cap.
+The maintained, hurl-validated edge rig lives with the demo app it
+fronts: [lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua),
+directory `specs/edge/` - the tagged, tested configurations for nginx,
+OpenResty, Traefik, and Envoy, each running the complete API conformance
+suite plus the edge-behaviour checks (oversize body, oversized header
+section, drip-feed) against the same application. See that repository's
+[specs/edge/README.md](https://github.com/lua-lunet/realworld-lua/blob/main/specs/edge/README.md)
+for the current tagged release and how to run the rig. The key delta the
+rig makes concrete: full-request buffering is nginx's default (opt-out);
+Traefik and Envoy stream by default and the buffering must be installed
+explicitly, or lunet's own 1 MiB 413 becomes the live cap.
 
-| Edge | Buffering | Example |
-|------|-----------|---------|
-| nginx | default (opt-out) | [edge/Dockerfile.nginx](edge/Dockerfile.nginx) |
-| OpenResty | default (opt-out) | [edge/Dockerfile.openresty](edge/Dockerfile.openresty) |
-| Traefik | opt-in middleware | [edge/Dockerfile.traefik](edge/Dockerfile.traefik) |
-| Envoy | opt-in filter | [edge/Dockerfile.envoy](edge/Dockerfile.envoy) |
+| Edge | Buffering | Configuration |
+|------|-----------|---------------|
+| nginx | default (opt-out) | realworld-lua `specs/edge/` |
+| OpenResty | default (opt-out) | realworld-lua `specs/edge/` |
+| Traefik | opt-in middleware | realworld-lua `specs/edge/` |
+| Envoy | opt-in filter | realworld-lua `specs/edge/` |
 
 ## Routing in ~165 lines
 

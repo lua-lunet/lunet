@@ -1,0 +1,32 @@
+# Traefik v3 dynamic configuration for the edge example.
+# Illustration, not a recommendation: read the current Traefik documentation.
+#
+# The buffering middleware is ATTACHED to the router below - without it,
+# Traefik streams request bodies of any size straight through, and lunet's
+# own 1 MiB 413 becomes the live cap instead of the edge answering first.
+
+http:
+  middlewares:
+    lunet-buffer:
+      buffering:
+        # Past this size the edge answers 413 and the body is never
+        # forwarded (nginx client_max_body_size 1m analogue).
+        maxRequestBodyBytes: 1048576
+        # Memory before spooling to disk (nginx client_body_buffer_size
+        # analogue).
+        memRequestBodyBytes: 131072
+
+  routers:
+    lunet:
+      rule: "PathPrefix(`/`)"
+      service: lunet-app
+      middlewares:
+        - lunet-buffer
+
+  services:
+    lunet-app:
+      loadBalancer:
+        servers:
+          # Loopback TCP inside the container namespace; the edge is the
+          # only externally reachable process.
+          - url: "http://127.0.0.1:8081"

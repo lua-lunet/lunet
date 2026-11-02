@@ -89,6 +89,22 @@ xmake f --lunet_http_request_line_max=8192 --lunet_http_header_max=32768 --lunet
 
 未设置的选项保持文件中的默认值。
 
+## 已测试的边缘示例
+
+[ext/http/edge/](edge/README-CN.md) 将同一应用（realworld-lua 演示 v0.18.1）
+放到四种边缘之后 - nginx、OpenResty、Traefik、Envoy - 每种都构建自同一个
+Debian 基础镜像，并由一致性套件验证（正常路径、超大请求体、超大头部区块、
+滴灌）。这些示例所要呈现的关键差异：整请求缓冲是 nginx 的默认行为（可显式
+关闭）；Traefik 与 Envoy 默认流式转发，必须显式安装缓冲，否则 lunet 自己的
+1 MiB 413 就成了实际生效的上限。
+
+| 边缘 | 缓冲 | 示例 |
+|------|------|------|
+| nginx | 默认（可显式关闭） | [edge/Dockerfile.nginx](edge/Dockerfile.nginx) |
+| OpenResty | 默认（可显式关闭） | [edge/Dockerfile.openresty](edge/Dockerfile.openresty) |
+| Traefik | 需显式开启的中间件 | [edge/Dockerfile.traefik](edge/Dockerfile.traefik) |
+| Envoy | 需显式开启的过滤器 | [edge/Dockerfile.envoy](edge/Dockerfile.envoy) |
+
 ## 路由：约 165 行
 
 `ext/http/router.lua` 不到 200 行：带 `:params` 的方法+路径分发，加上中间件链。

@@ -42,6 +42,7 @@ local httpc = require("lunet.httpc")
 #### `opts`
 - `url`（string，必填）
 - `method`（string，可选，默认 `"GET"`）
+  - `HEAD` 作为真正的 HEAD 请求发送（libcurl `CURLOPT_NOBODY`）：响应在头部块到达时立即返回，`body` 为空字符串，不会等待 HEAD 响应中不存在的 body。
 - `headers`（table，可选）
  - 映射形式：`{["Header"]="value"}`
  - 数组形式：`{{"Header","value"}, ...}`

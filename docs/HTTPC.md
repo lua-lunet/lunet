@@ -42,6 +42,7 @@ Must be called from a yieldable coroutine spawned by `lunet.spawn`.
 #### `opts`
 - `url` (string, required)
 - `method` (string, optional, default `"GET"`)
+  - `HEAD` is sent as a real HEAD request (libcurl `CURLOPT_NOBODY`): the response returns with its headers and an empty body as soon as the header block arrives, without waiting for a body a HEAD response never carries.
 - `headers` (table, optional)
  - map form: `{["Header"]="value"}`
  - array form: `{{"Header","value"}, ...}`

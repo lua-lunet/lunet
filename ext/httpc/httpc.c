@@ -173,6 +173,13 @@ static void httpc_work_cb(uv_work_t *req) {
 
   if (ctx->method && strcmp(ctx->method, "GET") == 0 && ctx->body == NULL) {
     curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+  } else if (ctx->method && strcmp(ctx->method, "HEAD") == 0) {
+    // CURLOPT_NOBODY is libcurl's HEAD switch: it sends HEAD and suppresses
+    // the response-body expectation. CURLOPT_CUSTOMREQUEST alone only
+    // rewrites the request line and leaves the GET-like body expectation,
+    // so a HEAD response's Content-Length makes the transfer block until
+    // the timeout.
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
   } else {
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, ctx->method ? ctx->method : "GET");
   }

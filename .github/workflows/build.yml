@@ -377,6 +377,20 @@ jobs:
         if (-not $lunet) { throw "lunet-run.exe not found" }
         & $lunet.FullName examples/03_db_sqlite3.lua
 
+    - name: httpc HEAD smoke (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
+        "$LUNET_BIN" test/smoke_httpc_head.lua
+
+    - name: httpc HEAD smoke (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
+        if (-not $lunet) { throw "lunet-run.exe not found" }
+        & $lunet.FullName test/smoke_httpc_head.lua
+
     # PAXE example smoke: the old C-module smoke steps were retired with the
     # C implementation. The Rust crate's own suite ran above; the Lua-side
     # behavioural suite (spec/paxe_spec.lua) runs under `xmake test` on Linux,

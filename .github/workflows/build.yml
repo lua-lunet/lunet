@@ -379,12 +379,14 @@ jobs:
 
     - name: httpc HEAD smoke (Unix)
       if: runner.os != 'Windows'
+      timeout-minutes: 5
       run: |
         LUNET_BIN=$(find build -name 'lunet-run' -type f | head -1)
         "$LUNET_BIN" test/smoke_httpc_head.lua
 
     - name: httpc HEAD smoke (Windows)
       if: runner.os == 'Windows'
+      timeout-minutes: 5
       shell: pwsh
       run: |
         $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1

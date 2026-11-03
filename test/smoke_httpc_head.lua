@@ -49,6 +49,17 @@ local function header_value(resp, name_lower)
 end
 
 lunet.spawn(function()
+    -- Watchdog: whatever fails on whatever platform, the process must
+    -- terminate. A client-side error before the finish path would
+    -- otherwise leave the listener coroutines holding the loop open and
+    -- the smoke would hang a CI runner to its job timeout.
+    lunet.spawn(function()
+        lunet.sleep(15000)
+        fail("watchdog timeout - client never completed (15s)")
+        _G.__lunet_exit_code = 1
+        os.exit(1)
+    end)
+
     local listener, lerr = socket.listen("tcp", "127.0.0.1", PORT)
     if not listener then
         fail("listen failed: " .. tostring(lerr))
@@ -113,46 +124,53 @@ lunet.spawn(function()
     end)
 
     -- Client side: HEAD first (the case that hangs pre-fix), then GET as
-    -- the contrast proving the server answers normally.
+    -- the contrast proving the server answers normally. pcall-wrapped so
+    -- a client-side error reports its message instead of dying silently
+    -- (the watchdog would still terminate the process).
     lunet.spawn(function()
-        local url = "http://127.0.0.1:" .. PORT .. "/"
+        local ok, perr = pcall(function()
+            local url = "http://127.0.0.1:" .. PORT .. "/"
 
-        local resp, err = httpc.request({
-            url = url,
-            method = "HEAD",
-            timeout_ms = TIMEOUT_MS,
-        })
-        if not resp then
-            fail("HEAD returned no response (expected immediate headers): " .. tostring(err))
-        else
-            if resp.status ~= 200 then
-                fail("HEAD status expected 200, got " .. tostring(resp.status))
+            local resp, err = httpc.request({
+                url = url,
+                method = "HEAD",
+                timeout_ms = TIMEOUT_MS,
+            })
+            if not resp then
+                fail("HEAD returned no response (expected immediate headers): " .. tostring(err))
+            else
+                if resp.status ~= 200 then
+                    fail("HEAD status expected 200, got " .. tostring(resp.status))
+                end
+                local body_len = resp.body and #resp.body or 0
+                if body_len ~= 0 then
+                    fail("HEAD body expected empty, got " .. body_len .. " bytes")
+                end
+                local cl = header_value(resp, "content-length")
+                if cl ~= tostring(BODY_LEN) then
+                    fail("HEAD Content-Length header expected " .. BODY_LEN .. ", got " .. tostring(cl))
+                end
             end
-            local body_len = resp.body and #resp.body or 0
-            if body_len ~= 0 then
-                fail("HEAD body expected empty, got " .. body_len .. " bytes")
-            end
-            local cl = header_value(resp, "content-length")
-            if cl ~= tostring(BODY_LEN) then
-                fail("HEAD Content-Length header expected " .. BODY_LEN .. ", got " .. tostring(cl))
-            end
-        end
 
-        local resp2, err2 = httpc.request({
-            url = url,
-            method = "GET",
-            timeout_ms = TIMEOUT_MS,
-        })
-        if not resp2 then
-            fail("GET returned no response: " .. tostring(err2))
-        else
-            if resp2.status ~= 200 then
-                fail("GET status expected 200, got " .. tostring(resp2.status))
+            local resp2, err2 = httpc.request({
+                url = url,
+                method = "GET",
+                timeout_ms = TIMEOUT_MS,
+            })
+            if not resp2 then
+                fail("GET returned no response: " .. tostring(err2))
+            else
+                if resp2.status ~= 200 then
+                    fail("GET status expected 200, got " .. tostring(resp2.status))
+                end
+                local n = resp2.body and #resp2.body or 0
+                if n ~= BODY_LEN then
+                    fail("GET body expected " .. BODY_LEN .. " bytes, got " .. n)
+                end
             end
-            local n = resp2.body and #resp2.body or 0
-            if n ~= BODY_LEN then
-                fail("GET body expected " .. BODY_LEN .. " bytes, got " .. n)
-            end
+        end)
+        if not ok then
+            fail("client error: " .. tostring(perr))
         end
 
         -- The wire must have carried a HEAD request line (and the GET):

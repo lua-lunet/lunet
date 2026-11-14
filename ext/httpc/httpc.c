@@ -152,6 +152,7 @@ static size_t httpc_header_cb(char *buffer, size_t size, size_t nitems, void *us
 
 static void httpc_work_cb(uv_work_t *req) {
   httpc_req_t *ctx = (httpc_req_t *)req->data;
+  fprintf(stderr, "[HTTPC_TRACE] worker enter\n");
   ctx->err[0] = '\0';
   ctx->too_large = 0;
 
@@ -202,6 +203,8 @@ static void httpc_work_cb(uv_work_t *req) {
   curl_easy_setopt(curl, CURLOPT_HEADERDATA, ctx);
 
   CURLcode rc = curl_easy_perform(curl);
+  fprintf(stderr, "[HTTPC_TRACE] worker exit rc=%d (%s)\n", (int)rc,
+          curl_easy_strerror(rc));
 
   if (ctx->too_large) {
     snprintf(ctx->err, sizeof(ctx->err), "response too large");
@@ -233,6 +236,7 @@ static void httpc_work_cb(uv_work_t *req) {
 
 static void httpc_after_cb(uv_work_t *req, int status) {
   (void)status;
+  fprintf(stderr, "[HTTPC_TRACE] after_cb enter status=%d\n", status);
   httpc_req_t *ctx = (httpc_req_t *)req->data;
   lua_State *L = ctx->waiter_L;
 

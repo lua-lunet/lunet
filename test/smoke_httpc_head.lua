@@ -154,6 +154,23 @@ lunet.spawn(function()
                 .. (fres and fres.status or "nil") .. " body=" .. (fres and fres.body and #fres.body or "-")
                 .. " err=" .. tostring(ferr) .. "\n")
 
+            -- Probe 0b: lunet.fs async read — the SAME uv threadpool +
+            -- completion machinery httpc rides on (uv_fs_read -> worker ->
+            -- completion callback -> lunet_co_resume), minus curl. If this
+            -- hangs on Windows too, the fault is threadpool-wide; if it
+            -- completes, the fault is curl-side.
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: sending fs probe\n")
+            local fs = require("lunet.fs")
+            local fok, ffd = pcall(fs.open, tmp, "r")
+            if fok and ffd then
+                local rdata, rerr = fs.read(ffd, BODY_LEN)
+                io.stderr:write("[HTTPC_HEAD_SMOKE] stage: fs probe returned len="
+                    .. (rdata and #rdata or "-") .. " err=" .. tostring(rerr) .. "\n")
+                fs.close(ffd)
+            else
+                io.stderr:write("[HTTPC_HEAD_SMOKE] stage: fs probe open failed: " .. tostring(ffd) .. "\n")
+            end
+
             local url = "http://127.0.0.1:" .. PORT .. "/"
 
             -- Probe 1: plain loopback GET before the HEAD case.

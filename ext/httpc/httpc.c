@@ -67,6 +67,7 @@ typedef struct {
   char *body;
   size_t body_len;
   long timeout_ms;
+  char curl_err[CURL_ERROR_SIZE];
   size_t max_body_bytes;
   int insecure;
 
@@ -159,6 +160,8 @@ static void httpc_work_cb(uv_work_t *req) {
     snprintf(ctx->err, sizeof(ctx->err), "curl init failed");
     return;
   }
+  ctx->curl_err[0] = '\0';
+  curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, ctx->curl_err);
 
   curl_easy_setopt(curl, CURLOPT_URL, ctx->url);
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -205,7 +208,11 @@ static void httpc_work_cb(uv_work_t *req) {
   } else if (ctx->err[0] != '\0') {
     // keep existing message (e.g. OOM)
   } else if (rc != CURLE_OK) {
-    snprintf(ctx->err, sizeof(ctx->err), "%s", curl_easy_strerror(rc));
+    if (ctx->curl_err[0] != '\0') {
+      snprintf(ctx->err, sizeof(ctx->err), "%s", ctx->curl_err);
+    } else {
+      snprintf(ctx->err, sizeof(ctx->err), "%s", curl_easy_strerror(rc));
+    }
   } else {
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);

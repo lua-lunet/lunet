@@ -105,6 +105,7 @@ lunet.spawn(function()
                             "Connection: keep-alive\r\n" ..
                             "\r\n" .. string.rep("x", BODY_LEN))
                     end
+                    io.stderr:write("[HTTPC_HEAD_SMOKE] stage: server wrote " .. method .. " response\n")
                 end
             end
         end
@@ -131,7 +132,36 @@ lunet.spawn(function()
     -- (the watchdog would still terminate the process).
     lunet.spawn(function()
         local ok, perr = pcall(function()
+            -- Probe 0: file:// GET — exercises the whole httpc pipeline
+            -- (worker thread, curl, completion resume) with no sockets.
+            -- A hang here means the uv_worker→resume path; a pass here
+            -- with the loopback probes hanging means the TCP path.
+            local script = debug.getinfo(1, "S").source
+            local dir = script:match("^@(.+)[/\\][^/\\]+$")
+            local tmp = os.tmpname()
+            local f = io.open(tmp, "wb")
+            f:write(string.rep("y", BODY_LEN))
+            f:close()
+            local path = tmp
+            if path:sub(1, 1) ~= "/" then
+                path = path:gsub("\\", "/")
+                path = "/" .. path
+            end
+            local file_url = "file://" .. path
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: sending file:// GET (" .. file_url .. ")\n")
+            local fres, ferr = httpc.request({ url = file_url, timeout_ms = 2000 })
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: file:// GET returned status="
+                .. (fres and fres.status or "nil") .. " body=" .. (fres and fres.body and #fres.body or "-")
+                .. " err=" .. tostring(ferr) .. "\n")
+
             local url = "http://127.0.0.1:" .. PORT .. "/"
+
+            -- Probe 1: plain loopback GET before the HEAD case.
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: sending loopback GET probe\n")
+            local gres, gerr = httpc.request({ url = url, timeout_ms = 2000 })
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: loopback GET probe returned status="
+                .. (gres and gres.status or "nil") .. " body=" .. (gres and gres.body and #gres.body or "-")
+                .. " err=" .. tostring(gerr) .. "\n")
 
             io.stderr:write("[HTTPC_HEAD_SMOKE] stage: sending HEAD\n")
             local resp, err = httpc.request({

@@ -205,6 +205,7 @@ jobs:
         shared-key: ${{ runner.os }}-rust-ext
 
     - name: Build Rust ext modules
+      shell: bash
       run: |
         set -euo pipefail
         cargo build --release --manifest-path ext/lnt_shared/Cargo.toml
@@ -213,6 +214,7 @@ jobs:
     # The crates' own suites exercise the platform-specific mapping code on
     # every OS that will ship it.
     - name: Test Rust ext modules
+      shell: bash
       run: |
         set -euo pipefail
         cargo test --manifest-path ext/lnt_shared/Cargo.toml

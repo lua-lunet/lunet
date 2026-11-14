@@ -94,12 +94,14 @@ jobs:
         shared-key: ${{ runner.os }}-rust-ext
 
     - name: Build Rust ext modules
+      shell: bash
       run: |
         set -euo pipefail
         cargo build --release --manifest-path ext/lnt_shared/Cargo.toml
         cargo build --release --manifest-path ext/jsonic/Cargo.toml
 
     - name: Test Rust ext modules
+      shell: bash
       run: |
         set -euo pipefail
         cargo test --manifest-path ext/lnt_shared/Cargo.toml

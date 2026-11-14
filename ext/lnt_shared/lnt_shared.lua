@@ -113,27 +113,36 @@ local function find_lib()
     return env
   end
 
-  -- 2. Determine the platform suffix using uname(1).
-  --    io.popen may return nil in restricted environments; fall back to "so".
-  local suffix = "so"  -- Linux default
-  local ok_popen, uname = pcall(io.popen, "uname -s 2>/dev/null")
-  if ok_popen and uname then
-    local sys = uname:read("*l") or ""
-    uname:close()
-    if sys == "Darwin" then
-      suffix = "dylib"
+  -- 2. Determine the platform suffix and prefix: Windows cdylib naming
+  --    differs from Unix (.dll, no "lib" prefix). Same rule as paxe.lua
+  --    and sodium.lua. On Unix, io.popen may return nil in restricted
+  --    environments; fall back to "so".
+  local suffix, prefix = "so", "lib"
+  if package.config:sub(1, 1) == "\\" then
+    suffix, prefix = "dll", ""
+  else
+    local ok_popen, uname = pcall(io.popen, "uname -s 2>/dev/null")
+    if ok_popen and uname then
+      local sys = uname:read("*l") or ""
+      uname:close()
+      if sys == "Darwin" then
+        suffix = "dylib"
+      end
     end
   end
 
   -- 3. Search relative to this file's directory.
   local script = debug.getinfo(2, "S").source
-  local dir = script:match("^@(.+)/[^/]+$") or "."
+  -- Separator-agnostic split: Windows source paths may carry backslashes.
+  local dir = script:match("^@(.+)[/\\][^/\\]+$") or "."
+  local stem = prefix .. "lnt_shared." .. suffix
+  local alt_stem = prefix .. "ngx_shared." .. suffix
   local candidates = {
-    dir .. "/target/release/liblnt_shared." .. suffix,
-    dir .. "/liblnt_shared." .. suffix,
+    dir .. "/target/release/" .. stem,
+    dir .. "/" .. stem,
     -- Deprecated compatibility paths for previously built artifacts.
-    dir .. "/target/release/libngx_shared." .. suffix,
-    dir .. "/libngx_shared." .. suffix,
+    dir .. "/target/release/" .. alt_stem,
+    dir .. "/" .. alt_stem,
   }
 
   for _, p in ipairs(candidates) do
@@ -145,9 +154,9 @@ local function find_lib()
   end
 
   error(
-    "lunet.lnt_shared: cannot find liblnt_shared." .. suffix .. "\n" ..
+    "lunet.lnt_shared: cannot find " .. stem .. "\n" ..
     "  Build it with:  cd ext/lnt_shared && cargo build --release\n" ..
-    "  or set LUNET_LNT_SHARED_LIB=/path/to/liblnt_shared." .. suffix,
+    "  or set LUNET_LNT_SHARED_LIB=/path/to/" .. stem,
     3
   )
 end

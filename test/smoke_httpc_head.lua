@@ -67,6 +67,7 @@ lunet.spawn(function()
         os.exit(1)
         return
     end
+    io.stderr:write("[HTTPC_HEAD_SMOKE] stage: listening\n")
 
     local function serve_conn(conn)
         local buf = ""
@@ -87,6 +88,7 @@ lunet.spawn(function()
                 local req_line = head:match("^[^\r\n]*")
                 local method = req_line and req_line:match("^(%S+)%s")
                 if method then
+                    io.stderr:write("[HTTPC_HEAD_SMOKE] stage: server saw " .. method .. "\n")
                     served[#served + 1] = method
                     if method == "HEAD" then
                         -- Content-Length advertises a body size, but HEAD
@@ -131,11 +133,13 @@ lunet.spawn(function()
         local ok, perr = pcall(function()
             local url = "http://127.0.0.1:" .. PORT .. "/"
 
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: sending HEAD\n")
             local resp, err = httpc.request({
                 url = url,
                 method = "HEAD",
                 timeout_ms = TIMEOUT_MS,
             })
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: HEAD returned\n")
             if not resp then
                 fail("HEAD returned no response (expected immediate headers): " .. tostring(err))
             else
@@ -152,11 +156,13 @@ lunet.spawn(function()
                 end
             end
 
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: sending GET\n")
             local resp2, err2 = httpc.request({
                 url = url,
                 method = "GET",
                 timeout_ms = TIMEOUT_MS,
             })
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: GET returned\n")
             if not resp2 then
                 fail("GET returned no response: " .. tostring(err2))
             else
@@ -191,6 +197,7 @@ lunet.spawn(function()
         end
 
         socket.close(listener)
+        io.stderr:write("[HTTPC_HEAD_SMOKE] stage: finishing\n")
         finish()
     end)
 end)

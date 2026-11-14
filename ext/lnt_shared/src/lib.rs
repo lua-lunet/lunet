@@ -1,4 +1,4 @@
-//! # lnt-shared — lunet-style shared dictionary for LuaJIT (Linux / macOS)
+//! # lnt-shared — lunet-style shared dictionary for LuaJIT (Linux / macOS / Windows)
 //!
 //! This library provides a shared dictionary API for LuaJIT programs running
 //! under lunet. It is a pure opt-in extension.
@@ -15,8 +15,9 @@
 //!
 //! ## Platforms
 //!
-//! Linux and macOS.  Windows is not supported by this crate; a separate
-//! implementation using `CreateFileMapping`/`MapViewOfFile` would be needed.
+//! Linux, macOS and Windows. The anonymous shared region is `mmap` on Unix
+//! and a page-file-backed section (`CreateFileMappingA`/`MapViewOfFile`) on
+//! Windows; everything above it is offsets and std atomics.
 //!
 //! ## C ABI
 //!

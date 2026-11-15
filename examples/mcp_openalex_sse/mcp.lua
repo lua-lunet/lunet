@@ -1,11 +1,18 @@
 -- Minimal MCP (Model Context Protocol) JSON-RPC surface: initialize,
--- notifications, ping, tools/list, tools/call. Transport lives in sse.lua.
+-- notifications, ping, tools/list, tools/call. Transport (Streamable HTTP)
+-- lives in main.lua.
 
-local json = require("json")
+local jsonic = require("lunet.jsonic")
 
 local M = {}
 
-local PROTOCOL_VERSION = "2024-11-05"
+local SUPPORTED_PROTOCOL_VERSIONS = { "2025-03-26", "2024-11-05" }
+local SERVER_NAME = "lunet-mcp-openalex"
+local SERVER_VERSION = "0.1.0"
+
+-- dkjson encodes empty tables as []; the MCP spec wants JSON objects
+-- for empty results (ping) and capabilities.tools.
+local EMPTY_OBJECT = setmetatable({}, { __jsontype = "object" })
 
 local TOOLS = {
     {
@@ -63,6 +70,11 @@ local function tool_text(message)
     }
 end
 
+-- Transport-level rejection bodies (parse errors, session errors).
+function M.encode_error(id, code, message)
+    return jsonic.encode({ jsonrpc = "2.0", id = id, error = { code = code, message = message } })
+end
+
 -- Creates a dispatcher bound to an OpenAlex client.
 function M.new(client)
     local function call_tool(name, args)
@@ -83,31 +95,47 @@ function M.new(client)
         return tool_error("unknown tool: " .. tostring(name))
     end
 
-    -- Handles one parsed JSON-RPC message. Returns a response table to send,
-    -- or nil for notifications (which get no response).
+    local function encode(response)
+        return jsonic.encode(response)
+    end
+
+    -- Handles one parsed JSON-RPC message. Returns a response table to write
+    -- back, or nil for notifications and client responses (no reply).
     local function dispatch(message)
-        if type(message) ~= "table" or message.jsonrpc ~= "2.0" then
+        if type(message) ~= "table" or message == jsonic.null then
             return { jsonrpc = "2.0", id = nil,
                 error = { code = -32600, message = "Invalid Request" } }
         end
         local id = message.id
         local method = message.method
 
+        if method == nil and (message.result ~= nil or message.error ~= nil) then
+            return nil -- a client response: this server sends no requests
+        end
+
         if method == "notifications/initialized" or method == "notifications/cancelled" then
             return nil
         end
 
         if method == "initialize" then
+            local requested = (message.params or {}).protocolVersion
+            local negotiated = SUPPORTED_PROTOCOL_VERSIONS[2]
+            for _, v in ipairs(SUPPORTED_PROTOCOL_VERSIONS) do
+                if requested == v then
+                    negotiated = v
+                    break
+                end
+            end
             return {
                 jsonrpc = "2.0", id = id,
                 result = {
-                    protocolVersion = PROTOCOL_VERSION,
-                    capabilities = { tools = {} },
-                    serverInfo = { name = "lunet-mcp-openalex", version = "0.1.0" },
+                    protocolVersion = negotiated,
+                    capabilities = { tools = EMPTY_OBJECT },
+                    serverInfo = { name = SERVER_NAME, version = SERVER_VERSION },
                 },
             }
         elseif method == "ping" then
-            return { jsonrpc = "2.0", id = id, result = {} }
+            return { jsonrpc = "2.0", id = id, result = EMPTY_OBJECT }
         elseif method == "tools/list" then
             return { jsonrpc = "2.0", id = id, result = { tools = TOOLS } }
         elseif method == "tools/call" then
@@ -127,20 +155,7 @@ function M.new(client)
             error = { code = -32601, message = "Method not found: " .. tostring(method) } }
     end
 
-    -- Handles a raw POST body. Returns a JSON string to push to the SSE
-    -- stream, or nil when the message was a notification.
-    local function handle_body(body)
-        local message, err = json.decode(body)
-        if not message then
-            return json.encode({ jsonrpc = "2.0", id = nil,
-                error = { code = -32700, message = "Parse error: " .. tostring(err) } })
-        end
-        local response = dispatch(message)
-        if not response then return nil end
-        return json.encode(response)
-    end
-
-    return { handle_body = handle_body }
+    return { dispatch = dispatch, encode = encode }
 end
 
 return M

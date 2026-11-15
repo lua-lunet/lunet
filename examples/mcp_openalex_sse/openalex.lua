@@ -4,10 +4,20 @@
 -- and the free daily budget is $1 — this client is deliberately frugal.
 
 local httpc = require("lunet.httpc")
-
-local json = require("json")
+local jsonic = require("lunet.jsonic")
 
 local M = {}
+
+-- jsonic.decode raises on invalid input; wrap it in this (json.lua-style)
+-- data, err contract.
+
+local function decode_json(body)
+    local ok, data = pcall(jsonic.decode, body)
+    if not ok or data == nil or data == jsonic.null then
+        return nil, "invalid JSON"
+    end
+    return data
+end
 
 local BASE = "https://api.openalex.org"
 
@@ -31,7 +41,7 @@ local function get_json(client, path)
         local snippet = (resp.body or ""):sub(1, 200)
         return nil, string.format("OpenAlex returned HTTP %d: %s", resp.status, snippet)
     end
-    local data, derr = json.decode(resp.body)
+    local data, derr = decode_json(resp.body)
     if not data then
         return nil, "could not decode OpenAlex response: " .. tostring(derr)
     end

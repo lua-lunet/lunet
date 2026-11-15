@@ -12,9 +12,9 @@ complete RealWorld application. Less by design, not less capable.
 |---|-------------|------------|-------|
 | 1 | twelve-dollar-server-challenge | A realistic Feed API on SQLite for a resource-constrained host | [lua-lunet/twelve-dollar-server-challenge](https://github.com/lua-lunet/twelve-dollar-server-challenge) |
 | 2 | realworld-lua | The RealWorld "Conduit" application | [lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua) |
-| 3 | lunet-mcp-sse | A production MCP server over SSE, shipped as a Docker image | [lua-lunet/lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) |
+| 3 | lunet-mcp | A production MCP server with both the legacy SSE and Streamable HTTP transports, shipped as a Docker image | [lua-lunet/lunet-mcp](https://github.com/lua-lunet/lunet-mcp) |
 | 4 | lunet-backproxy | An outbound-only reverse proxy for DMZ topologies | [lua-lunet/lunet-backproxy](https://github.com/lua-lunet/lunet-backproxy) |
-| 5 | examples/mcp_openalex_sse | A complete MCP-over-SSE demo, in this repository | [examples/mcp_openalex_sse](mcp_openalex_sse/) |
+| 5 | examples/mcp_openalex_sse | A minimal legacy-free Streamable HTTP MCP demo, in this repository | [examples/mcp_openalex_sse](mcp_openalex_sse/) |
 
 ### 1. twelve-dollar-server-challenge
 
@@ -38,9 +38,10 @@ resource story can go unnoticed in a RealWorld demo, so its
 against the Node.js and Python/Django implementations of the same spec; see
 that table rather than trust a summary of it.
 
-### 3. lunet-mcp-sse
+### 3. lunet-mcp
 
-A production MCP server speaking the SSE transport, published as a Docker
+A production MCP server speaking both the legacy HTTP+SSE transport and the
+modern Streamable HTTP transport, published as a Docker
 image for use behind an AI assistant. Its README is where the sizes live, and
 the sizes are about overhead: a 171 MB image and ~7 MB of resident runtime
 against the 367–420 MB images and 14–28 MB runtimes of the Node.js, Bun and
@@ -59,8 +60,10 @@ security-topology role.
 
 ### 5. examples/mcp_openalex_sse
 
-The local, in-repo, complete demo: an MCP server over SSE with three tools
+The local, in-repo demo: an MCP server over Streamable HTTP with three tools
 backed by the free OpenAlex scholarly API, loopback only, no database. It is
+kept deliberately legacy-free to stay small; for both transports side by
+side see [lunet-mcp](https://github.com/lua-lunet/lunet-mcp) above. It is
 the clone-and-run one — clone this repository, build the runtime, put an
 OpenAlex API key in a `.env` file, and run
 `examples/mcp_openalex_sse/main.lua` with the built `lunet-run`; its
@@ -83,5 +86,5 @@ self-contained demonstration of one surface of the runtime:
 | `08_http.lua` | The `lunet.http` + `http_router` + `lnt_shared` wiring in one runnable file |
 | `09_jsonic_demo.lua` | The jsonic extension: Rust-backed JSON decode behind a dkjson-style API |
 | `10_db_prepared.lua` | SQLite prepared statements |
-| `mcp_openalex_sse/` | The complete MCP-over-SSE demo (see above) |
+| `mcp_openalex_sse/` | The minimal legacy-free Streamable HTTP MCP demo (see above) |
 | `sdk_embed/` | Embedding the lunet runtime in a C host program with embedded scripts |

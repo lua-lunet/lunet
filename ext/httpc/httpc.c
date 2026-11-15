@@ -505,6 +505,8 @@ static int httpc_request(lua_State *L) {
 
   lunet_coref_create(L, ctx->co_ref);
 
+  fprintf(stderr, "[HTTPC_TRACE] request loop=%p uv_default_loop=%p\n",
+          (void *)uv_default_loop(), (void *)&uv_default_loop);
   int rc = uv_queue_work(uv_default_loop(), &ctx->req, httpc_work_cb, httpc_after_cb);
   if (rc < 0) {
     lunet_coref_release(L, ctx->co_ref);

@@ -102,11 +102,11 @@ xmake build-debug
 
 LuaJIT, libuv, and zlib are required dependencies; each driver adds only its own client library. Release profiles strip EasyMem by default. Use debug/ASan profiles for EasyMem diagnostics.
 
-## Example: MCP-SSE Servers
+## Example: MCP Servers
 
-For a minimal in-repo starting point see [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) - an SSE-transport MCP server that calls the [OpenAlex](https://openalex.org/) scholarly API via `lunet.httpc`, with no database and no filesystem state.
+For a minimal in-repo starting point see [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) - a Streamable HTTP (MCP spec 2025-03-26) MCP server that calls the [OpenAlex](https://openalex.org/) scholarly API via `lunet.httpc`, with no database and no filesystem state - deliberately legacy-free to stay small.
 
-[lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) is a fuller MCP (Model Context Protocol) server with Tavily web search.
+[lunet-mcp](https://github.com/lua-lunet/lunet-mcp) is a fuller MCP (Model Context Protocol) server with Tavily web search that serves both the legacy HTTP+SSE transport and Streamable HTTP.
 
 ## How-To Examples
 
@@ -131,7 +131,7 @@ binary - `xmake build <target>` is only needed when you build from source.
 | 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + prepared statements (`$1`) | `xmake build lunet-postgres` + Postgres server | `"$LUNET_BIN" examples/05_db_postgres.lua` |
 | 08 | [`examples/08_http.lua`](examples/08_http.lua) | HTTP server + router (`lunet.http`, `lunet.http_router`) with middleware and opt-in CORS; `lnt_shared` counters as a contrived kv store - GET reads, POST increments, PATCH adjusts | `xmake build-release` + `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_http.lua` |
 | 09 | [`examples/09_jsonic_demo.lua`](examples/09_jsonic_demo.lua) | dkjson-style JSON encode/decode via Rust FFI | `xmake build-jsonic` | `"$LUNET_BIN" examples/09_jsonic_demo.lua` |
-| 10 | [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) | **Canonical tiny MCP server**: SSE transport + OpenAlex API via `lunet.httpc`, no DB, loopback only | `xmake build lunet-httpc` + `OPEN_ALEX_API_KEY` in `.env` | `"$LUNET_BIN" examples/mcp_openalex_sse/main.lua` |
+| 10 | [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) | **Canonical tiny MCP server**: Streamable HTTP transport + OpenAlex API via `lunet.httpc`, no DB, loopback only, legacy-free | `xmake build lunet-httpc` + `OPEN_ALEX_API_KEY` in `.env` | `"$LUNET_BIN" examples/mcp_openalex_sse/main.lua` |
 
 See [`examples/README.md`](examples/README.md) - which
 signposts the complete RealWorld "Conduit" implementation at

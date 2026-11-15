@@ -100,11 +100,11 @@ xmake build-debug
 
 LuaJIT、libuv 和 zlib 是必需依赖；每个驱动只增加自己的客户端库。发布档位默认会剥离 EasyMem。若需 EasyMem 诊断，请使用 debug/ASan 档位。
 
-## 示例：MCP-SSE 服务器
+## 示例：MCP 服务器
 
-仓内最小入门示例见 [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) - 一个通过 `lunet.httpc` 调用 [OpenAlex](https://openalex.org/) 学术 API 的 SSE 传输 MCP 服务器，无数据库、无文件系统状态。
+仓内最小入门示例见 [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) - 一个通过 `lunet.httpc` 调用 [OpenAlex](https://openalex.org/) 学术 API 的 Streamable HTTP（MCP 规范 2025-03-26）传输 MCP 服务器，无数据库、无文件系统状态 —— 刻意保持"无遗留"以维持精小。
 
-[lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) 是一个更完整的 MCP（Model Context Protocol）服务器，带 Tavily 网络搜索。
+[lunet-mcp](https://github.com/lua-lunet/lunet-mcp) 是一个更完整的 MCP（Model Context Protocol）服务器，带 Tavily 网络搜索，同时提供遗留 HTTP+SSE 传输与 Streamable HTTP。
 
 [`examples/README-CN.md`](examples/README-CN.md) 是路标：完整的 RealWorld "Conduit" 实现位于
 [lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua)，演示如何
@@ -132,7 +132,7 @@ LUNET_BIN=$(find build -path '*/release/lunet-run' -type f 2>/dev/null | head -1
 | 05 | [`examples/05_db_postgres.lua`](examples/05_db_postgres.lua) | Postgres CRUD + 预处理语句（`$1`） | `xmake build lunet-postgres` + Postgres 服务器 | `"$LUNET_BIN" examples/05_db_postgres.lua` |
 | 08 | [`examples/08_http.lua`](examples/08_http.lua) | HTTP 服务器 + 路由器（`lunet.http`、`lunet.http_router`），带中间件与可选 CORS；以 `lnt_shared` 计数器作为刻意简化的 kv 存储 - GET 读取、POST 递增、PATCH 调整 | `xmake build-release` + `xmake build-lnt-shared` | `"$LUNET_BIN" examples/08_http.lua` |
 | 09 | [`examples/09_jsonic_demo.lua`](examples/09_jsonic_demo.lua) | 经 Rust FFI 的 dkjson 风格 JSON 编解码 | `xmake build-jsonic` | `"$LUNET_BIN" examples/09_jsonic_demo.lua` |
-| 10 | [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) | **规范级微型 MCP 服务器**：SSE 传输 + 经 `lunet.httpc` 的 OpenAlex API，无数据库、仅回环 | `xmake build lunet-httpc` + `.env` 中的 `OPEN_ALEX_API_KEY` | `"$LUNET_BIN" examples/mcp_openalex_sse/main.lua` |
+| 10 | [`examples/mcp_openalex_sse/`](examples/mcp_openalex_sse/) | **规范级微型 MCP 服务器**：Streamable HTTP 传输 + 经 `lunet.httpc` 的 OpenAlex API，无数据库、仅回环、无遗留 | `xmake build lunet-httpc` + `.env` 中的 `OPEN_ALEX_API_KEY` | `"$LUNET_BIN" examples/mcp_openalex_sse/main.lua` |
 
 ## 核心模块
 

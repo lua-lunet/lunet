@@ -11,9 +11,9 @@ SQL 驱动、加密数据报、MCP 服务器、嵌入 C 宿主程序，以及一
 |---|------|----------|------|
 | 1 | twelve-dollar-server-challenge | 面向资源受限主机的现实版 Feed API（SQLite） | [lua-lunet/twelve-dollar-server-challenge](https://github.com/lua-lunet/twelve-dollar-server-challenge) |
 | 2 | realworld-lua | RealWorld "Conduit" 应用 | [lua-lunet/realworld-lua](https://github.com/lua-lunet/realworld-lua) |
-| 3 | lunet-mcp-sse | 以 Docker 镜像交付的生产级 SSE 传输 MCP 服务器 | [lua-lunet/lunet-mcp-sse](https://github.com/lua-lunet/lunet-mcp-sse) |
+| 3 | lunet-mcp | 同时提供遗留 SSE 与 Streamable HTTP 传输的生产级 MCP 服务器，以 Docker 镜像交付 | [lua-lunet/lunet-mcp](https://github.com/lua-lunet/lunet-mcp) |
 | 4 | lunet-backproxy | 面向 DMZ 拓扑的纯出站反向代理 | [lua-lunet/lunet-backproxy](https://github.com/lua-lunet/lunet-backproxy) |
-| 5 | examples/mcp_openalex_sse | 本仓库内完整的 MCP-over-SSE 演示 | [examples/mcp_openalex_sse](mcp_openalex_sse/) |
+| 5 | examples/mcp_openalex_sse | 本仓库内的精简"无遗留"Streamable HTTP MCP 演示 | [examples/mcp_openalex_sse](mcp_openalex_sse/) |
 
 ### 1. twelve-dollar-server-challenge
 
@@ -33,9 +33,10 @@ RealWorld "Conduit" 应用 —— 注册、认证、文章、评论与关注，�
 [README 里有一张实测对比表](https://github.com/lua-lunet/realworld-lua#resource-footprint)，对照同一规范的
 Node.js 与 Python/Django 实现；请直接看那张表，不要相信转述。
 
-### 3. lunet-mcp-sse
+### 3. lunet-mcp
 
-一个讲 SSE 传输的生产级 MCP 服务器，以 Docker 镜像发布，可原样放进 AI 助手
+一个同时讲遗留 HTTP+SSE 传输与现代 Streamable HTTP 传输的生产级 MCP
+服务器，以 Docker 镜像发布，可原样放进 AI 助手
 的既有部署。它的 README 是尺寸数据的出处，而这些数据说的是开销：171 MB 的
 镜像、约 7 MB 的常驻运行时，对照它所列出的 Node.js、Bun 与 Python MCP 实现
 的 367–420 MB 镜像与 14–28 MB 运行时。提供容器镜像，是为了让服务器能不加
@@ -51,8 +52,10 @@ Node.js 与 Python/Django 实现；请直接看那张表，不要相信转述。
 
 ### 5. examples/mcp_openalex_sse
 
-本地的、仓库内的完整演示：一个讲 SSE 传输的 MCP 服务器，带三个由免费的
-OpenAlex 学术 API 支撑的工具，只听回环，无数据库。它是那个「克隆即跑」的
+本地的、仓库内的演示：一个讲 Streamable HTTP 传输的 MCP 服务器，带三个由免费的
+OpenAlex 学术 API 支撑的工具，只听回环，无数据库。它刻意保持"无遗留"以维持精
+小；需要两种传输并排的演示见上文的 [lunet-mcp](https://github.com/lua-lunet/lunet-mcp)。
+它是那个「克隆即跑」的
 示例 —— 克隆本仓库、构建运行时、把 OpenAlex API 密钥放进 `.env` 文件，用
 构建好的 `lunet-run` 执行 `examples/mcp_openalex_sse/main.lua` 即可；确切
 命令见它的 [README](mcp_openalex_sse/README-CN.md)。
@@ -74,5 +77,5 @@ OpenAlex 学术 API 支撑的工具，只听回环，无数据库。它是那个
 | `08_http.lua` | `lunet.http` + `http_router` + `lnt_shared` 的接线，一个可运行文件讲完 |
 | `09_jsonic_demo.lua` | jsonic 扩展：dkjson 风格 API 之下的 Rust JSON 解码 |
 | `10_db_prepared.lua` | SQLite 预编译语句 |
-| `mcp_openalex_sse/` | 完整的 MCP-over-SSE 演示（见上文） |
+| `mcp_openalex_sse/` | 精简的"无遗留"Streamable HTTP MCP 演示（见上文） |
 | `sdk_embed/` | 将 lunet 运行时嵌入带内嵌脚本的 C 宿主程序 |

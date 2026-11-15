@@ -6,9 +6,7 @@ local examples = {
   "examples/05_db_postgres.lua",
   "examples/mcp_openalex_sse/main.lua",
   "examples/mcp_openalex_sse/mcp.lua",
-  "examples/mcp_openalex_sse/sse.lua",
   "examples/mcp_openalex_sse/openalex.lua",
-  "examples/mcp_openalex_sse/json.lua",
   "examples/mcp_openalex_sse/dotenv.lua",
 }
 

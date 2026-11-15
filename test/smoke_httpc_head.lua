@@ -132,33 +132,18 @@ lunet.spawn(function()
     -- (the watchdog would still terminate the process).
     lunet.spawn(function()
         local ok, perr = pcall(function()
-            -- Probe 0: file:// GET — exercises the whole httpc pipeline
-            -- (worker thread, curl, completion resume) with no sockets.
-            -- A hang here means the uv_worker→resume path; a pass here
-            -- with the loopback probes hanging means the TCP path.
+            -- Probe 0: lunet.fs async read — the SAME uv threadpool +
+            -- completion machinery httpc rides on (uv_fs_read -> worker ->
+            -- completion callback -> lunet_co_resume), minus curl. Runs
+            -- FIRST so its datapoint lands even if the httpc probes hang.
+            -- If this hangs on Windows too, the fault is threadpool-wide;
+            -- if it completes, the fault is httpc/curl-side.
             local script = debug.getinfo(1, "S").source
             local dir = script:match("^@(.+)[/\\][^/\\]+$")
             local tmp = os.tmpname()
             local f = io.open(tmp, "wb")
             f:write(string.rep("y", BODY_LEN))
             f:close()
-            local path = tmp
-            if path:sub(1, 1) ~= "/" then
-                path = path:gsub("\\", "/")
-                path = "/" .. path
-            end
-            local file_url = "file://" .. path
-            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: sending file:// GET (" .. file_url .. ")\n")
-            local fres, ferr = httpc.request({ url = file_url, timeout_ms = 2000 })
-            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: file:// GET returned status="
-                .. (fres and fres.status or "nil") .. " body=" .. (fres and fres.body and #fres.body or "-")
-                .. " err=" .. tostring(ferr) .. "\n")
-
-            -- Probe 0b: lunet.fs async read — the SAME uv threadpool +
-            -- completion machinery httpc rides on (uv_fs_read -> worker ->
-            -- completion callback -> lunet_co_resume), minus curl. If this
-            -- hangs on Windows too, the fault is threadpool-wide; if it
-            -- completes, the fault is curl-side.
             io.stderr:write("[HTTPC_HEAD_SMOKE] stage: sending fs probe\n")
             local fs = require("lunet.fs")
             local fok, ffd = pcall(fs.open, tmp, "r")
@@ -170,6 +155,22 @@ lunet.spawn(function()
             else
                 io.stderr:write("[HTTPC_HEAD_SMOKE] stage: fs probe open failed: " .. tostring(ffd) .. "\n")
             end
+
+            -- Probe 1: file:// GET — exercises the whole httpc pipeline
+            -- (worker thread, curl, completion resume) with no sockets.
+            -- A hang here means the uv_worker→resume path; a pass here
+            -- with the loopback probes hanging means the TCP path.
+            local path = tmp
+            if path:sub(1, 1) ~= "/" then
+                path = path:gsub("\\", "/")
+                path = "/" .. path
+            end
+            local file_url = "file://" .. path
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: sending file:// GET (" .. file_url .. ")\n")
+            local fres, ferr = httpc.request({ url = file_url, timeout_ms = 2000 })
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: file:// GET returned status="
+                .. (fres and fres.status or "nil") .. " body=" .. (fres and fres.body and #fres.body or "-")
+                .. " err=" .. tostring(ferr) .. "\n")
 
             local url = "http://127.0.0.1:" .. PORT .. "/"
 

@@ -20,20 +20,28 @@ local TAG_OBJECT = 6
 local function find_lib()
   local env = os.getenv("LUNET_JSONIC_LIB")
   if env and env ~= "" then return env end
-  local suffix = "so"
-  local ok_popen, uname = pcall(io.popen, "uname -s 2>/dev/null")
-  if ok_popen and uname then
-    local sys = uname:read("*l") or ""
-    uname:close()
-    if sys == "Darwin" then suffix = "dylib" end
+  -- Platform suffix/prefix, same rule as paxe.lua and sodium.lua: Windows
+  -- cdylib naming differs from Unix (.dll, no "lib" prefix).
+  local suffix, prefix = "so", "lib"
+  if package.config:sub(1, 1) == "\\" then
+    suffix, prefix = "dll", ""
+  else
+    local ok_popen, uname = pcall(io.popen, "uname -s 2>/dev/null")
+    if ok_popen and uname then
+      local sys = uname:read("*l") or ""
+      uname:close()
+      if sys == "Darwin" then suffix = "dylib" end
+    end
   end
   local script = debug.getinfo(2, "S").source
-  local dir = script:match("^@(.+)/[^/]+$") or "."
-  for _, p in ipairs({dir .. "/target/release/liblunet_jsonic." .. suffix, dir .. "/liblunet_jsonic." .. suffix}) do
+  -- Separator-agnostic split: Windows source paths may carry backslashes.
+  local dir = script:match("^@(.+)[/\\][^/\\]+$") or "."
+  local stem = prefix .. "lunet_jsonic." .. suffix
+  for _, p in ipairs({dir .. "/target/release/" .. stem, dir .. "/" .. stem}) do
     local f = io.open(p, "rb")
     if f then f:close(); return p end
   end
-  error("lunet.jsonic: cannot find liblunet_jsonic." .. suffix, 3)
+  error("lunet.jsonic: cannot find " .. stem, 3)
 end
 
 local _lib = ffi.load(find_lib())
@@ -100,7 +108,7 @@ local function decode_buffer(ptr, len, nullval)
   return value
 end
 
-local dkjson = assert(loadfile((debug.getinfo(1, "S").source:match("^@(.+)/[^/]+$") or ".") .. "/dkjson-encode-v2.10.lua"))()
+local dkjson = assert(loadfile((debug.getinfo(1, "S").source:match("^@(.+)[/\\][^/\\]+$") or ".") .. "/dkjson-encode-v2.10.lua"))()
 local M = dkjson
 
 ---Decode a JSON string.

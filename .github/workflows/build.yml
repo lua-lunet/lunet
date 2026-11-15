@@ -192,25 +192,33 @@ jobs:
       if: runner.os != 'Windows'
       run: xmake verify-hardening
 
-    # Rust ext modules (lnt_shared, jsonic) — built on Unix only:
-    # lnt_shared is POSIX-only by design (mmap/clock_gettime), and the
-    # jsonic Lua loader has no .dll suffix handling yet.
-    - name: Setup Rust toolchain (Unix)
-      if: runner.os != 'Windows'
+    # Rust ext modules (lnt_shared, jsonic): built on every platform. The
+    # anonymous shared region is a page-file-backed section on Windows
+    # (CreateFileMappingA/MapViewOfFile), and the Lua loaders resolve the
+    # .dll cdylib names (no "lib" prefix) — the same rule as paxe/crypto.
+    - name: Setup Rust toolchain
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Cache cargo artifacts (Unix)
-      if: runner.os != 'Windows'
+    - name: Cache cargo artifacts
       uses: Swatinem/rust-cache@v2
       with:
         shared-key: ${{ runner.os }}-rust-ext
 
-    - name: Build Rust ext modules (Unix)
-      if: runner.os != 'Windows'
+    - name: Build Rust ext modules
+      shell: bash
       run: |
         set -euo pipefail
         cargo build --release --manifest-path ext/lnt_shared/Cargo.toml
         cargo build --release --manifest-path ext/jsonic/Cargo.toml
+
+    # The crates' own suites exercise the platform-specific mapping code on
+    # every OS that will ship it.
+    - name: Test Rust ext modules
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo test --manifest-path ext/lnt_shared/Cargo.toml
+        cargo test --manifest-path ext/jsonic/Cargo.toml
 
     # On Linux, contributing/deps/sodium-src.sh installs a source-built
     # libsodium (1.0.22) to /tmp/libsodium so the PAXE cdylib gets
@@ -312,6 +320,22 @@ jobs:
         esac
         if [ ! -f "$ART" ]; then echo "missing artefact: $ART" >&2; exit 1; fi
         echo "crypto cdylib OK: $ART"
+
+    # Same per-platform cdylib naming rule as paxe/crypto (.dll, no "lib"
+    # prefix on Windows).
+    - name: Verify lnt_shared/jsonic cdylib artefacts
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ runner.os }}" in
+          Windows) LNT=ext/lnt_shared/target/release/lnt_shared.dll; JSN=ext/jsonic/target/release/lunet_jsonic.dll ;;
+          macOS)   LNT=ext/lnt_shared/target/release/liblnt_shared.dylib; JSN=ext/jsonic/target/release/liblunet_jsonic.dylib ;;
+          *)       LNT=ext/lnt_shared/target/release/liblnt_shared.so; JSN=ext/jsonic/target/release/liblunet_jsonic.so ;;
+        esac
+        for ART in "$LNT" "$JSN"; do
+          if [ ! -f "$ART" ]; then echo "missing artefact: $ART" >&2; exit 1; fi
+        done
+        echo "lnt_shared/jsonic cdylibs OK: $LNT $JSN"
 
     # Run the busted suite in CI — it previously ran nowhere, which is why
     # spec rot stayed invisible for months. `xmake test` = check-types ->
@@ -550,6 +574,14 @@ jobs:
         Get-ChildItem -Path build -Recurse -Filter *.dll | Where-Object { $_.FullName -match '\\lunet\\' } | ForEach-Object {
           Copy-Item $_.FullName (Join-Path $dist "lunet")
         }
+        # lnt_shared: the shared-dictionary cdylib plus its Lua loader
+        # (page-file-backed section on Windows, same region format).
+        Copy-Item ext\lnt_shared\lnt_shared.lua (Join-Path $dist "lunet")
+        Copy-Item ext\lnt_shared\target\release\lnt_shared.dll (Join-Path $dist "lunet")
+        # lunet.jsonic: the JSON decoder cdylib plus its Lua loader and the
+        # dkjson encoder it wraps.
+        Copy-Item ext\jsonic\jsonic.lua, ext\jsonic\dkjson-encode-v2.10.lua (Join-Path $dist "lunet")
+        Copy-Item ext\jsonic\target\release\lunet_jsonic.dll (Join-Path $dist "lunet")
         # PAXE: Lua FFI loader plus its Rust cdylib. libsodium is linked
         # statically into the cdylib, so the archive stays self-contained.
         Copy-Item ext\paxe\paxe.lua (Join-Path $dist "lunet")
@@ -656,6 +688,78 @@ jobs:
         grep -q '^./SODIUM.md$' <<<"$ARCHIVE_LIST"
         grep -q '^./SODIUM-CN.md$' <<<"$ARCHIVE_LIST"
         echo "VERIFY OK: PAXE.md, PAXE-CN.md, SODIUM.md and SODIUM-CN.md are bundled"
+
+    # Windows twin of the verify above: extract the just-built zip and
+    # exercise every Rust ext module through the packaged binary, using
+    # exactly the layout downstream apps will consume. This step did not
+    # exist when the v0.18.2 Windows zip shipped without jsonic, lnt_shared,
+    # dkjson and http_caps — archive parity is now asserted, not assumed.
+    - name: Verify packaged ext modules (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $verify = Join-Path $env:RUNNER_TEMP ("lunet-verify-" + $env:GITHUB_RUN_ID + "-" + $env:GITHUB_RUN_ATTEMPT)
+        Expand-Archive -Path lunet-windows-amd64.zip -DestinationPath $verify -Force
+        # Archive-membership guard: everything the other platforms ship.
+        $required = @(
+          "lunet\lnt_shared.lua", "lunet\lnt_shared.dll",
+          "lunet\jsonic.lua", "lunet\dkjson-encode-v2.10.lua", "lunet\lunet_jsonic.dll",
+          "lunet\paxe.lua", "lunet\lunet_paxe.dll",
+          "lunet\sodium.lua", "lunet\lunet_crypto.dll",
+          "lunet\http.lua", "lunet\http_context.lua", "lunet\http_router.lua", "lunet\http_caps.lua",
+          "PAXE.md", "PAXE-CN.md", "SODIUM.md", "SODIUM-CN.md"
+        )
+        foreach ($f in $required) {
+          if (-not (Test-Path (Join-Path $verify $f))) { throw "archive is missing $f" }
+        }
+        # The Lua body is written with a single-quoted here-string so pwsh
+        # passes backslashes through untouched.
+        $lua = @'
+        -- Locate the extraction directory from this script's own path; the
+        -- backslash-built package.path below is deliberate: a Windows consumer's
+        -- package.path typically carries backslashes, and the module loaders must
+        -- survive that (they split on both separators).
+        local dir = debug.getinfo(1, "S").source:match("^@(.+)[/\\][^/\\]+$")
+        assert(dir and dir ~= "", "cannot determine verify dir")
+        package.path = dir .. "\\?.lua;" .. package.path
+        local lnt = require("lunet.lnt_shared")
+        local store = lnt.store("verify", 256 * 1024)
+        assert(store:set("k", "v"))
+        assert(store:get("k") == "v")
+        local json = require("lunet.jsonic")
+        local v = json.decode('{"a":1,"s":"ok"}')
+        assert(v.a == 1 and v.s == "ok")
+        assert(json.encode({ a = 1 }, { keyorder = { "a" } }) == '{"a":1}')
+        local paxe = require("lunet.paxe")
+        assert(paxe.init())
+        assert(paxe.set_local_id(1))
+        assert(paxe.keystore_set(2, 0, string.rep("\x42", 32)))
+        local msg = "archive check"
+        local frame = assert(paxe.seal(msg, 2, 100))
+        assert(#frame == #msg + paxe.OVERHEAD_STANDARD)
+        local s = paxe.stats()
+        assert(type(s.rx_total) == "number" and type(s.tx_oversize) == "number")
+        paxe.shutdown()
+        -- lunet.sodium: known-answer vectors, straight from the archive.
+        local sodium = require("lunet.sodium")
+        local function hex(str)
+          return (str:gsub(".", function(c) return string.format("%02x", c:byte()) end))
+        end
+        assert(hex(sodium.sha256("abc")) ==
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        assert(hex(sodium.hmac_sha256("Hi There", string.rep("\x0b", 32))) ==
+          "198a607eb44bfbc69903a0f1cf2bbdc5ba0aa3f3d9ae3c1c7a3b1696a0b68cf7")
+        assert(#sodium.random(32) == 32 and sodium.random(32) ~= sodium.random(32))
+        print("VERIFY OK: lunet.lnt_shared + lunet.jsonic + lunet.paxe + lunet.sodium work from packaged archive")
+        '@
+        $luaPath = Join-Path $verify "verify_ext.lua"
+        Set-Content -Path $luaPath -Value $lua -Encoding ASCII
+        $lunet = Get-ChildItem -Path $verify -Filter "lunet-run.exe" | Select-Object -First 1
+        if (-not $lunet) { throw "lunet-run.exe not found in archive" }
+        & $lunet.FullName $luaPath
+        if ($LASTEXITCODE -ne 0) { throw "verify_ext.lua failed (exit $LASTEXITCODE)" }
+        Write-Host "VERIFY OK: Windows archive carries the full lunet/ module set"
 
     # Keep these steps byte-identical to the documented commands in
     # docs/EMBEDDING.md so CI verifies exactly what users are told to run.

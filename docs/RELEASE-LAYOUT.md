@@ -30,13 +30,16 @@ lunet/                              # extension modules
                                     #   (lunet.http_context)
   http_router.lua                   # method+path router with :params and
                                     #   middleware (lunet.http_router)
+  http_caps.lua                     # capability constants (lunet.http_caps)
   security.lua                      # crypto + JWT HS256 helpers
                                     #   (lunet.security)
   liblnt_shared.so                  # lnt_shared shared dictionary (Linux)
-  liblnt_shared.dylib               #   (macOS - not shipped on Windows)
+  liblnt_shared.dylib               #   (macOS)
+  lnt_shared.dll                    #   (Windows)
   lnt_shared.lua                    # lnt_shared Lua FFI loader
   liblunet_jsonic.so                # jsonic streaming JSON decoder (Linux)
-  liblunet_jsonic.dylib             #   (macOS - not shipped on Windows)
+  liblunet_jsonic.dylib             #   (macOS)
+  lunet_jsonic.dll                  #   (Windows)
   jsonic.lua                        # jsonic Lua FFI loader + encoder
   dkjson-encode-v2.10.lua           # ordered-JSON encoder (used by jsonic)
   liblunet_paxe.so                  # PAXE datagram encryption (Linux)
@@ -148,8 +151,10 @@ cdef syntax and can be pasted directly into a `ffi.cdef[[...]]` block.
 
 ## lnt_shared - shared dictionary
 
-POSIX-only (Linux / macOS). Provides an in-memory key-value store backed by
-`mmap(MAP_SHARED|MAP_ANONYMOUS)` with TTL-based expiry.
+Cross-platform (Linux / macOS / Windows). Provides an in-memory key-value
+store backed by an anonymous shared region - `mmap(MAP_SHARED|MAP_ANONYMOUS)`
+on Unix, a page-file-backed section (`CreateFileMappingA`/`MapViewOfFile`) on
+Windows - with TTL-based expiry.
 
 ### FFI declarations
 
@@ -270,8 +275,8 @@ lib.ngx_shared_close(h)
 
 ## jsonic - streaming JSON codec
 
-POSIX-only (Linux / macOS). Provides a streaming JSON decoder (with an
-Lua-side encoder).
+Cross-platform (Linux / macOS / Windows). Provides a streaming JSON decoder
+(with an Lua-side encoder).
 
 ### FFI declarations
 
@@ -373,9 +378,10 @@ and `conn:rollback()` methods to the native driver connections.
   and `openssl`.
 - **macOS (arm64)**: All extensions are included. The archive is built on
   the `macos-latest` GitHub runner (arm64).
-- **Windows (amd64)**: Rust extensions (`lnt_shared`, `jsonic`) are not
-  included because the underlying crates are POSIX-only. Database drivers
-  and transaction wrappers are shipped.
+- **Windows (amd64)**: All extensions are included. `lnt_shared` and
+  `jsonic` build their cdylibs on the Windows runner (page-file-backed
+  section and MSVC-linked Rust). Database drivers and transaction wrappers
+  are shipped.
 
 ### Runtime dependencies
 

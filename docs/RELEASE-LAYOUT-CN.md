@@ -29,13 +29,16 @@ lunet/                              # 扩展模块
   http_context.lua                  # 每请求上下文对象（lunet.http_context）
   http_router.lua                   # 带 :参数与方法中间件的方法+路径路由器
                                     #   （lunet.http_router）
+  http_caps.lua                     # 能力常量（lunet.http_caps）
   security.lua                      # 加密 + JWT HS256 辅助模块
                                     #   （lunet.security）
   liblnt_shared.so                  # lnt_shared 共享字典（Linux）
-  liblnt_shared.dylib               #   （macOS，Windows 不提供）
+  liblnt_shared.dylib               #   （macOS）
+  lnt_shared.dll                    #   （Windows）
   lnt_shared.lua                    # lnt_shared Lua FFI 加载器
   liblunet_jsonic.so                # jsonic 流式 JSON 解码器（Linux）
-  liblunet_jsonic.dylib             #   （macOS，Windows 不提供）
+  liblunet_jsonic.dylib             #   （macOS）
+  lunet_jsonic.dll                  #   （Windows）
   jsonic.lua                        # jsonic Lua FFI 加载器 + 编码器
   dkjson-encode-v2.10.lua           # 有序 JSON 编码器（jsonic 依赖）
   liblunet_paxe.so                  # PAXE 数据报加密（Linux）
@@ -136,8 +139,9 @@ local json  = require("lunet.jsonic")
 
 ## lnt_shared - 共享字典
 
-仅限 POSIX 平台（Linux / macOS）。基于 `mmap(MAP_SHARED|MAP_ANONYMOUS)` 的
-内存键值存储，支持 TTL 过期机制。
+跨平台（Linux / macOS / Windows）。基于匿名共享区域的内存键值存储 —— Unix 上
+为 `mmap(MAP_SHARED|MAP_ANONYMOUS)`，Windows 上为页文件后备的 section
+（`CreateFileMappingA`/`MapViewOfFile`）—— 支持 TTL 过期机制。
 
 ### FFI 声明
 
@@ -256,7 +260,7 @@ lib.ngx_shared_close(h)
 
 ## jsonic - 流式 JSON 编解码器
 
-仅限 POSIX 平台（Linux / macOS）。提供流式 JSON 解码器（搭配 Lua 端编码器）。
+跨平台（Linux / macOS / Windows）。提供流式 JSON 解码器（搭配 Lua 端编码器）。
 
 ### FFI 声明
 
@@ -349,8 +353,9 @@ assert(lib.lunet_sodium_sha256("abc", 3, out) == 0)
   链接系统 `glibc` 和 `openssl`。
 - **macOS (arm64)**：包含所有扩展。在 `macos-latest` GitHub runner（arm64）
   上构建。
-- **Windows (amd64)**：Rust 扩展（`lnt_shared`、`jsonic`）因底层 crate 仅限
-  POSIX 平台而未包含。数据库驱动和事务封装正常提供。
+- **Windows (amd64)**：包含所有扩展。`lnt_shared` 与 `jsonic` 在 Windows
+  runner 上构建其 cdylib（页文件后备 section 与 MSVC 链接的 Rust）。数据库
+  驱动和事务封装正常提供。
 
 ### 运行时依赖
 

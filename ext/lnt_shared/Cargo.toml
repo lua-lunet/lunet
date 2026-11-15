@@ -3,7 +3,7 @@ name = "lnt-shared"
 version = "0.1.0"
 edition = "2024"
 description = """
-lunet-style shared dictionary for LuaJIT via FFI (Linux/macOS).
+lunet-style shared dictionary for LuaJIT via FFI (Linux/macOS/Windows).
 This is a lunet-native shared dictionary extension.
 """
 license = "MIT"

@@ -67,6 +67,7 @@ lunet.spawn(function()
         os.exit(1)
         return
     end
+    io.stderr:write("[HTTPC_HEAD_SMOKE] stage: listening\n")
 
     local function serve_conn(conn)
         local buf = ""
@@ -87,6 +88,7 @@ lunet.spawn(function()
                 local req_line = head:match("^[^\r\n]*")
                 local method = req_line and req_line:match("^(%S+)%s")
                 if method then
+                    io.stderr:write("[HTTPC_HEAD_SMOKE] stage: server saw " .. method .. "\n")
                     served[#served + 1] = method
                     if method == "HEAD" then
                         -- Content-Length advertises a body size, but HEAD
@@ -103,6 +105,7 @@ lunet.spawn(function()
                             "Connection: keep-alive\r\n" ..
                             "\r\n" .. string.rep("x", BODY_LEN))
                     end
+                    io.stderr:write("[HTTPC_HEAD_SMOKE] stage: server wrote " .. method .. " response\n")
                 end
             end
         end
@@ -129,13 +132,60 @@ lunet.spawn(function()
     -- (the watchdog would still terminate the process).
     lunet.spawn(function()
         local ok, perr = pcall(function()
+            -- Probe 0: lunet.fs async read — the SAME uv threadpool +
+            -- completion machinery httpc rides on (uv_fs_read -> worker ->
+            -- completion callback -> lunet_co_resume), minus curl. Runs
+            -- FIRST so its datapoint lands even if the httpc probes hang.
+            -- If this hangs on Windows too, the fault is threadpool-wide;
+            -- if it completes, the fault is httpc/curl-side.
+            local tmp = os.tmpname()
+            local f = io.open(tmp, "wb")
+            f:write(string.rep("y", BODY_LEN))
+            f:close()
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: sending fs probe\n")
+            local fs = require("lunet.fs")
+            local fok, ffd = pcall(fs.open, tmp, "r")
+            if fok and ffd then
+                local rdata, rerr = fs.read(ffd, BODY_LEN)
+                io.stderr:write("[HTTPC_HEAD_SMOKE] stage: fs probe returned len="
+                    .. (rdata and #rdata or "-") .. " err=" .. tostring(rerr) .. "\n")
+                fs.close(ffd)
+            else
+                io.stderr:write("[HTTPC_HEAD_SMOKE] stage: fs probe open failed: " .. tostring(ffd) .. "\n")
+            end
+
+            -- Probe 1: file:// GET — exercises the whole httpc pipeline
+            -- (worker thread, curl, completion resume) with no sockets.
+            -- A hang here means the uv_worker→resume path; a pass here
+            -- with the loopback probes hanging means the TCP path.
+            local path = tmp
+            if path:sub(1, 1) ~= "/" then
+                path = path:gsub("\\", "/")
+                path = "/" .. path
+            end
+            local file_url = "file://" .. path
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: sending file:// GET (" .. file_url .. ")\n")
+            local fres, ferr = httpc.request({ url = file_url, timeout_ms = 2000 })
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: file:// GET returned status="
+                .. (fres and fres.status or "nil") .. " body=" .. (fres and fres.body and #fres.body or "-")
+                .. " err=" .. tostring(ferr) .. "\n")
+
             local url = "http://127.0.0.1:" .. PORT .. "/"
 
+            -- Probe 1: plain loopback GET before the HEAD case.
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: sending loopback GET probe\n")
+            local gres, gerr = httpc.request({ url = url, timeout_ms = 2000 })
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: loopback GET probe returned status="
+                .. (gres and gres.status or "nil") .. " body=" .. (gres and gres.body and #gres.body or "-")
+                .. " err=" .. tostring(gerr) .. "\n")
+
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: sending HEAD\n")
             local resp, err = httpc.request({
                 url = url,
                 method = "HEAD",
                 timeout_ms = TIMEOUT_MS,
             })
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: HEAD returned\n")
             if not resp then
                 fail("HEAD returned no response (expected immediate headers): " .. tostring(err))
             else
@@ -152,11 +202,13 @@ lunet.spawn(function()
                 end
             end
 
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: sending GET\n")
             local resp2, err2 = httpc.request({
                 url = url,
                 method = "GET",
                 timeout_ms = TIMEOUT_MS,
             })
+            io.stderr:write("[HTTPC_HEAD_SMOKE] stage: GET returned\n")
             if not resp2 then
                 fail("GET returned no response: " .. tostring(err2))
             else
@@ -191,6 +243,7 @@ lunet.spawn(function()
         end
 
         socket.close(listener)
+        io.stderr:write("[HTTPC_HEAD_SMOKE] stage: finishing\n")
         finish()
     end)
 end)

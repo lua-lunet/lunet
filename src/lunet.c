@@ -548,6 +548,14 @@ int lunet_runtime_init(lunet_runtime_t **out_runtime,
   set_default_luaL(runtime->L);
   lunet_open(runtime->L);
   lunet_runtime_configure_module_paths(runtime->L, options ? options->executable_path : NULL);
+  /* Hand the runtime's event loop to modules loaded from DLLs: an
+   * extension may carry its own libuv copy (the Windows cdylibs do), and
+   * a private uv_default_loop() there is never polled by the runtime, so
+   * queued work would complete on a loop nobody runs. The registry entry
+   * travels through the Lua state, which every module already shares. */
+  lua_pushliteral(runtime->L, "__lunet_uv_loop");
+  lua_pushlightuserdata(runtime->L, uv_default_loop());
+  lua_rawset(runtime->L, LUA_REGISTRYINDEX);
   /* Arm the cross-thread stop wakeup now: uv_async_init is only safe on the
    * loop thread, and an idle uv_async_t does not keep the loop alive. */
   if (uv_async_init(uv_default_loop(), &runtime->stop_wakeup, lunet_stop_wakeup_cb) != 0) {

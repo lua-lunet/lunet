@@ -16,7 +16,7 @@
 | 依赖 | 何时 | 原因 |
 |------------|------|-----|
 | libsodium（经 `liblunet_crypto`） | 始终需要 - `lunet.sodium` 在加载时 require | HMAC-SHA-256 与 base64 原语 |
-| `lunet.jsonic` | 仅 JWT - 首次使用时加载 | claims JSON 编解码；其加载器随本模块一起打包在压缩包中（其原生解码器目前仅限 POSIX） |
+| `lunet.jsonic` | 仅 JWT - 首次使用时加载 | claims JSON 编解码；其加载器随本模块一起打包在压缩包中（其原生解码器在所有平台构建） |
 
 在发布压缩包中，各加载器并排位于 `lunet/` 目录下，通过运行时的 `lunet/?.lua` 路径条目解析 - 见 [docs/RELEASE-LAYOUT-CN.md](RELEASE-LAYOUT-CN.md)。在仓库内或任何 LuaJIT 程序中，直接加载文件：
 

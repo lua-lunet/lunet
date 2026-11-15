@@ -95,6 +95,37 @@ xmake stress   # Debug build + concurrent stress test (must pass)
 xmake release  # Full release build (runs lint, tests, stress and the easy-memory preflight first)
 ```
 
+## The Event Loop and Extension Modules
+
+Every C extension module (`httpc`, and any future module built as a separate
+shared library) must run its asynchronous work on the loop the runtime
+drives — never on `uv_default_loop()` as resolved inside the extension
+itself.
+
+On Windows each cdylib carries its own copy of the core sources and can link
+its own libuv, so the process ends up with two `uv_loop_t` instances: the
+host binary's (the one `uv_run` polls) and the extension's private default
+loop (one nobody ever runs). Work queued on the private loop executes on the
+threadpool — the worker and curl succeed — but the completion callback is
+never dispatched to the host loop, so the Lua coroutine hangs forever. On
+macOS the dynamic libuv is shared, which is why the bug only surfaced on
+Windows.
+
+The fix is a handoff through the Lua state, which every module already
+shares:
+
+- `lunet_runtime_init` (src/lunet.c) stores the runtime's loop pointer in
+  the registry under the string key `__lunet_uv_loop`.
+- An extension reads it (`lua_pushliteral(L, "__lunet_uv_loop");
+  lua_rawget(L, LUA_REGISTRYINDEX)`) and queues work on that loop, falling
+  back to its own `uv_default_loop()` when the entry is absent (e.g. when
+  the module is exercised outside the runtime).
+
+libuv's threadpool completion path is loop-relative (`w->loop`, `loop->wq`,
+`loop->wq_async`), and every target in this repository pins the same libuv
+version, so the handoff is safe; it requires no import-table changes and
+works regardless of which module owns which libuv copy.
+
 ## Debugging Notes: Lua-C Stack Issues
 
 ### Problem: Parameter count mismatch in prepared statements

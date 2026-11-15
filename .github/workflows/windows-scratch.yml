@@ -1,0 +1,312 @@
+name: Windows scratch build
+#
+# Minimal windows-only clone of the build.yml Windows leg. Purpose: iterate
+# on Windows parity fixes (issue #268 — the Windows release archive shipped
+# without jsonic, lnt_shared, dkjson, http_caps) without burning the full
+# four-OS matrix on the very slow Windows runner. It runs the same steps,
+# adds the new Rust ext build/test/verify steps and the new packaged-archive
+# verification, and stops short of the SDK compile leg (unrelated here).
+#
+# This workflow triggers only on the issue268 branch and manual dispatch, so
+# it never runs on main. Retire it once the fix is merged.
+
+on:
+  push:
+    branches: [ 'issue268' ]
+  workflow_dispatch:
+
+concurrency:
+  group: windows-scratch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: windows-only scratch leg
+    runs-on: blacksmith-4vcpu-windows-2025
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.ref }}
+
+    - name: Cache vcpkg
+      uses: actions/cache@v4
+      with:
+        path: |
+          vcpkg/installed
+          vcpkg/packages
+        key: ${{ runner.os }}-vcpkg-${{ hashFiles('xmake.lua') }}-${{ hashFiles('vcpkg.json', 'ports/*/vcpkg.json') }}
+        restore-keys: |
+          ${{ runner.os }}-vcpkg-
+
+    - name: Install xmake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: "3.1.2"
+
+    - name: Setup vcpkg (Windows)
+      uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgGitCommitId: '66c0373dc7fca549e5803087b9487edfe3aca0a1'
+      env:
+        VCPKG_BINARY_SOURCES: 'clear;nuget,readwrite'
+
+    - name: Install Dependencies (Windows)
+      shell: pwsh
+      run: pwsh contributing/deps/windows.ps1
+
+    - name: Configure (Windows)
+      shell: pwsh
+      run: |
+        # Persist vcpkg/MSVC environment for later steps; $env: alone
+        # only lasts for the current step.
+        "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> $env:GITHUB_ENV
+        "VCPKG_DEFAULT_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+        "CL=/MP" >> $env:GITHUB_ENV
+        "CI=true" >> $env:GITHUB_ENV
+        xmake f -m release -y
+
+    - name: Build (Windows)
+      shell: pwsh
+      run: |
+        xmake build
+        xmake build lunet-static
+        xmake build sdk-api-test
+        xmake build lunet-sqlite3
+        xmake build lunet-httpc
+        xmake build lunet-postgres
+        xmake build lunet-mysql
+
+    - name: Hardening verification (Windows)
+      shell: pwsh
+      run: xmake verify-hardening
+
+    # Rust ext modules (lnt_shared, jsonic): built on every platform. The
+    # anonymous shared region is a page-file-backed section on Windows
+    # (CreateFileMappingA/MapViewOfFile), and the Lua loaders resolve the
+    # .dll cdylib names (no "lib" prefix) — the same rule as paxe/crypto.
+    - name: Setup Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache cargo artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ runner.os }}-rust-ext
+
+    - name: Build Rust ext modules
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo build --release --manifest-path ext/lnt_shared/Cargo.toml
+        cargo build --release --manifest-path ext/jsonic/Cargo.toml
+
+    - name: Test Rust ext modules
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo test --manifest-path ext/lnt_shared/Cargo.toml
+        cargo test --manifest-path ext/jsonic/Cargo.toml
+
+    # PAXE (ext/paxe): the C ABI cdylib. The protocol core is vendored
+    # byte-exact from the upstream release tag at ext/paxe/paxe-core, so the
+    # build needs no network. ext/paxe/rust-toolchain.toml pins the
+    # toolchain and rustup auto-installs it on first use.
+    - name: Build PAXE Rust crate
+      working-directory: ext/paxe
+      run: cargo build --release
+
+    - name: Test PAXE Rust crate
+      working-directory: ext/paxe
+      run: cargo test
+
+    - name: Verify PAXE cdylib artefact
+      shell: bash
+      run: |
+        set -euo pipefail
+        ART=ext/paxe/target/release/lunet_paxe.dll
+        if [ ! -f "$ART" ]; then echo "missing artefact: $ART" >&2; exit 1; fi
+        echo "PAXE cdylib OK: $ART"
+
+    - name: Build crypto Rust crate
+      working-directory: ext/crypto
+      run: cargo build --release
+
+    - name: Test crypto Rust crate
+      working-directory: ext/crypto
+      run: cargo test
+
+    - name: Verify crypto cdylib artefact
+      shell: bash
+      run: |
+        set -euo pipefail
+        ART=ext/crypto/target/release/lunet_crypto.dll
+        if [ ! -f "$ART" ]; then echo "missing artefact: $ART" >&2; exit 1; fi
+        echo "crypto cdylib OK: $ART"
+
+    - name: Verify lnt_shared/jsonic cdylib artefacts
+      shell: bash
+      run: |
+        set -euo pipefail
+        LNT=ext/lnt_shared/target/release/lnt_shared.dll
+        JSN=ext/jsonic/target/release/lunet_jsonic.dll
+        for ART in "$LNT" "$JSN"; do
+          if [ ! -f "$ART" ]; then echo "missing artefact: $ART" >&2; exit 1; fi
+        done
+        echo "lnt_shared/jsonic cdylibs OK: $LNT $JSN"
+
+    - name: C SDK lifecycle test (Windows)
+      shell: pwsh
+      run: |
+        $test = Get-ChildItem -Path build -Recurse -Filter "sdk-api-test.exe" | Select-Object -First 1
+        if (-not $test) { throw "sdk-api-test.exe not found" }
+        & $test.FullName
+        if ($LASTEXITCODE -ne 0) { throw "sdk-api-test failed" }
+
+    - name: Examples compile check (Windows)
+      shell: pwsh
+      run: |
+        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
+        if (-not $lunet) { throw "lunet-run.exe not found" }
+        & $lunet.FullName test/ci_examples_compile.lua
+
+    - name: SQLite3 example smoke (Windows)
+      shell: pwsh
+      run: |
+        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
+        if (-not $lunet) { throw "lunet-run.exe not found" }
+        & $lunet.FullName examples/03_db_sqlite3.lua
+
+    - name: httpc HEAD smoke (Windows)
+      timeout-minutes: 5
+      shell: pwsh
+      run: |
+        $lunet = Get-ChildItem -Path build -Recurse -Filter "lunet-run.exe" | Select-Object -First 1
+        if (-not $lunet) { throw "lunet-run.exe not found" }
+        & $lunet.FullName test/smoke_httpc_head.lua
+
+    - name: Package release archive (Windows)
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $dist = Join-Path $env:RUNNER_TEMP ("lunet-dist-" + $env:GITHUB_RUN_ID + "-" + $env:GITHUB_RUN_ATTEMPT)
+        New-Item -ItemType Directory -Path (Join-Path $dist "lunet") -Force | Out-Null
+        Copy-Item (Get-ChildItem -Path build -Recurse -Filter lunet-run.exe | Select-Object -First 1).FullName (Join-Path $dist "lunet-run.exe")
+        Copy-Item (Get-ChildItem -Path build -Recurse -Filter lunet.dll | Select-Object -First 1).FullName (Join-Path $dist "lunet.dll")
+        Get-ChildItem -Path build -Recurse -Filter *.dll | Where-Object { $_.FullName -match '\\lunet\\' } | ForEach-Object {
+          Copy-Item $_.FullName (Join-Path $dist "lunet")
+        }
+        # lnt_shared: the shared-dictionary cdylib plus its Lua loader
+        # (page-file-backed section on Windows, same region format).
+        Copy-Item ext\lnt_shared\lnt_shared.lua (Join-Path $dist "lunet")
+        Copy-Item ext\lnt_shared\target\release\lnt_shared.dll (Join-Path $dist "lunet")
+        # lunet.jsonic: the JSON decoder cdylib plus its Lua loader and the
+        # dkjson encoder it wraps.
+        Copy-Item ext\jsonic\jsonic.lua, ext\jsonic\dkjson-encode-v2.10.lua (Join-Path $dist "lunet")
+        Copy-Item ext\jsonic\target\release\lunet_jsonic.dll (Join-Path $dist "lunet")
+        # PAXE: Lua FFI loader plus its Rust cdylib. libsodium is linked
+        # statically into the cdylib, so the archive stays self-contained.
+        Copy-Item ext\paxe\paxe.lua (Join-Path $dist "lunet")
+        Copy-Item ext\paxe\target\release\lunet_paxe.dll (Join-Path $dist "lunet")
+        # lunet.sodium: the standalone libsodium-primitives cdylib plus its
+        # Lua loader (own static libsodium link, same self-contained rule).
+        Copy-Item ext\crypto\sodium.lua (Join-Path $dist "lunet")
+        Copy-Item ext\crypto\target\release\lunet_crypto.dll (Join-Path $dist "lunet")
+        # sqlite3 Lua loader: the public lunet.sqlite3 surface + the
+        # path-keyed handle cache (the binary registers as lunet.sqlite3core).
+        Copy-Item ext\sqlite3\sqlite3.lua (Join-Path $dist "lunet")
+        # Pure-Lua HTTP extension modules: lunet.http (framing + responses
+        # + opt-in CORS), lunet.http_context (per-request context) and
+        # lunet.http_router (routes + middleware).
+        Copy-Item ext\http\http.lua, ext\http\http_context.lua, ext\http\http_caps.lua (Join-Path $dist "lunet")
+        Copy-Item ext\http\router.lua (Join-Path $dist "lunet\http_router.lua")
+        # lunet.security: pure-Lua crypto + JWT HS256 over lunet.sodium
+        # and lunet.jsonic (no binary of its own).
+        Copy-Item ext\security\security.lua (Join-Path $dist "lunet")
+        # DB transaction wrappers: one per driver, deliberately not shared.
+        Copy-Item ext\postgres\postgres_tx.lua, ext\mysql\mysql_tx.lua (Join-Path $dist "lunet")
+        # Documentation: copy every docs\*.md (and its -CN.md counterpart)
+        # into the archive by default, excluding internal-only and
+        # maintainer-only docs that are not meant for end users.
+        $DocExcludes = @("CONTRIBUTING-INTERNALS.md", "CONTRIBUTING-INTERNALS-CN.md", "BADGES.md", "BADGES-CN.md", "EASY_MEMORY_REPORT.md", "EASY_MEMORY_REPORT-CN.md", "WORKFLOW.md", "WORKFLOW-CN.md", "XMAKE_INTEGRATION.md", "XMAKE_INTEGRATION-CN.md")
+        Get-ChildItem -Path docs -Filter *.md | Where-Object { $DocExcludes -notcontains $_.Name } | ForEach-Object {
+          Copy-Item $_.FullName $dist
+        }
+        # LuaCATS type annotations
+        Copy-Item -Recurse types (Join-Path $dist "types")
+        Compress-Archive -Path (Join-Path $dist "*") -DestinationPath lunet-windows-amd64.zip -Force
+
+    # The packaged-archive verification: extract the just-built zip and
+    # exercise every Rust ext module through the packaged binary, using
+    # exactly the layout downstream apps will consume. This is the step the
+    # v0.18.2 release lacked — archive parity is asserted, not assumed.
+    - name: Verify packaged ext modules (Windows)
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $verify = Join-Path $env:RUNNER_TEMP ("lunet-verify-" + $env:GITHUB_RUN_ID + "-" + $env:GITHUB_RUN_ATTEMPT)
+        Expand-Archive -Path lunet-windows-amd64.zip -DestinationPath $verify -Force
+        # Archive-membership guard: everything the other platforms ship.
+        $required = @(
+          "lunet\lnt_shared.lua", "lunet\lnt_shared.dll",
+          "lunet\jsonic.lua", "lunet\dkjson-encode-v2.10.lua", "lunet\lunet_jsonic.dll",
+          "lunet\paxe.lua", "lunet\lunet_paxe.dll",
+          "lunet\sodium.lua", "lunet\lunet_crypto.dll",
+          "lunet\http.lua", "lunet\http_context.lua", "lunet\http_router.lua", "lunet\http_caps.lua",
+          "PAXE.md", "PAXE-CN.md", "SODIUM.md", "SODIUM-CN.md"
+        )
+        foreach ($f in $required) {
+          if (-not (Test-Path (Join-Path $verify $f))) { throw "archive is missing $f" }
+        }
+        # The Lua body is written with a single-quoted here-string so pwsh
+        # passes backslashes through untouched.
+        $lua = @'
+        -- Locate the extraction directory from this script's own path; the
+        -- backslash-built package.path below is deliberate: a Windows consumer's
+        -- package.path typically carries backslashes, and the module loaders must
+        -- survive that (they split on both separators).
+        local dir = debug.getinfo(1, "S").source:match("^@(.+)[/\\][^/\\]+$")
+        assert(dir and dir ~= "", "cannot determine verify dir")
+        package.path = dir .. "\\?.lua;" .. package.path
+        local lnt = require("lunet.lnt_shared")
+        local store = lnt.store("verify", 256 * 1024)
+        assert(store:set("k", "v"))
+        assert(store:get("k") == "v")
+        local json = require("lunet.jsonic")
+        local v = json.decode('{"a":1,"s":"ok"}')
+        assert(v.a == 1 and v.s == "ok")
+        assert(json.encode({ a = 1 }, { keyorder = { "a" } }) == '{"a":1}')
+        local paxe = require("lunet.paxe")
+        assert(paxe.init())
+        assert(paxe.set_local_id(1))
+        assert(paxe.keystore_set(2, 0, string.rep("\x42", 32)))
+        local msg = "archive check"
+        local frame = assert(paxe.seal(msg, 2, 100))
+        assert(#frame == #msg + paxe.OVERHEAD_STANDARD)
+        local s = paxe.stats()
+        assert(type(s.rx_total) == "number" and type(s.tx_oversize) == "number")
+        paxe.shutdown()
+        -- lunet.sodium: known-answer vectors, straight from the archive.
+        local sodium = require("lunet.sodium")
+        local function hex(str)
+          return (str:gsub(".", function(c) return string.format("%02x", c:byte()) end))
+        end
+        assert(hex(sodium.sha256("abc")) ==
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        assert(hex(sodium.hmac_sha256("Hi There", string.rep("\x0b", 32))) ==
+          "198a607eb44bfbc69903a0f1cf2bbdc5ba0aa3f3d9ae3c1c7a3b1696a0b68cf7")
+        assert(#sodium.random(32) == 32 and sodium.random(32) ~= sodium.random(32))
+        print("VERIFY OK: lunet.lnt_shared + lunet.jsonic + lunet.paxe + lunet.sodium work from packaged archive")
+        '@
+        $luaPath = Join-Path $verify "verify_ext.lua"
+        Set-Content -Path $luaPath -Value $lua -Encoding ASCII
+        $lunet = Get-ChildItem -Path $verify -Filter "lunet-run.exe" | Select-Object -First 1
+        if (-not $lunet) { throw "lunet-run.exe not found in archive" }
+        & $lunet.FullName $luaPath
+        if ($LASTEXITCODE -ne 0) { throw "verify_ext.lua failed (exit $LASTEXITCODE)" }
+        Write-Host "VERIFY OK: Windows archive carries the full lunet/ module set"
+
+    - name: Upload release archive (for inspection)
+      uses: actions/upload-artifact@v4
+      with:
+        name: scratch-release-windows
+        path: lunet-windows-amd64.zip

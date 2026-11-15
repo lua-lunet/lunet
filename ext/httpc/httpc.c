@@ -67,6 +67,7 @@ typedef struct {
   char *body;
   size_t body_len;
   long timeout_ms;
+  char curl_err[CURL_ERROR_SIZE];
   size_t max_body_bytes;
   int insecure;
 
@@ -159,6 +160,8 @@ static void httpc_work_cb(uv_work_t *req) {
     snprintf(ctx->err, sizeof(ctx->err), "curl init failed");
     return;
   }
+  ctx->curl_err[0] = '\0';
+  curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, ctx->curl_err);
 
   curl_easy_setopt(curl, CURLOPT_URL, ctx->url);
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -205,7 +208,11 @@ static void httpc_work_cb(uv_work_t *req) {
   } else if (ctx->err[0] != '\0') {
     // keep existing message (e.g. OOM)
   } else if (rc != CURLE_OK) {
-    snprintf(ctx->err, sizeof(ctx->err), "%s", curl_easy_strerror(rc));
+    if (ctx->curl_err[0] != '\0') {
+      snprintf(ctx->err, sizeof(ctx->err), "%s", ctx->curl_err);
+    } else {
+      snprintf(ctx->err, sizeof(ctx->err), "%s", curl_easy_strerror(rc));
+    }
   } else {
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
@@ -494,7 +501,18 @@ static int httpc_request(lua_State *L) {
 
   lunet_coref_create(L, ctx->co_ref);
 
-  int rc = uv_queue_work(uv_default_loop(), &ctx->req, httpc_work_cb, httpc_after_cb);
+  /* The runtime hands its loop through the Lua registry: a DLL module may
+   * carry its own libuv copy (Windows cdylibs do), and a private
+   * uv_default_loop() there is never polled by the host, so queued work
+   * would complete on a loop nobody runs. */
+  lua_pushliteral(L, "__lunet_uv_loop");
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  uv_loop_t *req_loop = lua_touserdata(L, -1);
+  lua_pop(L, 1);
+  if (!req_loop) {
+    req_loop = uv_default_loop();
+  }
+  int rc = uv_queue_work(req_loop, &ctx->req, httpc_work_cb, httpc_after_cb);
   if (rc < 0) {
     lunet_coref_release(L, ctx->co_ref);
     lua_pushnil(L);

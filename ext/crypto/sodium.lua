@@ -78,7 +78,8 @@ local function find_lib()
     end
   end
   local script = debug.getinfo(2, "S").source
-  local dir = script:match("^@(.+)/[^/]+$") or "."
+  -- Separator-agnostic split: Windows source paths may carry backslashes.
+  local dir = script:match("^@(.+)[/\\][^/\\]+$") or "."
   for _, p in ipairs({
     dir .. "/target/release/" .. prefix .. "lunet_crypto." .. suffix,
     dir .. "/" .. prefix .. "lunet_crypto." .. suffix,

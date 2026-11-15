@@ -27,7 +27,7 @@ The extension declares what it needs, the operator installs it:
 | Dependency | When | Why |
 |------------|------|-----|
 | libsodium (via `liblunet_crypto`) | Always - `lunet.sodium` is required at load time | HMAC-SHA-256 and base64 primitives |
-| `lunet.jsonic` | JWT only - loaded on first use | Claims JSON encode/decode; the loader ships in the archive beside this module (its native decoder is POSIX-only for now) |
+| `lunet.jsonic` | JWT only - loaded on first use | Claims JSON encode/decode; the loader ships in the archive beside this module (its native decoder is built on every platform) |
 
 In a release archive the loaders sit side by side in `lunet/` and resolve
 through the runtime's `lunet/?.lua` path entry - see

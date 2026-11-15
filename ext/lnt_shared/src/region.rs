@@ -28,6 +28,7 @@
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+#[cfg(unix)]
 use libc::{
     MAP_ANONYMOUS, MAP_FAILED, MAP_SHARED, PROT_READ, PROT_WRITE, mmap, munmap,
 };
@@ -141,22 +142,13 @@ impl Region {
             return None;
         }
 
-        let ptr = unsafe {
-            mmap(
-                std::ptr::null_mut(),
-                size,
-                PROT_READ | PROT_WRITE,
-                MAP_SHARED | MAP_ANONYMOUS,
-                -1,
-                0,
-            )
-        };
-        if ptr == MAP_FAILED {
+        let ptr = map_anonymous(size)?;
+        if ptr.is_null() {
             return None;
         }
 
         let mut r = Region {
-            ptr: ptr as *mut u8,
+            ptr,
             size,
         };
         r.init();
@@ -273,10 +265,116 @@ impl Region {
     }
 }
 
+// ── Anonymous mapping ────────────────────────────────────────────────────────
+
+/// Allocate a `MAP_SHARED | MAP_ANONYMOUS`-equivalent region of `size` bytes.
+///
+/// Unix maps it directly. Windows has no anonymous mmap; the equivalent is a
+/// page-file-backed section (`CreateFileMappingA` with `INVALID_HANDLE_VALUE`)
+/// mapped read/write with `MapViewOfFile`, which yields zero-initialised
+/// shared memory of exactly `size` bytes — the same semantics the hash table
+/// and bump allocator expect (region contents never persist across processes).
+#[cfg(unix)]
+fn map_anonymous(size: usize) -> Option<*mut u8> {
+    let ptr = unsafe {
+        mmap(
+            std::ptr::null_mut(),
+            size,
+            PROT_READ | PROT_WRITE,
+            MAP_SHARED | MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+    };
+    if ptr == MAP_FAILED {
+        None
+    } else {
+        Some(ptr as *mut u8)
+    }
+}
+
+#[cfg(windows)]
+mod win {
+    pub const INVALID_HANDLE_VALUE: *mut core::ffi::c_void = -1isize as *mut core::ffi::c_void;
+    pub const PAGE_READWRITE: u32 = 0x0000_0004;
+    pub const FILE_MAP_READ: u32 = 0x0000_0004;
+    pub const FILE_MAP_WRITE: u32 = 0x0000_0002;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        pub fn CreateFileMappingA(
+            file: *mut core::ffi::c_void,
+            attrs: *mut core::ffi::c_void,
+            protect: u32,
+            max_size_high: u32,
+            max_size_low: u32,
+            name: *const core::ffi::c_char,
+        ) -> *mut core::ffi::c_void;
+        pub fn MapViewOfFile(
+            mapping: *mut core::ffi::c_void,
+            access: u32,
+            offset_high: u32,
+            offset_low: u32,
+            bytes: usize,
+        ) -> *mut core::ffi::c_void;
+        pub fn UnmapViewOfFile(addr: *const core::ffi::c_void) -> i32;
+        pub fn CloseHandle(handle: *mut core::ffi::c_void) -> i32;
+    }
+}
+
+#[cfg(windows)]
+fn map_anonymous(size: usize) -> Option<*mut u8> {
+    use win::*;
+    // A max size above 4 GiB is split into high/low 32-bit halves; region
+    // sizes are far below that, but keep the arithmetic correct anyway.
+    let max_size = size as u64;
+    let mapping = unsafe {
+        CreateFileMappingA(
+            INVALID_HANDLE_VALUE,
+            std::ptr::null_mut(),
+            PAGE_READWRITE,
+            (max_size >> 32) as u32,
+            (max_size & 0xFFFF_FFFF) as u32,
+            std::ptr::null(),
+        )
+    };
+    if mapping.is_null() {
+        return None;
+    }
+    let view = unsafe {
+        MapViewOfFile(
+            mapping,
+            FILE_MAP_READ | FILE_MAP_WRITE,
+            0,
+            0,
+            size,
+        )
+    };
+    // The section stays alive as long as a view of it exists; drop the
+    // handle immediately so nothing leaks if the view is unmapped later.
+    unsafe { CloseHandle(mapping) };
+    if view.is_null() {
+        None
+    } else {
+        Some(view as *mut u8)
+    }
+}
+
+/// Release a region returned by `map_anonymous`.
+#[cfg(unix)]
+fn unmap_anonymous(ptr: *mut u8, size: usize) {
+    unsafe { munmap(ptr as *mut libc::c_void, size) };
+}
+
+#[cfg(windows)]
+fn unmap_anonymous(ptr: *mut u8, _size: usize) {
+    unsafe {
+        win::UnmapViewOfFile(ptr as *const core::ffi::c_void);
+    };
+}
+
 impl Drop for Region {
     fn drop(&mut self) {
-        unsafe {
-            munmap(self.ptr as *mut libc::c_void, self.size);
-        }
+        unmap_anonymous(self.ptr, self.size);
     }
 }

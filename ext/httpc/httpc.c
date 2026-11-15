@@ -505,9 +505,20 @@ static int httpc_request(lua_State *L) {
 
   lunet_coref_create(L, ctx->co_ref);
 
+  /* The runtime hands its loop through the Lua registry: a DLL module may
+   * carry its own libuv copy (Windows cdylibs do), and a private
+   * uv_default_loop() there is never polled by the host, so queued work
+   * would complete on a loop nobody runs. */
+  lua_pushliteral(L, "__lunet_uv_loop");
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  uv_loop_t *req_loop = lua_touserdata(L, -1);
+  lua_pop(L, 1);
+  if (!req_loop) {
+    req_loop = uv_default_loop();
+  }
   fprintf(stderr, "[HTTPC_TRACE] request loop=%p uv_default_loop=%p\n",
-          (void *)uv_default_loop(), (void *)&uv_default_loop);
-  int rc = uv_queue_work(uv_default_loop(), &ctx->req, httpc_work_cb, httpc_after_cb);
+          (void *)req_loop, (void *)&uv_default_loop);
+  int rc = uv_queue_work(req_loop, &ctx->req, httpc_work_cb, httpc_after_cb);
   if (rc < 0) {
     lunet_coref_release(L, ctx->co_ref);
     lua_pushnil(L);

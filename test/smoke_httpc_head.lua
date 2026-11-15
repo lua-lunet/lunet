@@ -138,8 +138,6 @@ lunet.spawn(function()
             -- FIRST so its datapoint lands even if the httpc probes hang.
             -- If this hangs on Windows too, the fault is threadpool-wide;
             -- if it completes, the fault is httpc/curl-side.
-            local script = debug.getinfo(1, "S").source
-            local dir = script:match("^@(.+)[/\\][^/\\]+$")
             local tmp = os.tmpname()
             local f = io.open(tmp, "wb")
             f:write(string.rep("y", BODY_LEN))

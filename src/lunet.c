@@ -500,8 +500,6 @@ static int lunet_runtime_run_path(lunet_runtime_t *runtime,
     return -1;
   }
   runtime->loop_running = 1;
-  fprintf(stderr, "[LUNET_TRACE] host loop=%p uv_default_loop=%p\n",
-          (void *)uv_default_loop(), (void *)&uv_default_loop);
   loop_result = uv_run(uv_default_loop(), UV_RUN_DEFAULT);
   runtime->loop_running = 0;
   /* Drain point: stop requested (or the loop emptied) -> run the on_stop

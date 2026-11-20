@@ -17,6 +17,19 @@ name: Build
 on:
   push:
     branches: [ main, xmake ]
+    # A prose-only push (a README tweak, a docs page, release notes) used to
+    # re-run the whole four-OS matrix plus every QA leg, first on the branch and
+    # again on main. Nothing below reads markdown, so skip those pushes.
+    #
+    # This filter is deliberately on `push` ONLY. `pull_request` stays
+    # unfiltered on purpose: it is the trigger that reports the required status
+    # checks on main (ubuntu-latest, macos-latest, blacksmith-4vcpu-ubuntu-2404-arm,
+    # blacksmith-4vcpu-windows-2025, Embed scripts smoke, EasyMem QA,
+    # Lua QA (luacheck + C lint)). Filtering pull_request would leave those
+    # contexts "Expected" forever on a docs-only PR and make it unmergeable.
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   pull_request:
     branches: [ main ]
   workflow_dispatch:

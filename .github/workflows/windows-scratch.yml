@@ -21,6 +21,7 @@ concurrency:
 
 jobs:
   windows:
+    timeout-minutes: 25
     name: windows-only scratch leg
     runs-on: blacksmith-4vcpu-windows-2025
     steps:

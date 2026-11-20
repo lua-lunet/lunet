@@ -17,6 +17,19 @@ name: Build
 on:
   push:
     branches: [ main, xmake ]
+    # A prose-only push (a README tweak, a docs page, release notes) used to
+    # re-run the whole four-OS matrix plus every QA leg, first on the branch and
+    # again on main. Nothing below reads markdown, so skip those pushes.
+    #
+    # This filter is deliberately on `push` ONLY. `pull_request` stays
+    # unfiltered on purpose: it is the trigger that reports the required status
+    # checks on main (ubuntu-latest, macos-latest, blacksmith-4vcpu-ubuntu-2404-arm,
+    # blacksmith-4vcpu-windows-2025, Embed scripts smoke, EasyMem QA,
+    # Lua QA (luacheck + C lint)). Filtering pull_request would leave those
+    # contexts "Expected" forever on a docs-only PR and make it unmergeable.
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   pull_request:
     branches: [ main ]
   workflow_dispatch:
@@ -43,6 +56,7 @@ concurrency:
 
 jobs:
   setup-matrix:
+    timeout-minutes: 20
     name: Setup build matrix
     runs-on: ubuntu-latest
     outputs:
@@ -92,6 +106,7 @@ jobs:
           fi
 
   build:
+    timeout-minutes: 25
     name: ${{ matrix.os }}
     needs: setup-matrix
     runs-on: ${{ matrix.os }}
@@ -929,6 +944,7 @@ jobs:
   # lives in its own job so the packaging job's tree stays release-only and
   # the release archives can never pick up debug binaries.
   stress:
+    timeout-minutes: 30
     name: Socket regression suite (xmake stress)
     runs-on: ubuntu-latest
     steps:
@@ -991,6 +1007,7 @@ jobs:
       run: test -f .tmp/generated/lunet_embed_scripts_blob.h
 
   easy-memory:
+    timeout-minutes: 30
     name: EasyMem QA (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -1132,6 +1149,7 @@ jobs:
         }
 
   lua-qa:
+    timeout-minutes: 15
     name: Lua QA (luacheck + C lint)
     runs-on: ubuntu-latest
     steps:
@@ -1151,6 +1169,7 @@ jobs:
       run: xmake check-types
 
   publish-release:
+    timeout-minutes: 30
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))
     needs: [build, embed-scripts, easy-memory, lua-qa, stress]

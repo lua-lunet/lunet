@@ -43,6 +43,7 @@ concurrency:
 
 jobs:
   setup-matrix:
+    timeout-minutes: 20
     name: Setup build matrix
     runs-on: ubuntu-latest
     outputs:
@@ -92,6 +93,7 @@ jobs:
           fi
 
   build:
+    timeout-minutes: 25
     name: ${{ matrix.os }}
     needs: setup-matrix
     runs-on: ${{ matrix.os }}
@@ -929,6 +931,7 @@ jobs:
   # lives in its own job so the packaging job's tree stays release-only and
   # the release archives can never pick up debug binaries.
   stress:
+    timeout-minutes: 30
     name: Socket regression suite (xmake stress)
     runs-on: ubuntu-latest
     steps:
@@ -991,6 +994,7 @@ jobs:
       run: test -f .tmp/generated/lunet_embed_scripts_blob.h
 
   easy-memory:
+    timeout-minutes: 30
     name: EasyMem QA (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -1132,6 +1136,7 @@ jobs:
         }
 
   lua-qa:
+    timeout-minutes: 15
     name: Lua QA (luacheck + C lint)
     runs-on: ubuntu-latest
     steps:
@@ -1151,6 +1156,7 @@ jobs:
       run: xmake check-types
 
   publish-release:
+    timeout-minutes: 30
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.ref, 'v'))
     needs: [build, embed-scripts, easy-memory, lua-qa, stress]
